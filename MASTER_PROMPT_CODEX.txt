@@ -1,0 +1,41 @@
+You are implementing the AIROS POS system from scratch as a full working repository.
+
+Read and strictly follow these documents (treat them as authoritative contracts):
+- AIROS_POS_MASTER.md
+- invariants.md
+- totals.md
+- materializer.md
+- shared/schemas/airos.pos.sync.event.v1.schema.json
+- references/AIROS_BOUNDARIES_REFERENCE.md
+- references/AIROS_UI_REFERENCE.md
+
+Deliver a complete repo with:
+1) Edge POS service (FastAPI) using SQLite, staff endpoints under /api/staff/pos/*
+2) Hub service (FastAPI) using Postgres by default (SQLite fallback ok for dev):
+   - /api/sync/pos/events:push with exactly-once semantics, per-stream cursor, quarantine stop policy
+   - /api/dashboard/pos/* read-only endpoints for live table map and reports
+3) Shared package:
+   - JSON Schema validation for POS events
+   - totals calculator per totals.md
+   - UUID + money helpers
+4) Tests:
+   - totals tests including composite cocktail
+   - split/merge assignment tests
+   - hub ingestion tests: dedupe, gap handling, quarantine stop, occurred_at bucketing
+
+Constraints:
+- No AI features.
+- No card integration; only CASH and CARD_EXTERNAL recorded.
+- Party always references table_group_id; always create a new table_group_id for every seating.
+- Composite VAT component pricing is always explicit; never infer.
+- Rounding only at finalization; VAT reporting ignores rounding.
+- Keep UI minimal; if you implement a web UI, align it with references/AIROS_UI_REFERENCE.md.
+
+Implementation requirements:
+- Hub must implement exactly-once apply semantics: dedupe by event_id, and enforce ordered seq per stream_id with cursor tracking.
+- Money/schema violations must go to quarantine AND stop processing for that stream until resolved.
+- Reporting and aggregation must use occurred_at as authoritative time, day bucketing by restaurant timezone (default Europe/Helsinki).
+
+Implement repo structure, code, migrations/DDL, and README with run instructions and curl examples.
+
+You may read the repository files and create/modify files as needed. Do not ask questions; make reasonable defaults aligned with the spec.

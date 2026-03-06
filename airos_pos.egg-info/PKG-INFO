@@ -1,0 +1,185 @@
+Metadata-Version: 2.4
+Name: airos-pos
+Version: 0.1.0
+Summary: AIROS POS edge and hub services
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: fastapi<1.0.0,>=0.115.0
+Requires-Dist: jsonschema<5.0.0,>=4.23.0
+Requires-Dist: pydantic<3.0.0,>=2.8.0
+Requires-Dist: sqlalchemy<3.0.0,>=2.0.36
+Requires-Dist: tzdata>=2025.1
+Requires-Dist: uvicorn<1.0.0,>=0.32.0
+Provides-Extra: postgres
+Requires-Dist: psycopg[binary]<4.0.0,>=3.2.0; extra == "postgres"
+Provides-Extra: test
+Requires-Dist: httpx<1.0.0,>=0.28.0; extra == "test"
+Requires-Dist: pytest<9.0.0,>=8.3.0; extra == "test"
+
+# AIROS POS
+
+Edge-first restaurant POS built to the contracts in `AIROS_POS_MASTER.md`, `invariants.md`, `totals.md`, `materializer.md`, and `shared/schemas/airos.pos.sync.event.v1.schema.json`.
+
+## Repository layout
+
+- `edge/`: FastAPI Edge POS write service backed by SQLite
+- `hub/`: FastAPI Hub ingest and dashboard service backed by Postgres by default, SQLite for local dev
+- `shared/`: JSON Schema validation, totals/VAT calculator, money and UUID helpers
+- `tests/`: totals, split/merge, and hub ingestion contract tests
+- `db/ddl/`: schema snapshots for Edge and Hub
+
+## Install
+
+```bash
+py -m pip install -e .[test]
+```
+
+For Hub Postgres support:
+
+```bash
+py -m pip install -e .[test,postgres]
+```
+
+## Run the services
+
+Edge defaults to SQLite at `./data/edge.db`.
+
+```bash
+py -m uvicorn edge.app:create_app --factory --reload --port 8000
+```
+
+Hub defaults to Postgres. For local SQLite fallback:
+
+```bash
+set AIROS_HUB_DATABASE_URL=sqlite:///./data/hub.db
+py -m uvicorn hub.app:create_app --factory --reload --port 8010
+```
+
+Dev bearer tokens:
+
+- `dev-staff-token`
+- `dev-manager-token`
+- `dev-owner-token`
+
+## Edge curl flow
+
+List seeded floorplan and tables:
+
+```bash
+curl -H "Authorization: Bearer dev-staff-token" http://localhost:8000/api/staff/pos/floorplans
+curl -H "Authorization: Bearer dev-staff-token" http://localhost:8000/api/staff/pos/tables
+```
+
+Open a session:
+
+```bash
+curl -X POST http://localhost:8000/api/staff/pos/sessions/open ^
+  -H "Authorization: Bearer dev-staff-token" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"opening_cash_cents\":5000}"
+```
+
+Open and seat a party. Replace table IDs with values from `/api/staff/pos/tables`.
+
+```bash
+curl -X POST http://localhost:8000/api/staff/pos/parties/open ^
+  -H "Authorization: Bearer dev-staff-token" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"guest_count\":2,\"table_ids\":[\"TABLE_UUID\"],\"primary_table_id\":\"TABLE_UUID\",\"note\":\"Window seat\"}"
+```
+
+Open a check for the party:
+
+```bash
+curl -X POST http://localhost:8000/api/staff/pos/parties/PARTY_UUID/checks/open ^
+  -H "Authorization: Bearer dev-staff-token" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"label\":\"Main\"}"
+```
+
+Add a composite VAT cocktail:
+
+```bash
+curl -X POST http://localhost:8000/api/staff/pos/checks/CHECK_UUID/items ^
+  -H "Authorization: Bearer dev-staff-token" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"items\":[{\"name_snapshot\":\"House Cocktail\",\"qty\":1,\"pricing_model\":\"COMPOSITE_VAT\",\"components\":[{\"name_snapshot\":\"Spirits\",\"vat_rate_snapshot\":0.255,\"unit_gross_cents_snapshot\":900,\"qty\":1},{\"name_snapshot\":\"Mixer\",\"vat_rate_snapshot\":0.14,\"unit_gross_cents_snapshot\":300,\"qty\":1}]}]}"
+```
+
+Record payment and finalize:
+
+```bash
+curl -X POST http://localhost:8000/api/staff/pos/checks/CHECK_UUID/payments ^
+  -H "Authorization: Bearer dev-staff-token" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"method\":\"CARD_EXTERNAL\",\"amount_cents\":1200}"
+
+curl -X POST http://localhost:8000/api/staff/pos/checks/CHECK_UUID/finalize ^
+  -H "Authorization: Bearer dev-staff-token" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"payment_method\":\"CARD_EXTERNAL\",\"issue_receipt\":true}"
+```
+
+Read pending outbox events:
+
+```bash
+curl -H "Authorization: Bearer dev-staff-token" http://localhost:8000/api/staff/pos/outbox/pending
+```
+
+Mark pushed events delivered:
+
+```bash
+curl -X POST http://localhost:8000/api/staff/pos/outbox/mark-delivered ^
+  -H "Authorization: Bearer dev-staff-token" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"event_ids\":[\"EVENT_UUID\"]}"
+```
+
+## Hub curl flow
+
+Push Edge outbox events:
+
+```bash
+curl -X POST http://localhost:8010/api/sync/pos/events:push ^
+  -H "Authorization: Bearer dev-owner-token" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"events\":[PASTE_OUTBOX_EVENT_OBJECTS_HERE]}"
+```
+
+Fetch the live table map:
+
+```bash
+curl -H "Authorization: Bearer dev-owner-token" http://localhost:8010/api/dashboard/pos/restaurants/demo-restaurant/table-map
+```
+
+Fetch daily sales and VAT reports:
+
+```bash
+curl -H "Authorization: Bearer dev-owner-token" "http://localhost:8010/api/dashboard/pos/restaurants/demo-restaurant/reports/daily?day=2026-03-05"
+curl -H "Authorization: Bearer dev-owner-token" "http://localhost:8010/api/dashboard/pos/restaurants/demo-restaurant/reports/vat?day=2026-03-05"
+```
+
+Fetch a multi-restaurant daily report:
+
+```bash
+curl -H "Authorization: Bearer dev-owner-token" "http://localhost:8010/api/dashboard/pos/reports/daily?day=2026-03-05&restaurant_key=demo-restaurant&restaurant_key=second-restaurant"
+```
+
+Resolve a quarantined stream row after manual correction:
+
+```bash
+curl -X POST -H "Authorization: Bearer dev-owner-token" http://localhost:8010/api/sync/pos/quarantine/1:resolve
+```
+
+## Notes
+
+- All money is integer cents.
+- Composite VAT component pricing is explicit only; the services never infer component pricing.
+- `occurred_at` is authoritative for reporting, and day bucketing uses `Europe/Helsinki` unless the restaurant registry is configured differently.
+- Hub applies events exactly once by `event_id`, enforces ordered `stream_id` plus `seq`, and blocks a stream on schema or money integrity violations.
+
+## Test command
+
+```bash
+py -m pytest -q
+```

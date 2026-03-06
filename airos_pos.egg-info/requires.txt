@@ -1,0 +1,13 @@
+fastapi<1.0.0,>=0.115.0
+jsonschema<5.0.0,>=4.23.0
+pydantic<3.0.0,>=2.8.0
+sqlalchemy<3.0.0,>=2.0.36
+tzdata>=2025.1
+uvicorn<1.0.0,>=0.32.0
+
+[postgres]
+psycopg[binary]<4.0.0,>=3.2.0
+
+[test]
+httpx<1.0.0,>=0.28.0
+pytest<9.0.0,>=8.3.0

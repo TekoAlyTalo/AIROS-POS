@@ -1,0 +1,380 @@
+{
+  "$id": "airos.pos.sync.event.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schema", "event_id", "event_type", "occurred_at", "tenant", "source", "payload"],
+  "properties": {
+    "schema": { "const": "airos.pos.sync.event.v1" },
+    "event_id": { "type": "string", "format": "uuid" },
+    "event_type": { "type": "string", "minLength": 1 },
+    "occurred_at": { "type": "string", "format": "date-time" },
+
+    "tenant": {
+      "type": "object",
+      "required": ["owner_id", "restaurant_key"],
+      "properties": {
+        "owner_id": { "type": "string", "format": "uuid" },
+        "restaurant_key": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+
+    "source": {
+      "type": "object",
+      "required": ["edge_id", "stream_id", "seq", "channel"],
+      "properties": {
+        "edge_id": { "type": "string", "format": "uuid" },
+        "stream_id": { "type": "string", "minLength": 3 },
+        "seq": { "type": "integer", "minimum": 1 },
+        "session_id": { "type": "string", "format": "uuid" },
+        "actor_user_id": { "type": "string", "format": "uuid" },
+        "channel": { "const": "staff.pos" }
+      },
+      "additionalProperties": false
+    },
+
+    "correlation": {
+      "type": "object",
+      "properties": {
+        "trace_id": { "type": "string", "format": "uuid" },
+        "causation_id": { "type": "string", "format": "uuid" },
+        "request_id": { "type": "string", "format": "uuid" },
+        "idempotency_key": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+
+    "refs": {
+      "type": "object",
+      "properties": {
+        "table_id": { "type": "string", "format": "uuid" },
+        "table_group_id": { "type": "string", "format": "uuid" },
+        "party_id": { "type": "string", "format": "uuid" },
+        "check_id": { "type": "string", "format": "uuid" },
+        "receipt_id": { "type": "string", "format": "uuid" }
+      },
+      "additionalProperties": false
+    },
+
+    "payload": {
+      "oneOf": [
+        { "$ref": "#/$defs/table_group_created" },
+        { "$ref": "#/$defs/table_group_tables_added" },
+        { "$ref": "#/$defs/table_group_tables_removed" },
+        { "$ref": "#/$defs/table_group_primary_set" },
+        { "$ref": "#/$defs/table_group_closed" },
+
+        { "$ref": "#/$defs/party_opened" },
+        { "$ref": "#/$defs/party_seated" },
+        { "$ref": "#/$defs/party_moved" },
+        { "$ref": "#/$defs/party_closed" },
+
+        { "$ref": "#/$defs/check_opened" },
+        { "$ref": "#/$defs/check_items_added" },
+        { "$ref": "#/$defs/check_items_removed" },
+        { "$ref": "#/$defs/check_split" },
+        { "$ref": "#/$defs/check_merged" },
+        { "$ref": "#/$defs/check_voided" },
+
+        { "$ref": "#/$defs/payment_recorded" },
+        { "$ref": "#/$defs/check_finalized" },
+        { "$ref": "#/$defs/receipt_issued" },
+
+        { "$ref": "#/$defs/session_opened" },
+        { "$ref": "#/$defs/session_closed" }
+      ]
+    }
+  },
+  "additionalProperties": false,
+
+  "$defs": {
+    "uuid": { "type": "string", "format": "uuid" },
+    "money_cents": { "type": "integer", "minimum": 0 },
+    "vat_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+
+    "component": {
+      "type": "object",
+      "required": ["component_id", "name_snapshot", "vat_rate_snapshot", "unit_gross_cents_snapshot", "qty"],
+      "properties": {
+        "component_id": { "$ref": "#/$defs/uuid" },
+        "name_snapshot": { "type": "string", "minLength": 1 },
+        "vat_rate_snapshot": { "$ref": "#/$defs/vat_rate" },
+        "unit_gross_cents_snapshot": { "$ref": "#/$defs/money_cents" },
+        "qty": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+
+    "item": {
+      "type": "object",
+      "required": ["item_id", "name_snapshot", "qty", "pricing_model", "components"],
+      "properties": {
+        "item_id": { "$ref": "#/$defs/uuid" },
+        "product_id": { "$ref": "#/$defs/uuid" },
+        "name_snapshot": { "type": "string", "minLength": 1 },
+        "qty": { "type": "integer", "minimum": 1 },
+        "note": { "type": "string" },
+        "pricing_model": { "type": "string", "enum": ["SINGLE_VAT", "COMPOSITE_VAT"] },
+        "components": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/component" }
+        }
+      },
+      "allOf": [
+        { "if": { "properties": { "pricing_model": { "const": "SINGLE_VAT" } } },
+          "then": { "properties": { "components": { "minItems": 1, "maxItems": 1 } } }
+        },
+        { "if": { "properties": { "pricing_model": { "const": "COMPOSITE_VAT" } } },
+          "then": { "properties": { "components": { "minItems": 2 } } }
+        }
+      ],
+      "additionalProperties": false
+    },
+
+    "table_group_created": {
+      "type": "object",
+      "required": ["event_type", "table_group_id", "table_ids", "primary_table_id", "reason"],
+      "properties": {
+        "event_type": { "const": "pos.table_group.created" },
+        "table_group_id": { "$ref": "#/$defs/uuid" },
+        "table_ids": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/uuid" } },
+        "primary_table_id": { "$ref": "#/$defs/uuid" },
+        "reason": { "type": "string", "enum": ["party_seating", "staff_join"] }
+      },
+      "additionalProperties": false
+    },
+
+    "table_group_tables_added": {
+      "type": "object",
+      "required": ["event_type", "table_group_id", "added_table_ids", "reason"],
+      "properties": {
+        "event_type": { "const": "pos.table_group.tables_added" },
+        "table_group_id": { "$ref": "#/$defs/uuid" },
+        "added_table_ids": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/uuid" } },
+        "reason": { "type": "string", "enum": ["needs_space", "reservation_change", "staff_join"] }
+      },
+      "additionalProperties": false
+    },
+
+    "table_group_tables_removed": {
+      "type": "object",
+      "required": ["event_type", "table_group_id", "removed_table_ids", "reason"],
+      "properties": {
+        "event_type": { "const": "pos.table_group.tables_removed" },
+        "table_group_id": { "$ref": "#/$defs/uuid" },
+        "removed_table_ids": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/uuid" } },
+        "reason": { "type": "string", "enum": ["split_tables", "staff_unjoin"] }
+      },
+      "additionalProperties": false
+    },
+
+    "table_group_primary_set": {
+      "type": "object",
+      "required": ["event_type", "table_group_id", "primary_table_id", "reason"],
+      "properties": {
+        "event_type": { "const": "pos.table_group.primary_table_set" },
+        "table_group_id": { "$ref": "#/$defs/uuid" },
+        "primary_table_id": { "$ref": "#/$defs/uuid" },
+        "reason": { "type": "string", "enum": ["staff_set", "primary_removed"] }
+      },
+      "additionalProperties": false
+    },
+
+    "table_group_closed": {
+      "type": "object",
+      "required": ["event_type", "table_group_id", "final_status", "reason"],
+      "properties": {
+        "event_type": { "const": "pos.table_group.closed" },
+        "table_group_id": { "$ref": "#/$defs/uuid" },
+        "final_status": { "type": "string", "enum": ["FREE", "DIRTY"] },
+        "reason": { "type": "string", "enum": ["party_closed", "force_close"] }
+      },
+      "additionalProperties": false
+    },
+
+    "party_opened": {
+      "type": "object",
+      "required": ["event_type", "guest_count"],
+      "properties": {
+        "event_type": { "const": "pos.party.opened" },
+        "guest_count": { "type": "integer", "minimum": 1 },
+        "note": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+
+    "party_seated": {
+      "type": "object",
+      "required": ["event_type", "table_group_id", "primary_table_id"],
+      "properties": {
+        "event_type": { "const": "pos.party.seated" },
+        "table_group_id": { "$ref": "#/$defs/uuid" },
+        "primary_table_id": { "$ref": "#/$defs/uuid" }
+      },
+      "additionalProperties": false
+    },
+
+    "party_moved": {
+      "type": "object",
+      "required": ["event_type", "from_table_group_id", "to_table_group_id", "from_primary_table_id", "to_primary_table_id", "reason"],
+      "properties": {
+        "event_type": { "const": "pos.party.moved" },
+        "from_table_group_id": { "$ref": "#/$defs/uuid" },
+        "to_table_group_id": { "$ref": "#/$defs/uuid" },
+        "from_primary_table_id": { "$ref": "#/$defs/uuid" },
+        "to_primary_table_id": { "$ref": "#/$defs/uuid" },
+        "reason": { "type": "string", "enum": ["staff_move", "reservation_change"] }
+      },
+      "additionalProperties": false
+    },
+
+    "party_closed": {
+      "type": "object",
+      "required": ["event_type", "reason"],
+      "properties": {
+        "event_type": { "const": "pos.party.closed" },
+        "reason": { "type": "string", "enum": ["paid_and_left", "no_sale", "force_close"] }
+      },
+      "additionalProperties": false
+    },
+
+    "check_opened": {
+      "type": "object",
+      "required": ["event_type", "currency"],
+      "properties": {
+        "event_type": { "const": "pos.check.opened" },
+        "currency": { "const": "EUR" },
+        "label": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+
+    "check_items_added": {
+      "type": "object",
+      "required": ["event_type", "items"],
+      "properties": {
+        "event_type": { "const": "pos.check.items_added" },
+        "items": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/item" } }
+      },
+      "additionalProperties": false
+    },
+
+    "check_items_removed": {
+      "type": "object",
+      "required": ["event_type", "removed"],
+      "properties": {
+        "event_type": { "const": "pos.check.items_removed" },
+        "removed": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["item_id", "reason"],
+            "properties": {
+              "item_id": { "$ref": "#/$defs/uuid" },
+              "reason": { "type": "string", "enum": ["mistake", "void_line", "customer_changed_mind"] }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "check_split": {
+      "type": "object",
+      "required": ["event_type", "source_check_id", "target_check_id", "moved_item_ids", "mode"],
+      "properties": {
+        "event_type": { "const": "pos.check.split" },
+        "source_check_id": { "$ref": "#/$defs/uuid" },
+        "target_check_id": { "$ref": "#/$defs/uuid" },
+        "moved_item_ids": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/uuid" } },
+        "mode": { "type": "string", "enum": ["NEW_CHECK", "EXISTING_CHECK"] }
+      },
+      "additionalProperties": false
+    },
+
+    "check_merged": {
+      "type": "object",
+      "required": ["event_type", "target_check_id", "source_check_ids"],
+      "properties": {
+        "event_type": { "const": "pos.check.merged" },
+        "target_check_id": { "$ref": "#/$defs/uuid" },
+        "source_check_ids": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/uuid" } }
+      },
+      "additionalProperties": false
+    },
+
+    "check_voided": {
+      "type": "object",
+      "required": ["event_type", "reason_code"],
+      "properties": {
+        "event_type": { "const": "pos.check.voided" },
+        "reason_code": { "type": "string", "minLength": 1 },
+        "reason_note": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+
+    "payment_recorded": {
+      "type": "object",
+      "required": ["event_type", "payment_id", "method", "amount_cents"],
+      "properties": {
+        "event_type": { "const": "pos.payment.recorded" },
+        "payment_id": { "$ref": "#/$defs/uuid" },
+        "method": { "type": "string", "enum": ["CASH", "CARD_EXTERNAL"] },
+        "amount_cents": { "type": "integer", "minimum": 1 },
+        "external_ref": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+
+    "check_finalized": {
+      "type": "object",
+      "required": ["event_type", "final_status", "rounding_cents", "amount_due_cents"],
+      "properties": {
+        "event_type": { "const": "pos.check.finalized" },
+        "final_status": { "const": "PAID" },
+        "rounding_cents": { "type": "integer" },
+        "amount_due_cents": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+
+    "receipt_issued": {
+      "type": "object",
+      "required": ["event_type", "receipt_id", "receipt_no", "issued_at"],
+      "properties": {
+        "event_type": { "const": "pos.receipt.issued" },
+        "receipt_id": { "$ref": "#/$defs/uuid" },
+        "receipt_no": { "type": "integer", "minimum": 1 },
+        "issued_at": { "type": "string", "format": "date-time" }
+      },
+      "additionalProperties": false
+    },
+
+    "session_opened": {
+      "type": "object",
+      "required": ["event_type", "opening_cash_cents"],
+      "properties": {
+        "event_type": { "const": "pos.session.opened" },
+        "opening_cash_cents": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+
+    "session_closed": {
+      "type": "object",
+      "required": ["event_type", "counted_cash_cents", "expected_cash_cents", "diff_cash_cents"],
+      "properties": {
+        "event_type": { "const": "pos.session.closed" },
+        "counted_cash_cents": { "type": "integer", "minimum": 0 },
+        "expected_cash_cents": { "type": "integer", "minimum": 0 },
+        "diff_cash_cents": { "type": "integer" },
+        "note": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}
