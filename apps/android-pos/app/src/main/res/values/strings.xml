@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">AIROS POS</string>
+    <string name="webrtc_smoke_test_title">AIROS POS WebRTC Smoke Test</string>
+    <string name="webrtc_smoke_test_heading">WebRTC Camera Smoke Test</string>
+    <string name="webrtc_smoke_test_subheading">Isolated viewer-only check against the existing backend signaling flow.</string>
+    <string name="webrtc_smoke_test_camera_id_label">Camera ID</string>
+    <string name="webrtc_smoke_test_signaling_label">Signaling Base URL</string>
+    <string name="webrtc_smoke_test_connect">Connect</string>
+    <string name="webrtc_smoke_test_stop">Stop</string>
+    <string name="webrtc_smoke_test_status_label">Status</string>
+    <string name="webrtc_smoke_test_logs_label">Activity Log</string>
+    <string name="webrtc_smoke_test_renderer_placeholder">Video surface appears here after the renderer is initialized.</string>
+</resources>
