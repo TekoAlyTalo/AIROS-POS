@@ -25,7 +25,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -111,7 +111,13 @@ class TableMapViewModel(
         }
         viewModelScope.launch {
             cameraPreviewService.previewState.collect { previewState ->
-                mutableState.update { it.copy(cameraPreviewState = previewState) }
+                mutableState.update { current ->
+                    current.copy(
+                        cameraPreviewState = previewState,
+                        livePreviewTarget = previewState.activePreviewTarget()
+                            ?: if (previewState.connectionState == CameraConnectionState.IDLE) null else current.livePreviewTarget,
+                    )
+                }
             }
         }
     }
@@ -244,7 +250,36 @@ fun TableMapScreen(
     onCloseLivePreview: () -> Unit,
 ) {
     val selectedTable = state.floorMap?.tables?.firstOrNull { it.id == state.selectedTableId }
+    val desiredPreviewTarget = selectedTable?.previewTarget()
     val selectedPreviewTarget = state.livePreviewTarget?.takeIf { it.tableId == selectedTable?.id }
+
+    LaunchedEffect(
+        desiredPreviewTarget?.tableId,
+        desiredPreviewTarget?.cameraId,
+        state.edgeBaseUrl,
+        state.cameraPreviewState.connectionState,
+        state.cameraPreviewState.tableId,
+        state.cameraPreviewState.cameraId,
+        state.isLivePreviewDialogVisible,
+    ) {
+        if (state.isLivePreviewDialogVisible) {
+            return@LaunchedEffect
+        }
+        val target = desiredPreviewTarget ?: return@LaunchedEffect
+        val edgeBaseUrl = state.edgeBaseUrl?.takeIf(String::isNotBlank) ?: return@LaunchedEffect
+        if (!state.cameraPreviewState.shouldStartPreviewFor(target)) {
+            return@LaunchedEffect
+        }
+        cameraPreviewService.startPreview(
+            CameraPreviewRequest(
+                cameraId = target.cameraId,
+                signalingBaseUrl = edgeBaseUrl.toAutoStartSignalingBaseUrl(),
+                tableId = target.tableId,
+                tableLabel = target.tableLabel,
+                sourceLabel = target.cameraLabel,
+            ),
+        )
+    }
 
     Row(
         modifier = Modifier.fillMaxSize(),
@@ -412,7 +447,7 @@ private fun TableDetailsContent(
                 if (!canOpenLivePreview || !previewState.isStreaming || !isMiniVisibleOwner) {
                     val overlayText = when {
                         !canOpenLivePreview -> "Assign a camera and configure edge URL to enable live preview."
-                        previewTarget == null -> "Open live view to start preview."
+                        previewTarget == null -> "Starting live preview..."
                         isLivePreviewDialogVisible -> "Live preview is open in the enlarged view."
                         previewState.errorMessage?.isNotBlank() == true -> previewState.errorMessage ?: previewState.detailMessage
                         else -> previewState.detailMessage
@@ -744,6 +779,61 @@ private fun tryCreateRenderer(
 
 private fun SurfaceViewRenderer.logLabel(): String {
     return "SurfaceViewRenderer@${Integer.toHexString(hashCode())}"
+}
+
+private fun CameraPreviewState.activePreviewTarget(): TableLivePreviewTarget? {
+    if (connectionState == CameraConnectionState.IDLE) {
+        return null
+    }
+    val resolvedTableId = tableId ?: return null
+    val resolvedCameraId = cameraId ?: return null
+    return TableLivePreviewTarget(
+        tableId = resolvedTableId,
+        tableLabel = tableLabel ?: resolvedTableId,
+        cameraId = resolvedCameraId,
+        cameraLabel = sourceLabel.ifBlank { resolvedCameraId },
+    )
+}
+
+private fun RestaurantTable.previewTarget(): TableLivePreviewTarget? {
+    val resolvedCameraId = cameraId ?: return null
+    return TableLivePreviewTarget(
+        tableId = id,
+        tableLabel = label,
+        cameraId = resolvedCameraId,
+        cameraLabel = cameraLabel ?: resolvedCameraId,
+    )
+}
+
+private fun CameraPreviewState.shouldStartPreviewFor(target: TableLivePreviewTarget): Boolean {
+    return connectionState == CameraConnectionState.IDLE ||
+        connectionState == CameraConnectionState.ERROR ||
+        tableId != target.tableId ||
+        cameraId != target.cameraId
+}
+
+private fun String.toAutoStartSignalingBaseUrl(): String {
+    val normalized = trim()
+    if (normalized.isBlank()) {
+        return normalized
+    }
+
+    return try {
+        val uri = URI(normalized)
+        val host = uri.host ?: return normalized
+        val scheme = uri.scheme ?: return normalized
+        URI(
+            scheme,
+            uri.userInfo,
+            host,
+            SIGNALING_PORT,
+            null,
+            null,
+            null,
+        ).toString()
+    } catch (_: Exception) {
+        normalized
+    }
 }
 
 @Composable
