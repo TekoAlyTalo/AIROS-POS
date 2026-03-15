@@ -81,6 +81,7 @@ data class TableMapUiState(
     val edgeBaseUrl: String? = null,
     val cameraPreviewState: CameraPreviewState = CameraPreviewState(),
     val livePreviewTarget: TableLivePreviewTarget? = null,
+    val isLivePreviewDialogVisible: Boolean = false,
 )
 
 class TableMapViewModel(
@@ -153,6 +154,7 @@ class TableMapViewModel(
         mutableState.update {
             it.copy(
                 livePreviewTarget = target,
+                isLivePreviewDialogVisible = true,
                 message = "Starting live preview for ${target.cameraLabel}...",
             )
         }
@@ -177,10 +179,7 @@ class TableMapViewModel(
     }
 
     fun closeLivePreview() {
-        viewModelScope.launch {
-            cameraPreviewService.stopPreview()
-            mutableState.update { it.copy(livePreviewTarget = null) }
-        }
+        mutableState.update { it.copy(isLivePreviewDialogVisible = false) }
     }
 
     private fun startPreview(target: TableLivePreviewTarget, edgeBaseUrl: String) {
@@ -245,6 +244,7 @@ fun TableMapScreen(
     onCloseLivePreview: () -> Unit,
 ) {
     val selectedTable = state.floorMap?.tables?.firstOrNull { it.id == state.selectedTableId }
+    val selectedPreviewTarget = state.livePreviewTarget?.takeIf { it.tableId == selectedTable?.id }
 
     Row(
         modifier = Modifier.fillMaxSize(),
@@ -301,6 +301,8 @@ fun TableMapScreen(
                     table = selectedTable,
                     currentStaffId = currentStaffId,
                     previewState = state.cameraPreviewState,
+                    previewTarget = selectedPreviewTarget,
+                    isLivePreviewDialogVisible = state.isLivePreviewDialogVisible,
                     cameraPreviewService = cameraPreviewService,
                     canOpenLivePreview = !selectedTable.cameraId.isNullOrBlank() && !state.edgeBaseUrl.isNullOrBlank(),
                     onOpenSelectedTable = onOpenSelectedTable,
@@ -311,7 +313,8 @@ fun TableMapScreen(
         }
     }
 
-    state.livePreviewTarget?.let { target ->
+    if (state.isLivePreviewDialogVisible) {
+        state.livePreviewTarget?.let { target ->
         TableLivePreviewDialog(
             target = target,
             previewState = state.cameraPreviewState,
@@ -319,6 +322,7 @@ fun TableMapScreen(
             onRetry = onRetryLivePreview,
             onDismiss = onCloseLivePreview,
         )
+        }
     }
 }
 
@@ -328,6 +332,8 @@ private fun TableDetailsContent(
     table: RestaurantTable,
     currentStaffId: String?,
     previewState: CameraPreviewState,
+    previewTarget: TableLivePreviewTarget?,
+    isLivePreviewDialogVisible: Boolean,
     cameraPreviewService: CameraPreviewService,
     canOpenLivePreview: Boolean,
     onOpenSelectedTable: (String) -> Unit,
@@ -388,6 +394,7 @@ private fun TableDetailsContent(
                 PreviewStatusPill(previewState.connectionState)
             }
 
+            val isMiniVisibleOwner = previewTarget != null && !isLivePreviewDialogVisible
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -395,15 +402,18 @@ private fun TableDetailsContent(
                     .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(18.dp)),
                 contentAlignment = Alignment.Center,
             ) {
-                if (canOpenLivePreview) {
+                if (isMiniVisibleOwner) {
                     LiveVideoSurface(
                         cameraPreviewService = cameraPreviewService,
+                        ownerKey = "mini:${previewTarget.tableId}:${previewTarget.cameraId}",
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
-                if (!canOpenLivePreview || !previewState.isStreaming) {
+                if (!canOpenLivePreview || !previewState.isStreaming || !isMiniVisibleOwner) {
                     val overlayText = when {
                         !canOpenLivePreview -> "Assign a camera and configure edge URL to enable live preview."
+                        previewTarget == null -> "Open live view to start preview."
+                        isLivePreviewDialogVisible -> "Live preview is open in the enlarged view."
                         previewState.errorMessage?.isNotBlank() == true -> previewState.errorMessage ?: previewState.detailMessage
                         else -> previewState.detailMessage
                     }
@@ -592,6 +602,7 @@ private fun TableLivePreviewDialog(
                 ) {
                     LiveVideoSurface(
                         cameraPreviewService = cameraPreviewService,
+                        ownerKey = "dialog:${target.tableId}:${target.cameraId}",
                         modifier = Modifier.fillMaxSize(),
                     )
                     if (!previewState.isStreaming) {
@@ -647,43 +658,43 @@ private fun TableLivePreviewDialog(
 @Composable
 private fun LiveVideoSurface(
     cameraPreviewService: CameraPreviewService,
+    ownerKey: String,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val sharedContext = cameraPreviewService.eglBaseContext
-    val rendererState = remember(context, sharedContext) {
+    val renderer = remember(context, sharedContext, ownerKey) {
         if (sharedContext == null) {
-            Log.w(PREVIEW_TAG, "Skipping renderer init because shared EGL context is null")
-            mutableStateOf<SurfaceViewRenderer?>(null)
+            Log.w(PREVIEW_TAG, "Skipping renderer init because shared EGL context is null owner=$ownerKey")
+            null
         } else {
-            mutableStateOf(createPreviewRenderer(context, sharedContext))
+            createPreviewRenderer(context, sharedContext)
         }
     }
-    rendererState.value?.let { renderer ->
+    renderer?.let { currentRenderer ->
         AndroidView(
             modifier = modifier,
-            factory = { renderer },
-            update = { currentRenderer ->
-                Log.i(PREVIEW_TAG, "Renderer attached renderer=${currentRenderer.logLabel()}")
+            factory = { currentRenderer },
+            update = {
+                Log.i(PREVIEW_TAG, "Renderer attached renderer=${it.logLabel()} owner=$ownerKey")
             },
         )
     }
-    DisposableEffect(cameraPreviewService, rendererState.value) {
-        rendererState.value?.let { renderer ->
+    DisposableEffect(cameraPreviewService, renderer, ownerKey) {
+        renderer?.let { currentRenderer ->
             Log.i(
                 PREVIEW_TAG,
-                "Attaching renderer sink renderer=${renderer.logLabel()} sharedContext=${sharedContext?.javaClass?.name ?: "null"}",
+                "Attaching renderer sink renderer=${currentRenderer.logLabel()} owner=$ownerKey sharedContext=${sharedContext?.javaClass?.name ?: "null"}",
             )
-            cameraPreviewService.attachVideoSink(renderer)
+            cameraPreviewService.attachVideoSink(currentRenderer)
         }
         onDispose {
-            rendererState.value?.let { renderer ->
-                Log.i(PREVIEW_TAG, "Detaching renderer sink renderer=${renderer.logLabel()}")
-                cameraPreviewService.detachVideoSink(renderer)
-                Log.i(PREVIEW_TAG, "Releasing renderer renderer=${renderer.logLabel()}")
-                renderer.release()
+            renderer?.let { currentRenderer ->
+                Log.i(PREVIEW_TAG, "Detaching renderer sink renderer=${currentRenderer.logLabel()} owner=$ownerKey")
+                cameraPreviewService.detachVideoSink(currentRenderer)
+                Log.i(PREVIEW_TAG, "Releasing renderer renderer=${currentRenderer.logLabel()} owner=$ownerKey")
+                currentRenderer.release()
             }
-            rendererState.value = null
         }
     }
 }
