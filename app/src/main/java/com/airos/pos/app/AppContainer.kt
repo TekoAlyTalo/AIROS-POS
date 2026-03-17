@@ -8,7 +8,9 @@ import com.airos.pos.device.camera.SunmiCameraPreviewService
 import com.airos.pos.device.cashdrawer.CashDrawerService
 import com.airos.pos.device.cashdrawer.SunmiCashDrawerService
 import com.airos.pos.device.platform.AndroidDeviceInfoService
+import com.airos.pos.device.platform.CustomerDisplayService
 import com.airos.pos.device.platform.DeviceInfoService
+import com.airos.pos.device.platform.SunmiCustomerDisplayService
 import com.airos.pos.device.printer.PrinterService
 import com.airos.pos.device.printer.SunmiPrinterService
 import com.airos.pos.device.scanner.ScannerService
@@ -43,6 +45,7 @@ interface AppContainer {
     val cameraPreviewService: CameraPreviewService
     val cashDrawerService: CashDrawerService
     val deviceInfoService: DeviceInfoService
+    val customerDisplayService: CustomerDisplayService
 }
 
 class DefaultAppContainer(
@@ -50,6 +53,7 @@ class DefaultAppContainer(
 ) : AppContainer {
     private val appContext = context.applicationContext
     private val store = FakePosStore()
+    private val androidDeviceInfoService = AndroidDeviceInfoService()
 
     override val database: AirosPosDatabase = AirosPosDatabase.build(appContext)
     override val terminalPreferencesStore: TerminalPreferencesStore = TerminalPreferencesStore(appContext)
@@ -67,5 +71,10 @@ class DefaultAppContainer(
     override val scannerService: ScannerService = SunmiScannerService(appContext)
     override val cameraPreviewService: CameraPreviewService = SunmiCameraPreviewService(appContext)
     override val cashDrawerService: CashDrawerService = SunmiCashDrawerService(appContext)
-    override val deviceInfoService: DeviceInfoService = AndroidDeviceInfoService()
+    override val deviceInfoService: DeviceInfoService = androidDeviceInfoService
+    override val customerDisplayService: CustomerDisplayService =
+        SunmiCustomerDisplayService(
+            context = appContext,
+            deviceInfoService = androidDeviceInfoService,
+        )
 }

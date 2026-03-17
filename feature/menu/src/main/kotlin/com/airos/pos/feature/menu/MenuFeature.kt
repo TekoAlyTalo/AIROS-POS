@@ -618,14 +618,26 @@ private fun RowScope.TicketPane(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = 18.dp, vertical = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(
-                text = "Receipt",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                color = MenuTextPrimary,
-            )
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = "Receipt",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MenuTextPrimary,
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(MenuBorderColor),
+                )
+            }
 
             Box(
                 modifier = Modifier
@@ -656,17 +668,16 @@ private fun RowScope.TicketPane(
                             direction = ReceiptScrollHintDirection.UP,
                             modifier = Modifier
                                 .align(Alignment.CenterHorizontally)
-                                .padding(top = 2.dp, bottom = 2.dp),
+                                .padding(top = 1.dp, bottom = 1.dp),
                         )
 
                         LazyColumn(
                             state = listState,
                             modifier = Modifier
                                 .weight(1f)
-                                .fillMaxWidth()
-                                .padding(top = 2.dp),
+                                .fillMaxWidth(),
                             contentPadding = PaddingValues(bottom = 6.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(3.dp),
                         ) {
                             itemsIndexed(
                                 items = ticketLines,
@@ -685,7 +696,7 @@ private fun RowScope.TicketPane(
                             direction = ReceiptScrollHintDirection.DOWN,
                             modifier = Modifier
                                 .align(Alignment.CenterHorizontally)
-                                .padding(top = 2.dp, bottom = 2.dp),
+                                .padding(top = 1.dp, bottom = 1.dp),
                         )
                     }
                 }
@@ -737,7 +748,7 @@ private fun RowScope.TicketPane(
                             itemId = line.itemId,
                             lineName = line.name,
                             unitPriceCents = line.unitPriceCents,
-                            lineTotalCents = line.totalCents(),
+                            lineTotalCents = line.subtotalCents(),
                             mode = LineDiscountMode.PERCENT,
                             initialValue = line.discountPercent?.toString().orEmpty(),
                         )
@@ -748,7 +759,7 @@ private fun RowScope.TicketPane(
                             itemId = line.itemId,
                             lineName = line.name,
                             unitPriceCents = line.unitPriceCents,
-                            lineTotalCents = line.totalCents(),
+                            lineTotalCents = line.subtotalCents(),
                             mode = LineDiscountMode.AMOUNT,
                             initialValue = line.discountAmountCents?.let(::formatDiscountAmountInput).orEmpty(),
                         )
@@ -803,7 +814,7 @@ private fun TicketLineRow(
                     onLongPress = { onLongPress() },
                 )
             }
-            .padding(horizontal = 4.dp, vertical = 8.dp),
+            .padding(horizontal = 4.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.Top,
     ) {
@@ -819,7 +830,7 @@ private fun TicketLineRow(
 
         Column(
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(3.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Text(
                 text = line.name,
@@ -840,7 +851,7 @@ private fun TicketLineRow(
 
         Column(
             horizontalAlignment = Alignment.End,
-            verticalArrangement = Arrangement.spacedBy(2.dp),
+            verticalArrangement = Arrangement.spacedBy(1.dp),
         ) {
             Text(
                 text = "Total",
@@ -968,6 +979,7 @@ private fun DiscountEntryDialog(
     onConfirm: (String) -> Unit,
 ) {
     var value by rememberSaveable(editor.itemId, editor.mode) { mutableStateOf(editor.initialValue) }
+    val preview = remember(editor, value) { calculateDiscountPreview(editor, value) }
     val isConfirmEnabled = when (editor.mode) {
         LineDiscountMode.PERCENT -> parsePercentDiscount(value) != null
         LineDiscountMode.AMOUNT -> parseEuroDiscountToCents(value) != null
@@ -1042,6 +1054,19 @@ private fun DiscountEntryDialog(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
+                        DiscountInfoRow(
+                            label = "Original amount",
+                            value = CentsFormatter.format(preview.originalLineAmountCents),
+                        )
+                        DiscountInfoRow(
+                            label = "Entered discount",
+                            value = CentsFormatter.format(preview.enteredDiscountCents),
+                        )
+                        DiscountInfoRow(
+                            label = "Discounted total",
+                            value = CentsFormatter.format(preview.discountedTotalCents),
+                            emphasized = true,
+                        )
                     }
                 }
                 DiscountKeypad(
@@ -1077,6 +1102,7 @@ private fun DiscountEntryDialog(
 private fun DiscountInfoRow(
     label: String,
     value: String,
+    emphasized: Boolean = false,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1092,7 +1118,7 @@ private fun DiscountInfoRow(
             text = value,
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.SemiBold,
-            color = MenuTextSecondary,
+            color = if (emphasized) MenuAccentTextColor else MenuTextSecondary,
         )
     }
 }
@@ -1430,6 +1456,39 @@ private fun buildLineMetaText(line: MenuTicketLine): String {
     val base = "Unit ${CentsFormatter.format(line.unitPriceCents)}"
     val discountLabel = line.discountLabel() ?: return base
     return "$base • $discountLabel"
+}
+
+private data class DiscountPreview(
+    val originalLineAmountCents: Int,
+    val enteredDiscountCents: Int,
+    val discountedTotalCents: Int,
+)
+
+private fun calculateDiscountPreview(
+    editor: LineDiscountEditorState,
+    rawValue: String,
+): DiscountPreview {
+    val originalLineAmountCents = editor.lineTotalCents.coerceAtLeast(0)
+    val enteredDiscountCents = when (editor.mode) {
+        LineDiscountMode.PERCENT -> {
+            parsePercentDiscount(rawValue)
+                ?.coerceIn(0, 100)
+                ?.let { percent -> (originalLineAmountCents * percent) / 100 }
+                ?: 0
+        }
+
+        LineDiscountMode.AMOUNT -> {
+            parseEuroDiscountToCents(rawValue)
+                ?.coerceIn(0, originalLineAmountCents)
+                ?: 0
+        }
+    }
+
+    return DiscountPreview(
+        originalLineAmountCents = originalLineAmountCents,
+        enteredDiscountCents = enteredDiscountCents,
+        discountedTotalCents = (originalLineAmountCents - enteredDiscountCents).coerceAtLeast(0),
+    )
 }
 
 private fun findTicketAutoFollowIndex(
