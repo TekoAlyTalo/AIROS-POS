@@ -6,18 +6,23 @@ import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -28,6 +33,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -65,6 +71,7 @@ import java.net.URI
 
 private const val SIGNALING_PORT = 8000
 private const val PREVIEW_TAG = "TableLivePreview"
+private const val PREVIEW_SURFACE_ASPECT_RATIO = 4f / 3f
 
 data class TableLivePreviewTarget(
     val tableId: String,
@@ -161,7 +168,7 @@ class TableMapViewModel(
             it.copy(
                 livePreviewTarget = target,
                 isLivePreviewDialogVisible = true,
-                message = "Starting live preview for ${target.cameraLabel}...",
+                message = null,
             )
         }
 
@@ -285,41 +292,33 @@ fun TableMapScreen(
         modifier = Modifier.fillMaxSize(),
         horizontalArrangement = Arrangement.spacedBy(20.dp),
     ) {
-        PosPane(
-            title = state.floorMap?.name ?: "Table map",
-            supportingText = "Fast table selection with seats, status, and on-demand live table view.",
+        Surface(
             modifier = Modifier.weight(1.5f),
+            shape = RoundedCornerShape(28.dp),
         ) {
-            Surface(
-                shape = RoundedCornerShape(18.dp),
-                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
-            ) {
-                Text(
-                    text = "AIROS POS",
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-
-            state.message?.let {
-                StatusBanner(
-                    text = it,
-                    tint = if (it.contains("opened", ignoreCase = true)) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                )
-            }
-
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 170.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            Column(
+                modifier = Modifier.padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                items(state.floorMap?.tables.orEmpty()) { table ->
-                    TableGridCard(
-                        table = table,
-                        selected = table.id == state.selectedTableId,
-                        onClick = { onSelectTable(table.id) },
+                state.message?.let {
+                    StatusBanner(
+                        text = it,
+                        tint = if (it.contains("opened", ignoreCase = true)) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                     )
+                }
+
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(minSize = 170.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    items(state.floorMap?.tables.orEmpty()) { table ->
+                        TableGridCard(
+                            table = table,
+                            selected = table.id == state.selectedTableId,
+                            onClick = { onSelectTable(table.id) },
+                        )
+                    }
                 }
             }
         }
@@ -375,102 +374,111 @@ private fun TableDetailsContent(
     onOpenTicket: (String) -> Unit,
     onOpenLivePreview: () -> Unit,
 ) {
-    KeyValueRow("Area", table.areaName)
-    KeyValueRow("Status", table.status.name)
-    KeyValueRow("Seats", table.seats.toString())
-    KeyValueRow("Guests", table.guestCount.toString())
-    KeyValueRow("Camera", table.cameraLabel ?: "Not assigned")
-
-    val mergedHint = mergedHintFor(table)
-    if (mergedHint != null) {
-        KeyValueRow("Merged", mergedHint)
-    }
-
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Button(
-            onClick = { currentStaffId?.let(onOpenSelectedTable) },
-            enabled = currentStaffId != null,
-        ) {
-            Text("Open table")
-        }
-        Button(onClick = { onOpenTicket(table.id) }) {
-            Text("Open ticket")
-        }
-    }
-
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 12.dp),
-        shape = RoundedCornerShape(24.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+    Column(
+        modifier = Modifier.verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        text = "Mini live preview",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        text = table.cameraLabel ?: table.cameraId ?: "No assigned camera",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                PreviewStatusPill(previewState.connectionState)
-            }
+        KeyValueRow("Area", table.areaName)
+        KeyValueRow("Status", table.status.name)
+        KeyValueRow("Seats", table.seats.toString())
+        KeyValueRow("Guests", table.guestCount.toString())
+        KeyValueRow("Camera", table.cameraLabel ?: "Not assigned")
 
-            val isMiniVisibleOwner = previewTarget != null && !isLivePreviewDialogVisible
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(180.dp)
-                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(18.dp)),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (isMiniVisibleOwner) {
-                    LiveVideoSurface(
-                        cameraPreviewService = cameraPreviewService,
-                        ownerKey = "mini:${previewTarget.tableId}:${previewTarget.cameraId}",
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                }
-                if (!canOpenLivePreview || !previewState.isStreaming || !isMiniVisibleOwner) {
-                    val overlayText = when {
-                        !canOpenLivePreview -> "Assign a camera and configure edge URL to enable live preview."
-                        previewTarget == null -> "Starting live preview..."
-                        isLivePreviewDialogVisible -> "Live preview is open in the enlarged view."
-                        previewState.errorMessage?.isNotBlank() == true -> previewState.errorMessage ?: previewState.detailMessage
-                        else -> previewState.detailMessage
-                    }
-                    Text(
-                        text = overlayText,
-                        modifier = Modifier.padding(16.dp),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (previewState.connectionState == CameraConnectionState.ERROR) {
-                            MaterialTheme.colorScheme.error
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                    )
-                }
-            }
+        val mergedHint = mergedHintFor(table)
+        if (mergedHint != null) {
+            KeyValueRow("Merged", mergedHint)
+        }
 
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Button(
-                onClick = onOpenLivePreview,
-                enabled = canOpenLivePreview,
-                modifier = Modifier.fillMaxWidth(),
+                onClick = { currentStaffId?.let(onOpenSelectedTable) },
+                enabled = currentStaffId != null,
             ) {
-                Text("Enlarge live view")
+                Text("Open table")
+            }
+            Button(onClick = { onOpenTicket(table.id) }) {
+                Text("Open ticket")
+            }
+        }
+
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            text = "Mini live preview",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = table.cameraLabel ?: table.cameraId ?: "No assigned camera",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    PreviewStatusPill(previewState.connectionState)
+                }
+
+                val isMiniVisibleOwner = previewTarget != null && !isLivePreviewDialogVisible
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .height(126.dp)
+                            .aspectRatio(PREVIEW_SURFACE_ASPECT_RATIO)
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(MaterialTheme.colorScheme.surface),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (isMiniVisibleOwner) {
+                            LiveVideoSurface(
+                                cameraPreviewService = cameraPreviewService,
+                                ownerKey = "mini:${previewTarget.tableId}:${previewTarget.cameraId}",
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        }
+                        if (!canOpenLivePreview || !previewState.isStreaming || !isMiniVisibleOwner) {
+                            val overlayText = when {
+                                !canOpenLivePreview -> "Assign a camera and configure edge URL to enable live preview."
+                                previewTarget == null -> "Starting live preview..."
+                                isLivePreviewDialogVisible -> "Live preview is open in the enlarged view."
+                                previewState.errorMessage?.isNotBlank() == true -> previewState.errorMessage ?: previewState.detailMessage
+                                else -> previewState.detailMessage
+                            }
+                            Text(
+                                text = overlayText,
+                                modifier = Modifier.padding(12.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (previewState.connectionState == CameraConnectionState.ERROR) {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                            )
+                        }
+                    }
+                }
+
+                Button(
+                    onClick = onOpenLivePreview,
+                    enabled = canOpenLivePreview,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Open live view")
+                }
             }
         }
     }
@@ -599,19 +607,19 @@ private fun TableLivePreviewDialog(
     ) {
         Surface(
             modifier = Modifier
-                .fillMaxWidth(0.9f)
-                .sizeIn(maxWidth = 820.dp, maxHeight = 640.dp),
+                .fillMaxWidth(0.94f)
+                .sizeIn(maxWidth = 1100.dp, maxHeight = 760.dp),
             shape = RoundedCornerShape(28.dp),
             color = MaterialTheme.colorScheme.surface,
         ) {
-            Column(
+            Row(
                 modifier = Modifier.padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(20.dp),
+                verticalAlignment = Alignment.Top,
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
+                Column(
+                    modifier = Modifier.width(248.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(
@@ -626,63 +634,71 @@ private fun TableLivePreviewDialog(
                         )
                     }
                     PreviewStatusPill(previewState.connectionState)
+
+                    KeyValueRow("Table", target.tableLabel)
+                    KeyValueRow("Resolved camera id", target.cameraId)
+                    KeyValueRow("State", previewState.connectionState.name)
+
+                    if (!errorMessage.isNullOrBlank() && previewState.connectionState == CameraConnectionState.ERROR) {
+                        StatusBanner(
+                            text = errorMessage,
+                            tint = MaterialTheme.colorScheme.error,
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
+                        if (previewState.connectionState == CameraConnectionState.ERROR) {
+                            TextButton(onClick = onRetry) {
+                                Text("Retry")
+                            }
+                        }
+                        TextButton(onClick = onDismiss) {
+                            Text("Close")
+                        }
+                    }
                 }
 
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .height(320.dp)
-                        .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(24.dp)),
+                        .weight(1f)
+                        .height(560.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    LiveVideoSurface(
-                        cameraPreviewService = cameraPreviewService,
-                        ownerKey = "dialog:${target.tableId}:${target.cameraId}",
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                    if (!previewState.isStreaming) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Text(
-                                text = previewState.detailMessage,
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                            if (!errorMessage.isNullOrBlank()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .aspectRatio(PREVIEW_SURFACE_ASPECT_RATIO, matchHeightConstraintsFirst = true)
+                            .clip(RoundedCornerShape(24.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        LiveVideoSurface(
+                            cameraPreviewService = cameraPreviewService,
+                            ownerKey = "dialog:${target.tableId}:${target.cameraId}",
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                        if (!previewState.isStreaming) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
                                 Text(
-                                    text = errorMessage,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.error,
+                                    text = previewState.detailMessage,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
                                 )
+                                if (!errorMessage.isNullOrBlank()) {
+                                    Text(
+                                        text = errorMessage,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.error,
+                                    )
+                                }
                             }
                         }
-                    }
-                }
-
-                KeyValueRow("Table", target.tableLabel)
-                KeyValueRow("Resolved camera id", target.cameraId)
-                KeyValueRow("State", previewState.connectionState.name)
-
-                if (!errorMessage.isNullOrBlank() && previewState.connectionState == CameraConnectionState.ERROR) {
-                    StatusBanner(
-                        text = errorMessage,
-                        tint = MaterialTheme.colorScheme.error,
-                    )
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                ) {
-                    if (previewState.connectionState == CameraConnectionState.ERROR) {
-                        TextButton(onClick = onRetry) {
-                            Text("Retry")
-                        }
-                    }
-                    TextButton(onClick = onDismiss) {
-                        Text("Close")
                     }
                 }
             }

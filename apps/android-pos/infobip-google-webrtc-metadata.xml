@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<metadata>
+  <groupId>com.infobip</groupId>
+  <artifactId>google-webrtc</artifactId>
+  <versioning>
+    <latest>1.0.45036</latest>
+    <release>1.0.45036</release>
+    <versions>
+      <version>1.0.35502</version>
+      <version>1.0.35504</version>
+      <version>1.0.35523</version>
+      <version>1.0.35525</version>
+      <version>1.0.35529</version>
+      <version>1.0.35530</version>
+      <version>1.0.38752</version>
+      <version>1.0.38765</version>
+      <version>1.0.38783</version>
+      <version>1.0.38790</version>
+      <version>1.0.38791</version>
+      <version>1.0.38792</version>
+      <version>1.0.39061</version>
+      <version>1.0.39061d</version>
+      <version>1.0.39079</version>
+      <version>1.0.39950</version>
+      <version>1.0.40399</version>
+      <version>1.0.40400</version>
+      <version>1.0.40793</version>
+      <version>1.0.40794</version>
+      <version>1.0.41833d</version>
+      <version>1.0.41840d</version>
+      <version>1.0.42469</version>
+      <version>1.0.43577</version>
+      <version>1.0.43581</version>
+      <version>1.0.43590</version>
+      <version>1.0.43591</version>
+      <version>1.0.44988</version>
+      <version>1.0.44992</version>
+      <version>1.0.45036</version>
+    </versions>
+    <lastUpdated>20250627131627</lastUpdated>
+  </versioning>
+</metadata>

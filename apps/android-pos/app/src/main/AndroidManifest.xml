@@ -1,5 +1,18 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <queries>
+        <package android:name="com.sunmi.innerprinter" />
+        <package android:name="com.sunmi.innerprintadapter" />
+        <package android:name="com.sunmi.printerservice" />
+        <package android:name="com.sunmi.peripheral.printer" />
+        <package android:name="com.sunmi.adapter.lcd" />
+        <package android:name="com.sunmi.usbscreen" />
+        <package android:name="com.sunmi.printer.firmware" />
+        <package android:name="sunmi.unified.sdk.service" />
+        <package android:name="sunmi_customer" />
+        <package android:name="sunmi.service" />
+    </queries>
+
     <!-- Network & hardware -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />

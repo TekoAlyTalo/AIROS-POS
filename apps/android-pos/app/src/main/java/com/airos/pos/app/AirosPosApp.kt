@@ -1,5 +1,7 @@
 package com.airos.pos.app
 
+import android.util.Log
+import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -32,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -62,7 +65,9 @@ import com.airos.pos.feature.tablemap.TableMapScreen
 import com.airos.pos.feature.tablemap.TableMapViewModel
 import com.airos.pos.feature.ticket.TicketScreen
 import com.airos.pos.feature.ticket.TicketViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private val AppShellBackground = Color(0xFF060C12)
 private val AppShellRailColor = Color(0xFF09121A)
@@ -75,6 +80,7 @@ private val AppShellTextPrimary = Color(0xFFFBFEFF)
 private val AppShellTextSecondary = Color(0xFFE1EBF2)
 private val AppShellTextMuted = Color(0xFFB0C0CD)
 private val AppShellAccentText = Color(0xFF85F5E0)
+private const val CustomerDisplayLogTag = "SunmiCustomerDisplay"
 
 private object Routes {
     const val Auth = "auth"
@@ -180,6 +186,9 @@ private fun SignedInApp(
                 composable(Routes.Shift) {
                     val viewModel: ShiftViewModel = viewModel(factory = ShiftViewModel.factory(appContainer.shiftRepository))
                     val state by viewModel.uiState.collectAsState()
+                    val context = LocalContext.current
+                    var customerDisplayProbeStatus by rememberSaveable { mutableStateOf<String?>(null) }
+                    var isCustomerDisplayProbeFailure by rememberSaveable { mutableStateOf(false) }
                     ShiftScreen(
                         state = state,
                         currentStaffId = currentStaffId,
@@ -187,6 +196,54 @@ private fun SignedInApp(
                         onCountedCashChanged = viewModel::updateCountedCash,
                         onOpenShift = viewModel::openShift,
                         onCloseShift = viewModel::closeShift,
+                        customerDisplayProbeStatus = customerDisplayProbeStatus,
+                        isCustomerDisplayProbeFailure = isCustomerDisplayProbeFailure,
+                        onRunCustomerDisplayProbe = {
+                            Log.i(
+                                CustomerDisplayLogTag,
+                                "Manual customer-display probe trigger pressed from Shift screen. availabilityBefore=${appContainer.customerDisplayService.availability}",
+                            )
+                            customerDisplayProbeStatus = "Customer display probe started..."
+                            isCustomerDisplayProbeFailure = false
+                            Toast.makeText(
+                                context,
+                                "Customer display probe started",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                            scope.launch {
+                                val report = withContext(Dispatchers.IO) {
+                                    appContainer.customerDisplayService.probeCapability(trigger = "shift-manual")
+                                }
+                                val availability = appContainer.customerDisplayService.availability
+                                val statusMessage = if (report.sendSucceeded) {
+                                    "Customer display probe succeeded. availability=$availability"
+                                } else {
+                                    "Customer display probe failed: ${report.blocker ?: "Unknown blocker"}"
+                                }
+                                isCustomerDisplayProbeFailure = !report.sendSucceeded
+                                customerDisplayProbeStatus = statusMessage
+                                Log.i(
+                                    CustomerDisplayLogTag,
+                                    "Manual customer-display probe finished. availability=$availability " +
+                                        "path=${report.attemptedPath} service=${report.serviceComponent ?: "-"} " +
+                                        "bindAttempted=${report.bindAttempted} bindSucceeded=${report.bindSucceeded} " +
+                                        "binderClass=${report.binderClassName ?: "-"} descriptor=${report.binderDescriptor ?: "-"} " +
+                                        "resolvedClass=${report.resolvedClassName ?: "-"} managerClassPresent=${report.managerClassPresent} " +
+                                        "accessor=${report.managerAccessor ?: "-"} textMethod=${report.textMethod ?: "-"} " +
+                                        "sendAttempted=${report.sendAttempted} sendSucceeded=${report.sendSucceeded} " +
+                                        "blocker=${report.blocker ?: "-"}",
+                                )
+                                Toast.makeText(
+                                    context,
+                                    if (report.sendSucceeded) {
+                                        "Customer display probe succeeded"
+                                    } else {
+                                        "Customer display probe failed"
+                                    },
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                            }
+                        },
                     )
                 }
 
