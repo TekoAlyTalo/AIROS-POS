@@ -418,10 +418,10 @@ class CatalogService:
 
     def import_solmio_products(self, raw_bytes: bytes) -> dict[str, Any]:
         summary = ProductImportSummary()
-        allowed_rates = {round(rate, 3) for rate in self.settings.allowed_vat_rates}
         touched_subcategories: set[str] = set()
 
         for row_number, raw_row in enumerate(read_solmio_csv_rows(raw_bytes), start=2):
+            summary.total_rows += 1
             if not any((value or "").strip() for value in raw_row.values()):
                 summary.skipped += 1
                 continue
@@ -429,9 +429,6 @@ class CatalogService:
                 row = parse_solmio_row(raw_row, row_number=row_number)
             except ValueError as exc:
                 summary.add_failure(row_number, str(exc))
-                continue
-            if round(row.vat_rate, 3) not in allowed_rates:
-                summary.add_failure(row_number, f"unsupported vat_rate {row.vat_rate:.3f}")
                 continue
 
             category = self._get_or_create_category(row.category_name)

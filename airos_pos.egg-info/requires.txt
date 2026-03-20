@@ -1,5 +1,6 @@
 fastapi<1.0.0,>=0.115.0
 jsonschema<5.0.0,>=4.23.0
+python-multipart<1.0.0,>=0.0.9
 pydantic<3.0.0,>=2.8.0
 sqlalchemy<3.0.0,>=2.0.36
 tzdata>=2025.1

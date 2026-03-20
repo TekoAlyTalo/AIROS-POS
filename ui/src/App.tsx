@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { Globe, Loader2, RadioTower, RotateCcw, Sparkles } from "lucide-react";
+import { Loader2, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 
 import { AppShell } from "@/components/app-shell";
 import { ProductOrderAside } from "@/components/product-order-aside";
 import { ProductsWorkspace } from "@/components/products-workspace";
+import { SettingsWorkspace } from "@/components/settings-workspace";
 import { StatusChip } from "@/components/status-chip";
 import { TableDrawer } from "@/components/table-drawer";
 import { TableMapCanvas } from "@/components/table-map-canvas";
@@ -56,7 +57,6 @@ import type {
 } from "@/lib/normalize";
 import type { AppRoute } from "@/lib/router";
 import { resolveRoute, routePath, toAppHref } from "@/lib/router";
-import { formatCompactId } from "@/lib/utils";
 
 function App() {
   const [route, setRoute] = useState<AppRoute>(() => resolveRoute(window.location.pathname));
@@ -75,6 +75,7 @@ function App() {
   const [sessionInfo, setSessionInfo] = useState<SessionRecord | null>(null);
   const [mapLoading, setMapLoading] = useState(true);
   const [drawerBusy, setDrawerBusy] = useState(false);
+  const [productEditMode, setProductEditMode] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [connectionState, setConnectionState] = useState<"online" | "offline" | "loading">("loading");
 
@@ -107,14 +108,22 @@ function App() {
       setConnectionState("loading");
     }
     try {
-      const [nextFloorplans, nextSession, nextOverview] = await Promise.all([
+      const [nextFloorplans, nextSession] = await Promise.all([
         getFloorplansOrTables(),
         getCurrentSession(),
-        getTableOverview(),
       ]);
-      const mergedFloorplans = applyOverviewToFloorplans(nextFloorplans, nextOverview);
+      let mergedFloorplans = nextFloorplans;
+      let overviewMessage: string | null = null;
+
+      try {
+        const nextOverview = await getTableOverview();
+        mergedFloorplans = applyOverviewToFloorplans(nextFloorplans, nextOverview);
+      } catch (error) {
+        overviewMessage = error instanceof ApiError ? error.detail : "Unable to load live table overview.";
+      }
+
       setFloorplans(mergedFloorplans);
-      setSelectedFloorplanId((current) => current ?? nextFloorplans[0]?.id ?? null);
+      setSelectedFloorplanId((current) => current ?? mergedFloorplans[0]?.id ?? null);
       setSelectedTableId((current) => {
         const tableIds = new Set(mergedFloorplans.flatMap((floorplan) => floorplan.tables.map((table) => table.id)));
         if (current && tableIds.has(current)) {
@@ -123,7 +132,7 @@ function App() {
         return mergedFloorplans[0]?.tables[0]?.id ?? null;
       });
       setSessionInfo(nextSession);
-      setErrorMessage(null);
+      setErrorMessage(overviewMessage);
       setConnectionState("online");
     } catch (error) {
       const message = error instanceof ApiError ? error.detail : "Unable to reach the Edge API.";
@@ -494,68 +503,7 @@ function App() {
     return summary;
   }
 
-  const statusControls = (
-    <div className="flex flex-wrap items-center gap-2">
-      <StatusChip
-        label={connectionState === "online" ? "API Live" : connectionState === "loading" ? "API Loading" : "API Offline"}
-        tone={connectionState === "online" ? "success" : connectionState === "loading" ? "info" : "danger"}
-      />
-      <StatusChip
-        label={sessionInfo ? `Session ${sessionInfo.status}` : "Session Closed"}
-        tone={sessionInfo ? "info" : "warning"}
-        compactId={sessionInfo?.id}
-      />
-      <StatusChip label="Opas Off" tone="neutral" />
-      <StatusChip label="Voice Off" tone="neutral" />
-      <Button variant="secondary" size="sm">
-        <Globe className="h-3.5 w-3.5" />
-        FI
-      </Button>
-      <Button variant="ghost" size="sm">
-        EN
-      </Button>
-    </div>
-  );
-
-  const header =
-    route === "table-map" ? (
-      <header className="glass-card flex flex-col gap-4 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="text-xs uppercase tracking-[0.28em] text-muted-foreground">Staff operations</p>
-            <h2 className="mt-2 text-xl font-semibold tracking-[0.04em] text-foreground">Floor map and service drawer</h2>
-          </div>
-          {statusControls}
-        </div>
-
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap gap-2">
-            {floorplans.map((floorplan) => (
-              <Button
-                key={floorplan.id}
-                variant={floorplan.id === selectedFloorplanId ? "default" : "secondary"}
-                size="sm"
-                onClick={() => setSelectedFloorplanId(floorplan.id)}
-              >
-                <RadioTower className="h-3.5 w-3.5" />
-                {floorplan.name}
-              </Button>
-            ))}
-          </div>
-
-          <div className="flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-xs text-muted-foreground">
-            <Sparkles className="h-3.5 w-3.5 text-primary" />
-            <span>Selected floor</span>
-            <span className="font-medium text-foreground">
-              {floorplans.find((floorplan) => floorplan.id === selectedFloorplanId)?.name ?? "N/A"}
-            </span>
-            <span className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-              {formatCompactId(selectedFloorplanId)}
-            </span>
-          </div>
-        </div>
-      </header>
-    ) : null;
+  const header = null;
 
   return (
     <AppShell
@@ -576,10 +524,23 @@ function App() {
             onOpenCheck={handleOpenCheck}
             onSelectCheck={handleSelectCheck}
             onRefreshCheck={refreshCheckState}
-            onAddItems={handleAddItem}
             onRecordPayment={handleRecordPayment}
             onFinalize={handleFinalize}
           />
+        ) : route === "settings" ? (
+          <aside className="glass-card flex h-full min-h-[280px] flex-col justify-between p-4">
+            <div className="space-y-3">
+              <p className="text-xs uppercase tracking-[0.28em] text-muted-foreground">Settings</p>
+              <h2 className="text-xl font-semibold tracking-[0.04em] text-foreground">Admin tools moved here</h2>
+              <p className="text-sm text-muted-foreground">
+                The Products page stays focused on selling while edit access and catalog import live in Settings.
+              </p>
+            </div>
+            <div className="rounded-[24px] border border-white/10 bg-white/[0.03] p-4">
+              <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Edit mode</p>
+              <p className="mt-2 text-lg font-semibold text-foreground">{productEditMode ? "Enabled" : "Disabled"}</p>
+            </div>
+          </aside>
         ) : (
           <ProductOrderAside
             table={selectedTable}
@@ -595,28 +556,58 @@ function App() {
       }
     >
       {route === "table-map" ? (
-        <section className="glass-card flex min-h-[620px] flex-col overflow-hidden p-5">
-          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="text-xs uppercase tracking-[0.32em] text-muted-foreground">Floor view</p>
-              <h1 className="mt-2 text-2xl font-semibold tracking-[0.04em] text-foreground">Table Map</h1>
-              <p className="mt-2 text-sm text-muted-foreground">
-                Auto-refreshing every 5 seconds with live table overview.
-              </p>
+        <section className="glass-card flex h-full min-h-[620px] flex-col overflow-hidden p-3 lg:min-h-0 lg:p-3.5">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-[26px] border border-white/10 bg-white/[0.03] px-3 py-2.5">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+              <p className="text-[11px] uppercase tracking-[0.28em] text-muted-foreground">Table Map</p>
+              {selectedFloorplan ? (
+                <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs text-foreground">
+                  {selectedFloorplan.name}
+                </span>
+              ) : null}
+              {floorplans.length > 1
+                ? floorplans.map((floorplan) => (
+                    <Button
+                      key={floorplan.id}
+                      variant={floorplan.id === selectedFloorplanId ? "default" : "secondary"}
+                      size="sm"
+                      className="h-8 rounded-full px-3 text-xs"
+                      onClick={() => {
+                        setSelectedFloorplanId(floorplan.id);
+                        setSelectedTableId(floorplan.tables[0]?.id ?? null);
+                      }}
+                    >
+                      {floorplan.name}
+                    </Button>
+                  ))
+                : null}
             </div>
-            <Button variant="secondary" onClick={() => void loadMap()} disabled={mapLoading}>
+
+            <div className="flex items-center gap-2">
+              <StatusChip
+                label={connectionState === "online" ? "API Live" : connectionState === "loading" ? "Syncing" : "Offline"}
+                tone={connectionState === "online" ? "success" : connectionState === "loading" ? "info" : "danger"}
+              />
+              <Button
+                variant="secondary"
+                size="sm"
+                className="h-8 rounded-full px-3"
+                onClick={() => void loadMap()}
+                disabled={mapLoading}
+              >
               {mapLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
               Refresh
-            </Button>
+              </Button>
+            </div>
           </div>
 
           {errorMessage ? (
-            <div className="mb-4 rounded-2xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive-foreground">
+            <div className="mb-3 rounded-[24px] border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm text-destructive-foreground">
               {errorMessage}
             </div>
           ) : null}
 
-          <div className="flex-1">
+          <div className="min-h-0 flex-1">
             <TableMapCanvas
               tables={tables}
               selectedTableId={selectedTableId}
@@ -625,6 +616,12 @@ function App() {
             />
           </div>
         </section>
+      ) : route === "settings" ? (
+        <SettingsWorkspace
+          editMode={productEditMode}
+          onEditModeChange={setProductEditMode}
+          onImportProducts={handleImportProducts}
+        />
       ) : (
         <ProductsWorkspace
           products={products}
@@ -634,6 +631,7 @@ function App() {
           gridSlotsByPage={gridSlotsByPage}
           activeCheckId={selectedCheckId}
           busy={drawerBusy}
+          editMode={productEditMode}
           onAddProduct={handleAddProduct}
           onPatchGridPage={handlePatchGridPage}
           onReplaceGridSlots={handleReplaceGridSlots}
@@ -647,7 +645,6 @@ function App() {
           onCreateSubcategory={handleCreateSubcategory}
           onPatchSubcategory={handlePatchSubcategory}
           onDeleteSubcategory={handleDeleteSubcategory}
-          onImportProducts={handleImportProducts}
         />
       )}
     </AppShell>

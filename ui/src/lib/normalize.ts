@@ -201,11 +201,34 @@ function normalizeTable(table: any): TableRecord {
   };
 }
 
-export function normalizeFloorplans(payload: any): FloorplanRecord[] {
-  if (!Array.isArray(payload)) {
-    return [];
+function extractFloorplanRows(payload: any): any[] {
+  if (Array.isArray(payload)) {
+    return payload;
   }
-  return payload.map((floorplan) => ({
+  if (Array.isArray(payload?.floorplans)) {
+    return payload.floorplans;
+  }
+  if (Array.isArray(payload?.value)) {
+    return payload.value;
+  }
+  return [];
+}
+
+function extractTableRows(payload: any): any[] {
+  if (Array.isArray(payload)) {
+    return payload;
+  }
+  if (Array.isArray(payload?.tables)) {
+    return payload.tables;
+  }
+  if (Array.isArray(payload?.value)) {
+    return payload.value;
+  }
+  return [];
+}
+
+export function normalizeFloorplans(payload: any): FloorplanRecord[] {
+  return extractFloorplanRows(payload).map((floorplan) => ({
     id: String(floorplan.id),
     restaurantKey: String(floorplan.restaurant_key ?? "demo-restaurant"),
     name: String(floorplan.name ?? "Floor"),
@@ -214,7 +237,7 @@ export function normalizeFloorplans(payload: any): FloorplanRecord[] {
 }
 
 export function buildSyntheticFloorplan(tablesPayload: any): FloorplanRecord[] {
-  const tables = Array.isArray(tablesPayload) ? tablesPayload.map(normalizeTable) : [];
+  const tables = extractTableRows(tablesPayload).map(normalizeTable);
   return [
     {
       id: "synthetic-floor",
@@ -225,11 +248,21 @@ export function buildSyntheticFloorplan(tablesPayload: any): FloorplanRecord[] {
   ];
 }
 
-export function normalizeTableOverview(payload: any): TableOverviewRecord[] {
-  if (!Array.isArray(payload)) {
-    return [];
+function extractTableOverviewRows(payload: any): any[] {
+  if (Array.isArray(payload)) {
+    return payload;
   }
-  return payload.map((table) => ({
+  if (Array.isArray(payload?.tables)) {
+    return payload.tables;
+  }
+  if (Array.isArray(payload?.value)) {
+    return payload.value;
+  }
+  return [];
+}
+
+export function normalizeTableOverview(payload: any): TableOverviewRecord[] {
+  return extractTableOverviewRows(payload).map((table) => ({
     tableId: String(table.table_id),
     label: String(table.label ?? "Table"),
     status: (table.status ?? "FREE") as TableStatus,

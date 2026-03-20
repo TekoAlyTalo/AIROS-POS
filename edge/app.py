@@ -76,6 +76,13 @@ def create_app(settings: EdgeSettings | None = None) -> FastAPI:
             "http://localhost:5174",
             "http://127.0.0.1:5174",
         ],
+        allow_origin_regex=(
+            r"^http://("
+            r"192\.168\.\d{1,3}\.\d{1,3}"
+            r"|10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+            r"|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}"
+            r"):(5173|5174)$"
+        ),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

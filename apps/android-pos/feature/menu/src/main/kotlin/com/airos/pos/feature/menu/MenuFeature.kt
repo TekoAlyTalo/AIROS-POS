@@ -31,9 +31,9 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -62,8 +62,17 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.airos.pos.core.common.CentsFormatter
+import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.model.MenuItem
+import com.airos.pos.core.model.PaymentEntry
+import com.airos.pos.core.model.PaymentMethod
+import com.airos.pos.core.model.TablePaymentRequest
+import com.airos.pos.core.model.TablePaymentResult
+import com.airos.pos.core.model.ReceiptDocument
+import com.airos.pos.core.model.TicketLine
+import com.airos.pos.device.platform.CustomerDisplayService
 import com.airos.pos.domain.MenuRepository
+import com.airos.pos.domain.PaymentRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -95,6 +104,11 @@ data class MenuUiState(
     val items: List<MenuItem> = emptyList(),
     val gridConfig: ProductGridConfig = ProductGridConfig(),
     val ticketLines: List<MenuTicketLine> = emptyList(),
+    val activeTableId: String? = null,
+    val activeTableLabel: String? = null,
+    val paymentInProgress: Boolean = false,
+    val paymentMessage: String? = null,
+    val manualDrawerInProgress: Boolean = false,
 )
 
 data class MenuTicketLine(
@@ -106,13 +120,41 @@ data class MenuTicketLine(
     val discountAmountCents: Int? = null,
 )
 
+private object MenuTicketDraftStore {
+    private val ticketLinesByTableId = mutableMapOf<String, List<MenuTicketLine>>()
+
+    fun load(tableId: String): List<MenuTicketLine> = ticketLinesByTableId[tableId].orEmpty()
+
+    fun save(tableId: String, lines: List<MenuTicketLine>) {
+        ticketLinesByTableId[tableId] = lines
+    }
+
+    fun clear(tableId: String) {
+        ticketLinesByTableId.remove(tableId)
+    }
+}
+
 class MenuViewModel(
     private val menuRepository: MenuRepository,
+    private val paymentRepository: PaymentRepository,
+    private val printReceipt: suspend (ReceiptDocument) -> PosResult<Unit>,
+    private val openCashDrawer: suspend (String) -> PosResult<Unit>,
+    private val verifyDrawerPin: suspend (String) -> PosResult<Unit>,
+    private val customerDisplayService: CustomerDisplayService? = null,
+    private val activeTableId: String? = null,
+    private val activeTableLabel: String? = null,
 ) : ViewModel() {
-    private val mutableState = MutableStateFlow(MenuUiState())
+    private val mutableState = MutableStateFlow(
+        MenuUiState(
+            activeTableId = activeTableId,
+            activeTableLabel = activeTableLabel,
+            ticketLines = activeTableId?.let(MenuTicketDraftStore::load).orEmpty(),
+        ),
+    )
     val uiState: StateFlow<MenuUiState> = mutableState.asStateFlow()
 
     init {
+        syncCustomerDisplayToCurrentTicket()
         viewModelScope.launch {
             menuRepository.observeMenuItems().collect { items ->
                 mutableState.update { it.copy(items = items) }
@@ -120,11 +162,25 @@ class MenuViewModel(
         }
     }
 
+    fun syncCustomerDisplayToCurrentTicket() {
+        customerDisplayService?.updateCustomerTotalDisplay(currentTicketTotalCentsOrNull())
+    }
+
+    fun clearCustomerDisplay() {
+        customerDisplayService?.updateCustomerTotalDisplay(null)
+    }
+
+    private fun currentTicketTotalCentsOrNull(): Int? {
+        return mutableState.value.ticketLines
+            .takeIf { it.isNotEmpty() }
+            ?.sumOf { it.totalCents() }
+    }
+
     fun addToTicket(item: MenuItem) {
-        mutableState.update { currentState ->
-            val existingIndex = currentState.ticketLines.indexOfFirst { it.itemId == item.id }
-            val updatedLines = if (existingIndex >= 0) {
-                currentState.ticketLines.mapIndexed { index, line ->
+        updateTicketLines { currentLines ->
+            val existingIndex = currentLines.indexOfFirst { it.itemId == item.id }
+            if (existingIndex >= 0) {
+                currentLines.mapIndexed { index, line ->
                     if (index == existingIndex) {
                         line.copy(quantity = line.quantity + 1)
                     } else {
@@ -132,82 +188,322 @@ class MenuViewModel(
                     }
                 }
             } else {
-                currentState.ticketLines + MenuTicketLine(
+                currentLines + MenuTicketLine(
                     itemId = item.id,
                     name = item.name,
                     quantity = 1,
                     unitPriceCents = item.priceCents,
                 )
             }
-            currentState.copy(ticketLines = updatedLines)
         }
     }
 
     fun decrementTicketLine(itemId: String) {
-        mutableState.update { currentState ->
-            val updatedLines = buildList(currentState.ticketLines.size) {
-                currentState.ticketLines.forEach { line ->
+        updateTicketLines { currentLines ->
+            buildList(currentLines.size) {
+                currentLines.forEach { line ->
                     when {
                         line.itemId != itemId -> add(line)
                         line.quantity > 1 -> add(line.copy(quantity = line.quantity - 1))
                     }
                 }
             }
-            currentState.copy(ticketLines = updatedLines)
         }
     }
 
     fun removeTicketLine(itemId: String) {
-        mutableState.update { currentState ->
-            currentState.copy(ticketLines = currentState.ticketLines.filterNot { it.itemId == itemId })
+        updateTicketLines { currentLines ->
+            currentLines.filterNot { it.itemId == itemId }
         }
     }
 
     fun applyLinePercentDiscount(itemId: String, percent: Int) {
-        mutableState.update { currentState ->
-            currentState.copy(
-                ticketLines = currentState.ticketLines.map { line ->
-                    if (line.itemId == itemId) {
-                        if (percent <= 0) {
-                            line.copy(discountPercent = null, discountAmountCents = null)
-                        } else {
-                            line.copy(
-                                discountPercent = percent.coerceIn(0, 100),
-                                discountAmountCents = null,
-                            )
-                        }
+        updateTicketLines { currentLines ->
+            currentLines.map { line ->
+                if (line.itemId == itemId) {
+                    if (percent <= 0) {
+                        line.copy(discountPercent = null, discountAmountCents = null)
                     } else {
-                        line
+                        line.copy(
+                            discountPercent = percent.coerceIn(0, 100),
+                            discountAmountCents = null,
+                        )
                     }
-                },
-            )
+                } else {
+                    line
+                }
+            }
         }
     }
 
     fun applyLineAmountDiscount(itemId: String, amountCents: Int) {
+        updateTicketLines { currentLines ->
+            currentLines.map { line ->
+                if (line.itemId == itemId) {
+                    if (amountCents <= 0) {
+                        line.copy(discountPercent = null, discountAmountCents = null)
+                    } else {
+                        line.copy(
+                            discountPercent = null,
+                            discountAmountCents = amountCents.coerceAtMost(line.subtotalCents()),
+                        )
+                    }
+                } else {
+                    line
+                }
+            }
+        }
+    }
+
+    fun submitPayment(result: MenuPaymentDialogResult) {
+        val state = mutableState.value
+        if (state.ticketLines.isEmpty()) {
+            mutableState.update { it.copy(paymentMessage = "Ticket is empty.") }
+            return
+        }
+
+        mutableState.update {
+            it.copy(
+                paymentInProgress = true,
+                paymentMessage = null,
+            )
+        }
+
+        viewModelScope.launch {
+            val request = buildTablePaymentRequest(result, mutableState.value.ticketLines)
+            when (val finalizeResult = paymentRepository.finalizeTablePayment(request)) {
+                is PosResult.Success -> {
+                    val tableResult = finalizeResult.value
+                    val printResult = if (result.shouldPrintReceipt) {
+                        printReceipt(tableResult.receiptDocument)
+                    } else {
+                        null
+                    }
+                    val drawerResult = if (request.payments.any { it.method == PaymentMethod.CASH }) {
+                        openCashDrawer("menu_payment_auto")
+                    } else {
+                        PosResult.Success(Unit)
+                    }
+
+                    clearTicketAfterSuccessfulCheckout()
+
+                    val messageParts = buildList {
+                        add(
+                            when (printResult) {
+                                is PosResult.Success<*> -> "Receipt printed."
+                                is PosResult.Failure -> "Payment completed, but receipt print failed: ${printResult.message}"
+                                null -> "Receipt printing skipped."
+                            },
+                        )
+                        if (tableResult.changeCents > 0) {
+                            add("Change ${CentsFormatter.format(tableResult.changeCents)}.")
+                        }
+                        if (drawerResult is PosResult.Failure) {
+                            add("Cash drawer failed: ${drawerResult.message}")
+                        }
+                        add("Ticket closed and bill cleared.")
+                    }
+
+                    mutableState.update {
+                        it.copy(
+                            paymentInProgress = false,
+                            paymentMessage = messageParts.joinToString(" "),
+                        )
+                    }
+                }
+
+                is PosResult.Failure -> mutableState.update {
+                    it.copy(
+                        paymentInProgress = false,
+                        paymentMessage = finalizeResult.message,
+                    )
+                }
+            }
+        }
+    }
+
+    fun clearPaymentMessage() {
+        mutableState.update { it.copy(paymentMessage = null) }
+    }
+
+    fun openCashDrawerManually(pin: String) {
+        mutableState.update {
+            it.copy(
+                manualDrawerInProgress = true,
+                paymentMessage = null,
+            )
+        }
+
+        viewModelScope.launch {
+            when (val pinResult = verifyDrawerPin(pin)) {
+                is PosResult.Success -> {
+                    val result = openCashDrawer("menu_manual")
+                    mutableState.update {
+                        it.copy(
+                            manualDrawerInProgress = false,
+                            paymentMessage = when (result) {
+                                is PosResult.Success<*> -> "Cash drawer opened."
+                                is PosResult.Failure -> "Cash drawer failed: ${result.message}"
+                            },
+                        )
+                    }
+                }
+
+                is PosResult.Failure -> {
+                    mutableState.update {
+                        it.copy(
+                            manualDrawerInProgress = false,
+                            paymentMessage = "PIN rejected. ${pinResult.message}",
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun buildTablePaymentRequest(
+        result: MenuPaymentDialogResult,
+        lines: List<MenuTicketLine>,
+    ): TablePaymentRequest {
+        val ticketLines = lines.mapIndexed { index, line ->
+            TicketLine(
+                id = "${activeTableId ?: "walkin"}-line-$index",
+                menuItemId = line.itemId,
+                name = line.name,
+                quantity = line.quantity,
+                unitPriceCents = line.unitPriceCents,
+                totalPriceCents = line.totalCents(),
+            )
+        }
+
+        val paymentEntries = buildList {
+            when (result.mode) {
+                MenuPaymentMode.CASH -> {
+                    add(
+                        PaymentEntry(
+                            method = PaymentMethod.CASH,
+                            amountCents = result.finalTotalCents,
+                            displayLabel = "Cash",
+                        ),
+                    )
+                }
+
+                MenuPaymentMode.CARD -> {
+                    add(
+                        PaymentEntry(
+                            method = PaymentMethod.CARD,
+                            amountCents = result.finalTotalCents,
+                            displayLabel = "Card",
+                        ),
+                    )
+                }
+
+                MenuPaymentMode.VOUCHER -> {
+                    add(
+                        PaymentEntry(
+                            method = PaymentMethod.VOUCHER,
+                            amountCents = result.finalTotalCents,
+                            reference = result.voucherBarcodeValue,
+                            displayLabel = "Voucher",
+                        ),
+                    )
+                }
+
+                MenuPaymentMode.SPLIT_PAYMENT -> {
+                    result.cashTenderedCents?.takeIf { it > 0 }?.let {
+                        add(PaymentEntry(method = PaymentMethod.CASH, amountCents = it, displayLabel = "Cash"))
+                    }
+                    result.cardAmountCents?.takeIf { it > 0 }?.let {
+                        add(PaymentEntry(method = PaymentMethod.CARD, amountCents = it, displayLabel = "Card"))
+                    }
+                    result.voucherAmountCents?.takeIf { it > 0 }?.let {
+                        add(
+                            PaymentEntry(
+                                method = PaymentMethod.VOUCHER,
+                                amountCents = it,
+                                reference = result.voucherBarcodeValue,
+                                displayLabel = "Voucher",
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+
+        return TablePaymentRequest(
+            tableId = activeTableId,
+            tableLabel = activeTableLabel,
+            lines = ticketLines,
+            payments = paymentEntries,
+            cashTenderedCents = when (result.mode) {
+                MenuPaymentMode.CASH -> result.cashTenderedCents
+                MenuPaymentMode.SPLIT_PAYMENT -> result.cashTenderedCents
+                else -> null
+            },
+            voucherBarcodeValue = result.voucherBarcodeValue,
+            discountAmountCents = result.billDiscountAmountCents,
+            discountLabel = when {
+                result.billDiscountPercent != null -> "${result.billDiscountPercent}%"
+                result.billDiscountAmountCents > 0 -> CentsFormatter.format(result.billDiscountAmountCents)
+                else -> null
+            },
+        )
+    }
+
+    private fun clearTicketAfterSuccessfulCheckout() {
+        activeTableId?.let(MenuTicketDraftStore::clear)
+        customerDisplayService?.updateCustomerTotalDisplay(null)
         mutableState.update { currentState ->
             currentState.copy(
-                ticketLines = currentState.ticketLines.map { line ->
-                    if (line.itemId == itemId) {
-                        if (amountCents <= 0) {
-                            line.copy(discountPercent = null, discountAmountCents = null)
-                        } else {
-                            line.copy(
-                                discountPercent = null,
-                                discountAmountCents = amountCents.coerceAtMost(line.subtotalCents()),
-                            )
-                        }
-                    } else {
-                        line
-                    }
-                },
+                ticketLines = emptyList(),
             )
         }
     }
 
+    private fun updateTicketLines(
+        transform: (List<MenuTicketLine>) -> List<MenuTicketLine>,
+    ) {
+        mutableState.update { currentState ->
+            val updatedLines = transform(currentState.ticketLines)
+            activeTableId?.let { tableId ->
+                if (updatedLines.isEmpty()) {
+                    MenuTicketDraftStore.clear(tableId)
+                } else {
+                    MenuTicketDraftStore.save(tableId, updatedLines)
+                }
+            }
+            customerDisplayService?.updateCustomerTotalDisplay(
+                updatedLines
+                    .takeIf { it.isNotEmpty() }
+                    ?.sumOf { it.totalCents() },
+            )
+            currentState.copy(ticketLines = updatedLines)
+        }
+    }
+
     companion object {
-        fun factory(menuRepository: MenuRepository): ViewModelProvider.Factory = viewModelFactory {
-            initializer { MenuViewModel(menuRepository) }
+        fun factory(
+            menuRepository: MenuRepository,
+            paymentRepository: PaymentRepository,
+            printReceipt: suspend (ReceiptDocument) -> PosResult<Unit>,
+            openCashDrawer: suspend (String) -> PosResult<Unit>,
+            verifyDrawerPin: suspend (String) -> PosResult<Unit>,
+            customerDisplayService: CustomerDisplayService? = null,
+            activeTableId: String? = null,
+            activeTableLabel: String? = null,
+        ): ViewModelProvider.Factory = viewModelFactory {
+            initializer {
+                MenuViewModel(
+                    menuRepository = menuRepository,
+                    paymentRepository = paymentRepository,
+                    printReceipt = printReceipt,
+                    openCashDrawer = openCashDrawer,
+                    verifyDrawerPin = verifyDrawerPin,
+                    customerDisplayService = customerDisplayService,
+                    activeTableId = activeTableId,
+                    activeTableLabel = activeTableLabel,
+                )
+            }
         }
     }
 }
@@ -220,7 +516,17 @@ fun MenuScreen(
     onRemoveTicketLine: (String) -> Unit,
     onApplyLinePercentDiscount: (String, Int) -> Unit,
     onApplyLineAmountDiscount: (String, Int) -> Unit,
+    onConfirmPayment: (MenuPaymentDialogResult) -> Unit,
+    onDismissPaymentMessage: () -> Unit,
+    onOpenCashDrawer: (String) -> Unit,
+    onScreenShown: () -> Unit = {},
+    onScreenDisposed: () -> Unit = {},
 ) {
+    DisposableEffect(Unit) {
+        onScreenShown()
+        onDispose(onScreenDisposed)
+    }
+
     val categoryGroups = remember(state.items) { buildCategoryGroups(state.items) }
     var selectedCategory by rememberSaveable { mutableStateOf<String?>(null) }
     val activePageByCategory = remember { mutableStateMapOf<String, Int>() }
@@ -314,13 +620,21 @@ fun MenuScreen(
         }
 
         TicketPane(
+            activeTableId = state.activeTableId,
+            activeTableLabel = state.activeTableLabel,
             ticketLines = state.ticketLines,
             totalTicketItems = totalTicketItems,
             ticketSubtotalCents = ticketSubtotalCents,
+            paymentInProgress = state.paymentInProgress,
+            paymentMessage = state.paymentMessage,
+            manualDrawerInProgress = state.manualDrawerInProgress,
             onDecrementTicketLine = onDecrementTicketLine,
             onRemoveTicketLine = onRemoveTicketLine,
             onApplyLinePercentDiscount = onApplyLinePercentDiscount,
             onApplyLineAmountDiscount = onApplyLineAmountDiscount,
+            onConfirmPayment = onConfirmPayment,
+            onDismissPaymentMessage = onDismissPaymentMessage,
+            onOpenCashDrawer = onOpenCashDrawer,
         )
     }
 }
@@ -572,15 +886,24 @@ private fun PageRail(
 
 @Composable
 private fun RowScope.TicketPane(
+    activeTableId: String?,
+    activeTableLabel: String?,
     ticketLines: List<MenuTicketLine>,
     totalTicketItems: Int,
     ticketSubtotalCents: Int,
+    paymentInProgress: Boolean,
+    paymentMessage: String?,
+    manualDrawerInProgress: Boolean,
     onDecrementTicketLine: (String) -> Unit,
     onRemoveTicketLine: (String) -> Unit,
     onApplyLinePercentDiscount: (String, Int) -> Unit,
     onApplyLineAmountDiscount: (String, Int) -> Unit,
+    onConfirmPayment: (MenuPaymentDialogResult) -> Unit,
+    onDismissPaymentMessage: () -> Unit,
+    onOpenCashDrawer: (String) -> Unit,
 ) {
     var isPaymentDialogOpen by rememberSaveable { mutableStateOf(false) }
+    var isDrawerPinDialogOpen by rememberSaveable { mutableStateOf(false) }
     var selectedActionLineId by rememberSaveable { mutableStateOf<String?>(null) }
     var discountEditor by remember { mutableStateOf<LineDiscountEditorState?>(null) }
     val selectedActionLine = ticketLines.firstOrNull { it.itemId == selectedActionLineId }
@@ -626,11 +949,21 @@ private fun RowScope.TicketPane(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
-                    text = "Receipt",
+                    text = buildReceiptTitle(activeTableId = activeTableId, activeTableLabel = activeTableLabel),
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Bold,
                     color = MenuTextPrimary,
                 )
+                if (!activeTableLabel.isNullOrBlank() || !activeTableId.isNullOrBlank()) {
+                    Text(
+                        text = buildReceiptSubtitle(
+                            activeTableId = activeTableId,
+                            activeTableLabel = activeTableLabel,
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MenuTextSecondary,
+                    )
+                }
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -652,7 +985,7 @@ private fun RowScope.TicketPane(
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
-                            text = "Tap a product tile to start this ticket.",
+                            text = buildEmptyReceiptMessage(activeTableId = activeTableId, activeTableLabel = activeTableLabel),
                             style = MaterialTheme.typography.titleLarge,
                             color = MenuTextSecondary,
                             textAlign = TextAlign.Center,
@@ -715,26 +1048,70 @@ private fun RowScope.TicketPane(
                 MenuKeyValueRow("Items", totalTicketItems.toString())
                 MenuKeyValueRow("Lines", ticketLines.size.toString())
                 MenuKeyValueRow("Subtotal", CentsFormatter.format(ticketSubtotalCents), emphasized = true)
-                Button(
-                    onClick = { isPaymentDialogOpen = true },
+                paymentMessage?.let { message ->
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (paymentInProgress) MenuTextSecondary else MenuAccentTextColor,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(onClick = onDismissPaymentMessage),
+                    )
+                }
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 4.dp),
-                    enabled = ticketLines.isNotEmpty(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Text(
-                        text = "Maksa",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                    )
+                    Button(
+                        onClick = { isDrawerPinDialogOpen = true },
+                        modifier = Modifier.weight(0.95f),
+                        enabled = !paymentInProgress && !manualDrawerInProgress,
+                    ) {
+                        Text(
+                            text = if (manualDrawerInProgress) "Avaan..." else "Avaa laatikko",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                    Button(
+                        onClick = { isPaymentDialogOpen = true },
+                        modifier = Modifier.weight(1.35f),
+                        enabled = ticketLines.isNotEmpty() && !paymentInProgress,
+                    ) {
+                        Text(
+                            text = "Maksa",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
                 }
             }
 
             if (isPaymentDialogOpen) {
-                PaymentOptionsDialog(
+                MenuPaymentDialog(
+                    subtotalCents = ticketSubtotalCents,
+                    paymentContextLabel = when {
+                        !activeTableLabel.isNullOrBlank() -> activeTableLabel
+                        !activeTableId.isNullOrBlank() -> activeTableId
+                        else -> "Bar"
+                    },
                     onDismiss = { isPaymentDialogOpen = false },
-                    onSelectMethod = {
+                    onConfirm = { result ->
                         isPaymentDialogOpen = false
+                        onConfirmPayment(result)
+                    },
+                )
+            }
+
+            if (isDrawerPinDialogOpen) {
+                CashDrawerPinDialog(
+                    inProgress = manualDrawerInProgress,
+                    onDismiss = { isDrawerPinDialogOpen = false },
+                    onConfirm = { pin ->
+                        isDrawerPinDialogOpen = false
+                        onOpenCashDrawer(pin)
                     },
                 )
             }
@@ -919,6 +1296,139 @@ private fun ReceiptScrollHint(
         }
     }
 }
+
+@Composable
+private fun CashDrawerPinDialog(
+    inProgress: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var pin by rememberSaveable { mutableStateOf("") }
+    val canSubmit = pin.length >= 4 && !inProgress
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = MenuPanelColor,
+            border = BorderStroke(1.dp, MenuBorderColor),
+            contentColor = MenuTextPrimary,
+        ) {
+            Column(
+                modifier = Modifier
+                    .width(360.dp)
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Text(
+                    text = "Avaa kassalaatikko",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MenuTextPrimary,
+                )
+                Text(
+                    text = "Syötä sisäänkirjautuneen käyttäjän PIN-koodi ennen laatikon avausta.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MenuTextSecondary,
+                )
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    color = MenuShellColor,
+                    border = BorderStroke(1.dp, MenuBorderColor),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            text = "PIN",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MenuTextMuted,
+                        )
+                        Text(
+                            text = if (pin.isBlank()) "• • • •" else List(pin.length) { "•" }.joinToString(" "),
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MenuAccentTextColor,
+                        )
+                    }
+                }
+
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    listOf(
+                        listOf("1", "2", "3"),
+                        listOf("4", "5", "6"),
+                        listOf("7", "8", "9"),
+                        listOf("Tyhjennä", "0", "⌫"),
+                    ).forEach { row ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            row.forEach { key ->
+                                Button(
+                                    onClick = {
+                                        pin = when (key) {
+                                            "Tyhjennä" -> ""
+                                            "⌫" -> pin.dropLast(1)
+                                            else -> if (pin.length < 8) pin + key else pin
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    enabled = !inProgress,
+                                    shape = RoundedCornerShape(16.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MenuPanelAltColor,
+                                        contentColor = MenuTextPrimary,
+                                        disabledContainerColor = MenuPanelAltColor.copy(alpha = 0.45f),
+                                        disabledContentColor = MenuTextPrimary.copy(alpha = 0.45f),
+                                    ),
+                                ) {
+                                    Text(
+                                        text = key,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Button(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f),
+                        enabled = !inProgress,
+                        shape = RoundedCornerShape(16.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MenuShellColor,
+                            contentColor = MenuTextSecondary,
+                        ),
+                    ) {
+                        Text("Peru")
+                    }
+                    Button(
+                        onClick = { onConfirm(pin) },
+                        modifier = Modifier.weight(1f),
+                        enabled = canSubmit,
+                        shape = RoundedCornerShape(16.dp),
+                    ) {
+                        Text(if (inProgress) "Avaan..." else "Avaa laatikko")
+                    }
+                }
+            }
+        }
+    }
+}
+
 
 @Composable
 private fun LineActionsDialog(
@@ -1124,75 +1634,6 @@ private fun DiscountInfoRow(
 }
 
 @Composable
-private fun PaymentOptionsDialog(
-    onDismiss: () -> Unit,
-    onSelectMethod: (String) -> Unit,
-) {
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = RoundedCornerShape(24.dp),
-            color = MenuPanelColor,
-            border = BorderStroke(1.dp, MenuBorderColor),
-            contentColor = MenuTextPrimary,
-        ) {
-            Column(
-                modifier = Modifier
-                    .width(360.dp)
-                    .padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Text(
-                    text = "Payment options",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MenuTextPrimary,
-                )
-                Text(
-                    text = "UI-only v1 entry for completing this receipt.",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MenuTextSecondary,
-                )
-                PaymentOptionButton(
-                    label = "Card",
-                    onClick = { onSelectMethod("card") },
-                )
-                PaymentOptionButton(
-                    label = "Cash",
-                    onClick = { onSelectMethod("cash") },
-                )
-                PaymentOptionButton(
-                    label = "Hybrid",
-                    onClick = { onSelectMethod("hybrid") },
-                )
-                TextButton(
-                    onClick = onDismiss,
-                    modifier = Modifier.align(Alignment.End),
-                ) {
-                    Text("Close")
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun PaymentOptionButton(
-    label: String,
-    onClick: () -> Unit,
-) {
-    Button(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-        )
-    }
-}
-
-@Composable
 private fun DiscountKeypad(
     mode: LineDiscountMode,
     value: String,
@@ -1336,6 +1777,44 @@ private fun MenuKeyValueRow(
             fontWeight = FontWeight.SemiBold,
             color = if (emphasized) MenuAccentTextColor else MenuTextPrimary,
         )
+    }
+}
+
+
+private fun buildReceiptTitle(
+    activeTableId: String?,
+    activeTableLabel: String?,
+): String {
+    val resolvedLabel = activeTableLabel?.takeIf { it.isNotBlank() } ?: activeTableId
+    return if (resolvedLabel.isNullOrBlank()) {
+        "Receipt"
+    } else {
+        "Receipt • $resolvedLabel"
+    }
+}
+
+private fun buildReceiptSubtitle(
+    activeTableId: String?,
+    activeTableLabel: String?,
+): String {
+    return when {
+        !activeTableLabel.isNullOrBlank() && !activeTableId.isNullOrBlank() && activeTableLabel != activeTableId ->
+            "Active table: $activeTableLabel ($activeTableId)"
+        !activeTableLabel.isNullOrBlank() -> "Active table: $activeTableLabel"
+        !activeTableId.isNullOrBlank() -> "Active table: $activeTableId"
+        else -> ""
+    }
+}
+
+private fun buildEmptyReceiptMessage(
+    activeTableId: String?,
+    activeTableLabel: String?,
+): String {
+    val resolvedLabel = activeTableLabel?.takeIf { it.isNotBlank() } ?: activeTableId
+    return if (resolvedLabel.isNullOrBlank()) {
+        "Tap a product tile to start this ticket."
+    } else {
+        "Tap a product tile to start the receipt for $resolvedLabel."
     }
 }
 

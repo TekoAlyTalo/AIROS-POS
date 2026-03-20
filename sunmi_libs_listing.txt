@@ -1,0 +1,6 @@
+﻿
+FullName                                                                    
+--------                                                                    
+C:\AIROS code clean\AIROS POS\apps\android-pos\libs\google-webrtc-vetted.aar
+
+

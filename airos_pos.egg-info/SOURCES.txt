@@ -7,6 +7,8 @@ airos_pos.egg-info/requires.txt
 airos_pos.egg-info/top_level.txt
 edge/__init__.py
 edge/app.py
+edge/catalog.py
+edge/catalog_service.py
 edge/config.py
 edge/db.py
 edge/models.py
@@ -27,5 +29,7 @@ shared/time.py
 shared/totals.py
 shared/schemas/airos.pos.sync.event.v1.schema.json
 tests/test_edge_split_merge.py
+tests/test_edge_tables_overview.py
 tests/test_hub_ingestion.py
+tests/test_product_catalog.py
 tests/test_totals.py

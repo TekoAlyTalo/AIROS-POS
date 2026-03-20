@@ -1,28 +1,33 @@
 package com.airos.pos.app
 
+import android.net.Uri
 import android.util.Log
 import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationRail
-import androidx.compose.material3.NavigationRailItem
-import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
@@ -45,6 +50,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.airos.pos.core.common.PosResult
+import com.airos.pos.core.model.ManagerOverrideReason
+import com.airos.pos.core.model.ScanEvent
 import com.airos.pos.feature.auth.AuthScreen
 import com.airos.pos.feature.auth.AuthViewModel
 import com.airos.pos.feature.kitchen.KitchenScreen
@@ -63,9 +71,8 @@ import com.airos.pos.feature.shift.ShiftScreen
 import com.airos.pos.feature.shift.ShiftViewModel
 import com.airos.pos.feature.tablemap.TableMapScreen
 import com.airos.pos.feature.tablemap.TableMapViewModel
-import com.airos.pos.feature.ticket.TicketScreen
-import com.airos.pos.feature.ticket.TicketViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -87,14 +94,25 @@ private object Routes {
     const val Shift = "shift"
     const val TableMap = "tablemap"
     const val Menu = "menu"
+    const val MenuPattern = "menu?tableId={tableId}&tableLabel={tableLabel}"
     const val Kitchen = "kitchen"
     const val Scanner = "scanner"
     const val Settings = "settings"
-    const val TicketPattern = "ticket/{tableId}"
     const val PaymentPattern = "payment/{ticketId}"
     const val RefundPattern = "refund/{ticketId}"
 
-    fun ticket(tableId: String): String = "ticket/$tableId"
+    fun menu(tableId: String? = null, tableLabel: String? = null): String {
+        val queryParts = buildList {
+            tableId?.let { add("tableId=${Uri.encode(it)}") }
+            tableLabel?.let { add("tableLabel=${Uri.encode(it)}") }
+        }
+        return if (queryParts.isEmpty()) {
+            Menu
+        } else {
+            "$Menu?${queryParts.joinToString("&")}"
+        }
+    }
+
     fun payment(ticketId: String): String = "payment/$ticketId"
     fun refund(ticketId: String): String = "refund/$ticketId"
 }
@@ -105,17 +123,86 @@ private data class RailDestination(
     val iconText: String,
 )
 
-private val primaryRailDestinations = listOf(
+private val topRailDestinations = listOf(
     RailDestination(Routes.TableMap, "Tables", "T"),
     RailDestination(Routes.Menu, "Menu", "M"),
-    RailDestination(Routes.Shift, "Shift", "S"),
 )
 
-private val secondaryRailDestinations = listOf(
-    RailDestination(Routes.Kitchen, "Kitchen", "K"),
-    RailDestination(Routes.Scanner, "Scanner", "B"),
+private val moreRailDestinations = listOf(
+    RailDestination(Routes.Shift, "Shift", "S"),
     RailDestination(Routes.Settings, "Settings", "⚙"),
 )
+
+private val signInDestination = RailDestination(Routes.Auth, "Sign in", "↪")
+
+@Composable
+private fun TemporaryFloorPlanStyleCard(
+    useRichStyle: Boolean,
+    onStyleChange: (Boolean) -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        color = AppShellPanelColor,
+        border = androidx.compose.foundation.BorderStroke(1.dp, AppShellBorderColor),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                text = "Floor plan style",
+                style = MaterialTheme.typography.titleMedium,
+                color = AppShellTextPrimary,
+            )
+            Text(
+                text = "Temporary home for Simple / Rich until personal staff settings are added.",
+                style = MaterialTheme.typography.bodySmall,
+                color = AppShellTextMuted,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                TemporaryStyleChip(
+                    label = "Simple",
+                    selected = !useRichStyle,
+                    onClick = { onStyleChange(false) },
+                )
+                TemporaryStyleChip(
+                    label = "Rich",
+                    selected = useRichStyle,
+                    onClick = { onStyleChange(true) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TemporaryStyleChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.clickable(onClick = onClick),
+        shape = RoundedCornerShape(18.dp),
+        color = if (selected) AppShellButtonActiveColor else AppShellButtonMutedColor,
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (selected) AppShellAccentText.copy(alpha = 0.55f) else AppShellBorderColor,
+        ),
+    ) {
+        Box(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.titleSmall,
+                color = if (selected) AppShellTextPrimary else AppShellTextSecondary,
+            )
+        }
+    }
+}
 
 @Composable
 fun AirosPosApp(
@@ -157,6 +244,7 @@ private fun SignedInApp(
 ) {
     val navController = rememberNavController()
     val scope = rememberCoroutineScope()
+    var useRichFloorPlanStyle by rememberSaveable { mutableStateOf(false) }
 
     Row(
         modifier = Modifier
@@ -177,11 +265,11 @@ private fun SignedInApp(
         ) { paddingValues ->
             NavHost(
                 navController = navController,
-                startDestination = Routes.Shift,
+                startDestination = Routes.TableMap,
                 modifier = Modifier
                     .fillMaxSize()
                     .background(AppShellBackground)
-                    .padding(20.dp),
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
             ) {
                 composable(Routes.Shift) {
                     val viewModel: ShiftViewModel = viewModel(factory = ShiftViewModel.factory(appContainer.shiftRepository))
@@ -189,16 +277,39 @@ private fun SignedInApp(
                     val context = LocalContext.current
                     var customerDisplayProbeStatus by rememberSaveable { mutableStateOf<String?>(null) }
                     var isCustomerDisplayProbeFailure by rememberSaveable { mutableStateOf(false) }
-                    ShiftScreen(
-                        state = state,
-                        currentStaffId = currentStaffId,
-                        onOpeningFloatChanged = viewModel::updateOpeningFloat,
-                        onCountedCashChanged = viewModel::updateCountedCash,
-                        onOpenShift = viewModel::openShift,
-                        onCloseShift = viewModel::closeShift,
-                        customerDisplayProbeStatus = customerDisplayProbeStatus,
-                        isCustomerDisplayProbeFailure = isCustomerDisplayProbeFailure,
-                        onRunCustomerDisplayProbe = {
+                    var receiptPrinterProbeStatus by rememberSaveable { mutableStateOf<String?>(null) }
+                    var isReceiptPrinterProbeFailure by rememberSaveable { mutableStateOf(false) }
+                    var scannerProbeStatus by rememberSaveable { mutableStateOf<String?>(null) }
+                    var isScannerProbeFailure by rememberSaveable { mutableStateOf(false) }
+                    var lastScannerValue by rememberSaveable { mutableStateOf<String?>(null) }
+                    val scannerAvailability by appContainer.scannerService.availability.collectAsState()
+                    val scannerDebug by appContainer.scannerService.probeDebug.collectAsState()
+                    LaunchedEffect(appContainer.scannerService) {
+                        appContainer.scannerService.scanEvents.collect { event: ScanEvent ->
+                            lastScannerValue = event.rawValue
+                            scannerProbeStatus = "Scanner read ${event.symbology}: ${event.rawValue}"
+                            isScannerProbeFailure = false
+                        }
+                    }
+                    Column(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        TemporaryFloorPlanStyleCard(
+                            useRichStyle = useRichFloorPlanStyle,
+                            onStyleChange = { useRichFloorPlanStyle = it },
+                        )
+                        Box(modifier = Modifier.weight(1f, fill = true)) {
+                            ShiftScreen(
+                                state = state,
+                                currentStaffId = currentStaffId,
+                                onOpeningFloatChanged = viewModel::updateOpeningFloat,
+                                onCountedCashChanged = viewModel::updateCountedCash,
+                                onOpenShift = viewModel::openShift,
+                                onCloseShift = viewModel::closeShift,
+                                customerDisplayProbeStatus = customerDisplayProbeStatus,
+                                isCustomerDisplayProbeFailure = isCustomerDisplayProbeFailure,
+                                onRunCustomerDisplayProbe = {
                             Log.i(
                                 CustomerDisplayLogTag,
                                 "Manual customer-display probe trigger pressed from Shift screen. availabilityBefore=${appContainer.customerDisplayService.availability}",
@@ -244,7 +355,100 @@ private fun SignedInApp(
                                 ).show()
                             }
                         },
+                                receiptPrinterProbeStatus = receiptPrinterProbeStatus,
+                                isReceiptPrinterProbeFailure = isReceiptPrinterProbeFailure,
+                                onRunReceiptPrinterProbe = {
+                                    receiptPrinterProbeStatus = "Receipt printer probe started..."
+                                    isReceiptPrinterProbeFailure = false
+                                    Toast.makeText(
+                                        context,
+                                        "Receipt printer probe started",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                    scope.launch {
+                                        val result = withContext(Dispatchers.IO) {
+                                            appContainer.printerService.printDiagnosticReceipt()
+                                        }
+                                        val statusMessage = when (result) {
+                                            is com.airos.pos.core.common.PosResult.Success<*> -> "Receipt printer probe succeeded."
+                                            is com.airos.pos.core.common.PosResult.Failure -> "Receipt printer probe failed: ${result.message}"
+                                        }
+                                        isReceiptPrinterProbeFailure = result is com.airos.pos.core.common.PosResult.Failure
+                                        receiptPrinterProbeStatus = statusMessage
+                                        Toast.makeText(
+                                            context,
+                                            if (result is com.airos.pos.core.common.PosResult.Success<*>) "Receipt printer probe succeeded" else "Receipt printer probe failed",
+                                            Toast.LENGTH_LONG,
+                                        ).show()
+                                    }
+                                },
+                                scannerProbeStatus = scannerProbeStatus ?: scannerDebug.lastStatus,
+                                isScannerProbeFailure = isScannerProbeFailure || scannerDebug.lastError != null,
+                                scannerAvailabilityLabel = scannerAvailability.name,
+                                scannerPackageLabel = when {
+                                    scannerDebug.scannerPackageFound && scannerDebug.qrScannerPackageFound -> "scanner + qr scanner found"
+                                    scannerDebug.scannerPackageFound -> "scanner package found"
+                                    scannerDebug.qrScannerPackageFound -> "qr scanner package found"
+                                    else -> "not found yet"
+                                },
+                                scannerServiceBindLabel = when {
+                                    scannerDebug.scannerServiceBound -> "connected (${scannerDebug.scannerServiceDescriptor ?: "no descriptor"})"
+                                    scannerDebug.scannerServiceBindAttempted -> "attempted, not connected"
+                                    else -> "not tried yet"
+                                },
+                                scanManagerBindLabel = when {
+                                    scannerDebug.scanManagerBound -> "connected (${scannerDebug.scanManagerDescriptor ?: "no descriptor"})"
+                                    scannerDebug.scanManagerBindAttempted -> "attempted, not connected"
+                                    else -> "not tried yet"
+                                },
+                                broadcastStatusLabel = when {
+                                    scannerDebug.broadcastSeen -> "received scan broadcast"
+                                    scannerDebug.broadcastReceiverRegistered -> "receiver ready, waiting"
+                                    else -> "not listening yet"
+                                },
+                                scannerLastError = scannerDebug.lastError,
+                                lastScannerValue = lastScannerValue,
+                                onStartScannerProbe = {
+                                    scannerProbeStatus = "Scanner probe started. Watch the lines on the right to see which scanner door opened."
+                                    isScannerProbeFailure = false
+                                    Toast.makeText(
+                                        context,
+                                        "Scanner probe started",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                    scope.launch {
+                                        runCatching {
+                                            withContext(Dispatchers.IO) {
+                                                appContainer.scannerService.start()
+                                            }
+                                        }.onFailure { error ->
+                                            isScannerProbeFailure = true
+                                            scannerProbeStatus = "Scanner probe failed to start: ${error.message ?: "Unknown error"}"
+                                        }
+                                    }
+                                },
+                                onStopScannerProbe = {
+                                    scannerProbeStatus = "Scanner probe stopped."
+                                    isScannerProbeFailure = false
+                                    Toast.makeText(
+                                        context,
+                                        "Scanner probe stopped",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                    scope.launch {
+                                        runCatching {
+                                            withContext(Dispatchers.IO) {
+                                                appContainer.scannerService.stop()
+                                            }
+                                        }.onFailure { error ->
+                                            isScannerProbeFailure = true
+                                            scannerProbeStatus = "Scanner probe failed to stop: ${error.message ?: "Unknown error"}"
+                                        }
+                                    }
+                                },
                     )
+                        }
+                    }
                 }
 
                 composable(Routes.TableMap) {
@@ -256,21 +460,81 @@ private fun SignedInApp(
                         ),
                     )
                     val state by viewModel.uiState.collectAsState()
+                    val selectedTableId = state.selectedTableId
+                    val selectedTableLabel = state.floorMap?.tables?.firstOrNull { it.id == selectedTableId }?.label
                     TableMapScreen(
                         state = state,
                         currentStaffId = currentStaffId,
+                        preferRichFloorPlanStyle = useRichFloorPlanStyle,
                         cameraPreviewService = appContainer.cameraPreviewService,
                         onSelectTable = viewModel::selectTable,
-                        onOpenSelectedTable = viewModel::openSelectedTable,
-                        onOpenTicket = { tableId -> navController.navigate(Routes.ticket(tableId)) },
+                        onOpenSelectedTable = { staffId ->
+                            viewModel.openSelectedTable(staffId)
+                            navController.navigate(
+                                Routes.menu(
+                                    tableId = selectedTableId,
+                                    tableLabel = selectedTableLabel,
+                                ),
+                            )
+                        },
+                        onJoinTables = { },
                         onOpenLivePreview = viewModel::openLivePreview,
                         onRetryLivePreview = viewModel::retryLivePreview,
                         onCloseLivePreview = viewModel::closeLivePreview,
                     )
                 }
 
-                composable(Routes.Menu) {
-                    val viewModel: MenuViewModel = viewModel(factory = MenuViewModel.factory(appContainer.menuRepository))
+                composable(
+                    route = Routes.MenuPattern,
+                    arguments = listOf(
+                        navArgument("tableId") {
+                            type = NavType.StringType
+                            nullable = true
+                        },
+                        navArgument("tableLabel") {
+                            type = NavType.StringType
+                            nullable = true
+                        },
+                    ),
+                ) { entry ->
+                    val tableId = entry.arguments?.getString("tableId")
+                    val tableLabel = entry.arguments?.getString("tableLabel")
+                    val viewModel: MenuViewModel = viewModel(
+                        key = "menu-${tableId ?: "general"}",
+                        factory = MenuViewModel.factory(
+                            menuRepository = appContainer.menuRepository,
+                            paymentRepository = appContainer.paymentRepository,
+                            printReceipt = appContainer.printerService::printReceipt,
+                            openCashDrawer = appContainer.cashDrawerService::openDrawer,
+                            verifyDrawerPin = { pin ->
+                                val session = appContainer.authRepository.activeSession.first()
+                                    ?: return@factory PosResult.Failure("No signed-in staff session for cash drawer access.")
+                                when {
+                                    session.isManager -> {
+                                        when (
+                                            val result = appContainer.authRepository.verifyManagerOverride(
+                                                managerStaffId = session.staffId,
+                                                pin = pin,
+                                                reason = ManagerOverrideReason.OPEN_CASH_DRAWER,
+                                            )
+                                        ) {
+                                            is PosResult.Success -> PosResult.Success(Unit)
+                                            is PosResult.Failure -> PosResult.Failure(result.message)
+                                        }
+                                    }
+
+                                    else -> {
+                                        when (val result = appContainer.authRepository.signInWithPin(session.staffId, pin)) {
+                                            is PosResult.Success -> PosResult.Success(Unit)
+                                            is PosResult.Failure -> PosResult.Failure(result.message)
+                                        }
+                                    }
+                                }
+                            },
+                            activeTableId = tableId,
+                            activeTableLabel = tableLabel,
+                        ),
+                    )
                     val state by viewModel.uiState.collectAsState()
                     MenuScreen(
                         state = state,
@@ -279,6 +543,9 @@ private fun SignedInApp(
                         onRemoveTicketLine = viewModel::removeTicketLine,
                         onApplyLinePercentDiscount = viewModel::applyLinePercentDiscount,
                         onApplyLineAmountDiscount = viewModel::applyLineAmountDiscount,
+                        onConfirmPayment = viewModel::submitPayment,
+                        onDismissPaymentMessage = viewModel::clearPaymentMessage,
+                        onOpenCashDrawer = viewModel::openCashDrawerManually,
                     )
                 }
 
@@ -321,25 +588,6 @@ private fun SignedInApp(
                 }
 
                 composable(
-                    route = Routes.TicketPattern,
-                    arguments = listOf(navArgument("tableId") { type = NavType.StringType }),
-                ) { entry ->
-                    val tableId = entry.arguments?.getString("tableId") ?: return@composable
-                    val viewModel: TicketViewModel = viewModel(
-                        key = "ticket-$tableId",
-                        factory = TicketViewModel.factory(tableId, appContainer.ticketRepository, appContainer.menuRepository),
-                    )
-                    val state by viewModel.uiState.collectAsState()
-                    TicketScreen(
-                        state = state,
-                        onAddItem = viewModel::addItem,
-                        onSendToKitchen = viewModel::sendToKitchen,
-                        onGoToPayment = { ticketId -> navController.navigate(Routes.payment(ticketId)) },
-                        onGoToScanner = { navController.navigate(Routes.Scanner) },
-                    )
-                }
-
-                composable(
                     route = Routes.PaymentPattern,
                     arguments = listOf(navArgument("ticketId") { type = NavType.StringType }),
                 ) { entry ->
@@ -358,6 +606,8 @@ private fun SignedInApp(
                         state = state,
                         onCollectCash = { viewModel.collect(com.airos.pos.core.model.PaymentMethod.CASH) },
                         onCollectCard = { viewModel.collect(com.airos.pos.core.model.PaymentMethod.CARD) },
+                        onCollectVoucher = { viewModel.collect(com.airos.pos.core.model.PaymentMethod.VOUCHER) },
+                        onSplitPayment = viewModel::showSplitPaymentPlanned,
                         onPrintReceipt = viewModel::printReceipt,
                         onOpenDrawer = viewModel::openCashDrawer,
                         onGoToRefund = { navController.navigate(Routes.refund(ticketId)) },
@@ -386,6 +636,18 @@ private fun SignedInApp(
     }
 }
 
+
+private fun isRailDestinationSelected(
+    currentRoute: String?,
+    destinationRoute: String,
+): Boolean {
+    return when (destinationRoute) {
+        Routes.Menu -> currentRoute == Routes.Menu || currentRoute == Routes.MenuPattern
+        else -> currentRoute == destinationRoute
+    }
+}
+
+
 @Composable
 private fun AppRail(
     navController: NavHostController,
@@ -393,148 +655,126 @@ private fun AppRail(
 ) {
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
-    var showMoreDestinations by rememberSaveable { mutableStateOf(false) }
-    val isSecondaryRouteOpen = secondaryRailDestinations.any { it.route == currentRoute }
-    val showSecondaryDestinations = showMoreDestinations || isSecondaryRouteOpen
+    var showMoreMenu by rememberSaveable { mutableStateOf(false) }
 
     Surface(
         modifier = Modifier
             .fillMaxHeight()
-            .padding(start = 12.dp, top = 12.dp, bottom = 12.dp),
-        shape = RoundedCornerShape(30.dp),
+            .width(112.dp)
+            .padding(start = 8.dp, top = 8.dp, bottom = 8.dp),
+        shape = RoundedCornerShape(28.dp),
         color = AppShellRailColor,
         border = androidx.compose.foundation.BorderStroke(1.dp, AppShellBorderColor),
     ) {
-        NavigationRail(
-            containerColor = Color.Transparent,
-            modifier = Modifier.padding(vertical = 8.dp),
+        Column(
+            modifier = Modifier
+                .fillMaxHeight()
+                .padding(horizontal = 8.dp, vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Image(
                 painter = painterResource(id = R.drawable.airos_logo),
                 contentDescription = "AIROS",
                 modifier = Modifier
-                    .padding(horizontal = 10.dp, vertical = 12.dp)
-                    .clip(RoundedCornerShape(26.dp))
-                    .size(128.dp),
+                    .padding(top = 2.dp, bottom = 10.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .size(74.dp),
                 contentScale = ContentScale.Fit,
             )
 
-            primaryRailDestinations.forEach { destination ->
-                RailNavigationButton(
-                    destination = destination,
-                    selected = currentRoute == destination.route,
-                    prominent = true,
+            topRailDestinations.forEach { destination ->
+                RailButton(
+                    label = destination.label,
+                    iconText = destination.iconText,
+                    selected = isRailDestinationSelected(currentRoute, destination.route),
                     onClick = { navController.navigate(destination.route) },
                 )
             }
 
-            RailControlButton(
-                label = if (showSecondaryDestinations) "Less" else "More",
-                iconText = if (showSecondaryDestinations) "−" else "…",
-                onClick = { showMoreDestinations = !showMoreDestinations },
+            Spacer(modifier = Modifier.weight(1f))
+
+            RailButton(
+                label = signInDestination.label,
+                iconText = signInDestination.iconText,
+                selected = isRailDestinationSelected(currentRoute, signInDestination.route),
+                onClick = { navController.navigate(signInDestination.route) },
             )
 
-            if (showSecondaryDestinations) {
-                secondaryRailDestinations.forEach { destination ->
-                    RailNavigationButton(
-                        destination = destination,
-                        selected = currentRoute == destination.route,
-                        prominent = false,
-                        onClick = { navController.navigate(destination.route) },
-                    )
-                }
-            }
-            Button(
+            RailButton(
+                label = "Sign out",
+                iconText = "⏻",
+                selected = false,
                 onClick = onSignOut,
-                modifier = Modifier.padding(12.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF153847),
-                    contentColor = AppShellTextPrimary,
-                ),
-            ) {
-                Text("Sign out")
+            )
+
+            Box {
+                RailButton(
+                    label = "More",
+                    iconText = "…",
+                    selected = showMoreMenu,
+                    onClick = { showMoreMenu = true },
+                )
+                DropdownMenu(
+                    expanded = showMoreMenu,
+                    onDismissRequest = { showMoreMenu = false },
+                    modifier = Modifier.background(AppShellPanelColor),
+                ) {
+                    moreRailDestinations.forEach { destination ->
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    text = destination.label,
+                                    color = AppShellTextPrimary,
+                                )
+                            },
+                            onClick = {
+                                showMoreMenu = false
+                                navController.navigate(destination.route)
+                            },
+                        )
+                    }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun RailNavigationButton(
-    destination: RailDestination,
-    selected: Boolean,
-    prominent: Boolean,
-    onClick: () -> Unit,
-) {
-    Surface(
-        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-        shape = RoundedCornerShape(if (prominent) 22.dp else 20.dp),
-        color = when {
-            selected -> AppShellButtonActiveColor
-            prominent -> AppShellButtonColor
-            else -> AppShellButtonMutedColor
-        },
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            when {
-                selected -> AppShellAccentText.copy(alpha = 0.5f)
-                prominent -> AppShellBorderColor
-                else -> Color(0x12FFFFFF)
-            },
-        ),
-    ) {
-        NavigationRailItem(
-            selected = selected,
-            onClick = onClick,
-            modifier = Modifier.size(if (prominent) 100.dp else 88.dp),
-            icon = {
-                Text(
-                    text = destination.iconText,
-                    style = if (prominent) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium,
-                )
-            },
-            label = {
-                Text(
-                    text = destination.label,
-                    style = if (prominent) MaterialTheme.typography.titleMedium else MaterialTheme.typography.titleSmall,
-                )
-            },
-            alwaysShowLabel = true,
-            colors = NavigationRailItemDefaults.colors(
-                indicatorColor = Color.Transparent,
-                selectedIconColor = AppShellAccentText,
-                selectedTextColor = AppShellTextPrimary,
-                unselectedIconColor = if (prominent) AppShellTextSecondary else AppShellTextMuted,
-                unselectedTextColor = if (prominent) AppShellTextSecondary else AppShellTextMuted,
-            ),
-        )
-    }
-}
-
-@Composable
-private fun RailControlButton(
+private fun RailButton(
     label: String,
     iconText: String,
+    selected: Boolean,
     onClick: () -> Unit,
 ) {
     Surface(
         modifier = Modifier
-            .padding(horizontal = 8.dp, vertical = 6.dp)
+            .padding(vertical = 5.dp)
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(20.dp),
-        color = AppShellButtonMutedColor,
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x12FFFFFF)),
+        color = if (selected) AppShellButtonActiveColor else AppShellButtonMutedColor,
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (selected) AppShellAccentText.copy(alpha = 0.45f) else AppShellBorderColor,
+        ),
     ) {
-        Box(
+        Column(
             modifier = Modifier
-                .size(84.dp)
-                .padding(6.dp),
-            contentAlignment = Alignment.Center,
+                .width(82.dp)
+                .padding(vertical = 12.dp, horizontal = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
         ) {
             Text(
-                text = "$iconText\n$label",
-                style = MaterialTheme.typography.titleSmall,
-                color = AppShellTextMuted,
+                text = iconText,
+                style = MaterialTheme.typography.titleLarge,
+                color = if (selected) AppShellAccentText else AppShellTextSecondary,
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
+                color = if (selected) AppShellTextPrimary else AppShellTextSecondary,
             )
         }
     }
 }
+

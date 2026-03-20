@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from io import StringIO
@@ -111,6 +112,7 @@ class ProductImportFailure:
 
 @dataclass
 class ProductImportSummary:
+    total_rows: int = 0
     created: int = 0
     updated: int = 0
     skipped: int = 0
@@ -123,10 +125,12 @@ class ProductImportSummary:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "total_rows": self.total_rows,
             "created": self.created,
             "updated": self.updated,
             "skipped": self.skipped,
             "failed": self.failed,
+            "failure_reasons": dict(Counter(failure.reason for failure in self.failed_rows)),
             "failed_rows": [failure.to_dict() for failure in self.failed_rows],
         }
 

@@ -2,9 +2,10 @@ package com.airos.pos.feature.tablemap
 
 import android.content.Context
 import android.util.Log
-
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
@@ -24,6 +25,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -31,8 +33,13 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -72,6 +79,7 @@ import java.net.URI
 private const val SIGNALING_PORT = 8000
 private const val PREVIEW_TAG = "TableLivePreview"
 private const val PREVIEW_SURFACE_ASPECT_RATIO = 4f / 3f
+private const val AREA_FILTER_ALL = "All"
 
 data class TableLivePreviewTarget(
     val tableId: String,
@@ -248,17 +256,52 @@ class TableMapViewModel(
 fun TableMapScreen(
     state: TableMapUiState,
     currentStaffId: String?,
+    preferRichFloorPlanStyle: Boolean = false,
     cameraPreviewService: CameraPreviewService,
     onSelectTable: (String) -> Unit,
     onOpenSelectedTable: (String) -> Unit,
-    onOpenTicket: (String) -> Unit,
+    onJoinTables: (String) -> Unit,
     onOpenLivePreview: () -> Unit,
     onRetryLivePreview: () -> Unit,
     onCloseLivePreview: () -> Unit,
 ) {
-    val selectedTable = state.floorMap?.tables?.firstOrNull { it.id == state.selectedTableId }
+    var viewModeName by rememberSaveable { mutableStateOf(TableMapViewMode.GRID.name) }
+    val viewMode = TableMapViewMode.valueOf(viewModeName)
+    val floorPlanStyle = if (preferRichFloorPlanStyle) FloorPlanVisualStyle.RICH else FloorPlanVisualStyle.SIMPLE
+    var floorPlanRotationDeg by rememberSaveable { mutableStateOf(DefaultFloorPlanViewpoint.defaultRotationDeg) }
+    val floorPlanViewpoint = remember(floorPlanRotationDeg) {
+        DefaultFloorPlanViewpoint.copy(defaultRotationDeg = floorPlanRotationDeg)
+    }
+    val allTables = state.floorMap?.tables.orEmpty()
+    val availableAreas = remember(allTables) { buildAreaFilterOptions(allTables) }
+    var selectedAreaName by rememberSaveable { mutableStateOf(AREA_FILTER_ALL) }
+    val activeAreaName = selectedAreaName.takeIf { it in availableAreas } ?: AREA_FILTER_ALL
+    val visibleTables = remember(allTables, activeAreaName) {
+        filterTablesForArea(
+            tables = allTables,
+            selectedAreaName = activeAreaName,
+        )
+    }
+    val selectedTable = visibleTables.firstOrNull { it.id == state.selectedTableId } ?: visibleTables.firstOrNull()
     val desiredPreviewTarget = selectedTable?.previewTarget()
     val selectedPreviewTarget = state.livePreviewTarget?.takeIf { it.tableId == selectedTable?.id }
+
+    var joinSourceTableId by rememberSaveable { mutableStateOf<String?>(null) }
+    var joinSelectedTableIds by rememberSaveable { mutableStateOf(setOf<String>()) }
+    val isJoinMode = joinSourceTableId != null
+    val joinableTableIds = remember(visibleTables, joinSourceTableId) {
+        val sourceId = joinSourceTableId
+        if (sourceId == null) {
+            emptySet()
+        } else {
+            visibleTables
+                .filter { table -> table.id != sourceId }
+                .map { it.id }
+                .toSet()
+        }
+    }
+    val joinSourceTable = visibleTables.firstOrNull { it.id == joinSourceTableId }
+
 
     LaunchedEffect(
         desiredPreviewTarget?.tableId,
@@ -288,6 +331,26 @@ fun TableMapScreen(
         )
     }
 
+    LaunchedEffect(joinSourceTableId, visibleTables) {
+        val sourceId = joinSourceTableId ?: return@LaunchedEffect
+        if (visibleTables.none { it.id == sourceId }) {
+            joinSourceTableId = null
+            joinSelectedTableIds = emptySet()
+        } else {
+            joinSelectedTableIds = joinSelectedTableIds.intersect(joinableTableIds)
+        }
+    }
+
+    LaunchedEffect(activeAreaName, allTables) {
+        if (activeAreaName == AREA_FILTER_ALL) {
+            return@LaunchedEffect
+        }
+        if (state.selectedTableId != null && visibleTables.any { it.id == state.selectedTableId }) {
+            return@LaunchedEffect
+        }
+        visibleTables.firstOrNull()?.id?.let(onSelectTable)
+    }
+
     Row(
         modifier = Modifier.fillMaxSize(),
         horizontalArrangement = Arrangement.spacedBy(20.dp),
@@ -295,9 +358,14 @@ fun TableMapScreen(
         Surface(
             modifier = Modifier.weight(1.5f),
             shape = RoundedCornerShape(28.dp),
+            color = TableMapVisualTokens.ShellColor,
+            border = androidx.compose.foundation.BorderStroke(1.dp, TableMapVisualTokens.BorderColor),
+            contentColor = TableMapVisualTokens.TextPrimary,
         ) {
             Column(
-                modifier = Modifier.padding(20.dp),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 state.message?.let {
@@ -307,17 +375,113 @@ fun TableMapScreen(
                     )
                 }
 
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(minSize = 170.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Top,
                 ) {
-                    items(state.floorMap?.tables.orEmpty()) { table ->
-                        TableGridCard(
-                            table = table,
-                            selected = table.id == state.selectedTableId,
-                            onClick = { onSelectTable(table.id) },
-                        )
+                    Text(
+                        text = state.floorMap?.name ?: "Table map",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = TableMapVisualTokens.TextPrimary,
+                    )
+                    TableMapViewModeToggle(
+                        viewMode = viewMode,
+                        onViewModeChange = { viewModeName = it.name },
+                    )
+                }
+
+                if (availableAreas.size > 1) {
+                    TableMapAreaSelector(
+                        areas = availableAreas,
+                        selectedArea = activeAreaName,
+                        onAreaSelected = { areaName ->
+                            selectedAreaName = areaName
+                            val areaTables = filterTablesForArea(
+                                tables = allTables,
+                                selectedAreaName = areaName,
+                            )
+                            when {
+                                areaTables.isEmpty() -> Unit
+                                state.selectedTableId != null && areaTables.any { it.id == state.selectedTableId } -> Unit
+                                else -> onSelectTable(areaTables.first().id)
+                            }
+                        },
+                    )
+                }
+
+                when (viewMode) {
+                    TableMapViewMode.GRID -> {
+                        LazyVerticalGrid(
+                            modifier = Modifier.weight(1f, fill = true),
+                            columns = GridCells.Adaptive(minSize = 170.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            items(visibleTables, key = { it.id }) { table ->
+                                val isJoinSource = table.id == joinSourceTableId
+                                val isJoinSelected = table.id in joinSelectedTableIds
+                                val isJoinSelectable = table.id in joinableTableIds
+                                TableGridCard(
+                                    table = table,
+                                    selected = table.id == selectedTable?.id,
+                                    joinMode = isJoinMode,
+                                    joinSource = isJoinSource,
+                                    joinSelected = isJoinSelected,
+                                    joinSelectable = isJoinSelectable,
+                                    onClick = {
+                                        onSelectTable(table.id)
+                                        if (isJoinMode && !isJoinSource && isJoinSelectable) {
+                                            joinSelectedTableIds = if (table.id in joinSelectedTableIds) {
+                                                joinSelectedTableIds - table.id
+                                            } else {
+                                                joinSelectedTableIds + table.id
+                                            }
+                                        }
+                                    },
+                                )
+                            }
+                        }
+                    }
+
+                    TableMapViewMode.FLOOR_PLAN -> {
+                        Box(
+                            modifier = Modifier
+                                .weight(1f, fill = true)
+                                .fillMaxWidth(),
+                        ) {
+                            FloorPlanTableMap(
+                                tables = visibleTables,
+                                selectedTableId = selectedTable?.id,
+                                onSelectTable = { tableId ->
+                                    onSelectTable(tableId)
+                                    if (isJoinMode && tableId != joinSourceTableId && tableId in joinableTableIds) {
+                                        joinSelectedTableIds = if (tableId in joinSelectedTableIds) {
+                                            joinSelectedTableIds - tableId
+                                        } else {
+                                            joinSelectedTableIds + tableId
+                                        }
+                                    }
+                                },
+                                style = floorPlanStyle,
+                                viewpoint = floorPlanViewpoint,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+
+                            TextButton(
+                                onClick = {
+                                    floorPlanRotationDeg = ((floorPlanRotationDeg + 90f) % 360f)
+                                },
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(16.dp),
+                            ) {
+                                Text("Rotate 90°")
+                            }
+                        }
                     }
                 }
             }
@@ -325,8 +489,10 @@ fun TableMapScreen(
 
         PosPane(
             title = selectedTable?.label ?: "Table details",
-            supportingText = "Open table, jump to ticket, and inspect the live camera without leaving this view.",
-            modifier = Modifier.weight(1f),
+            supportingText = "",
+            modifier = Modifier
+                .weight(0.67f)
+                .fillMaxHeight(),
         ) {
             if (selectedTable == null) {
                 Text("Select a table to continue.")
@@ -339,8 +505,25 @@ fun TableMapScreen(
                     isLivePreviewDialogVisible = state.isLivePreviewDialogVisible,
                     cameraPreviewService = cameraPreviewService,
                     canOpenLivePreview = !selectedTable.cameraId.isNullOrBlank() && !state.edgeBaseUrl.isNullOrBlank(),
+                    joinMode = isJoinMode,
+                    joinSourceTableLabel = joinSourceTable?.label,
+                    joinSelectedTableLabels = visibleTables.filter { it.id in joinSelectedTableIds }.map { it.label },
+                    canConfirmJoin = joinSelectedTableIds.isNotEmpty(),
                     onOpenSelectedTable = onOpenSelectedTable,
-                    onOpenTicket = onOpenTicket,
+                    onJoinTables = {
+                        joinSourceTableId = selectedTable.id
+                        joinSelectedTableIds = emptySet()
+                        onSelectTable(selectedTable.id)
+                    },
+                    onCancelJoin = {
+                        joinSourceTableId = null
+                        joinSelectedTableIds = emptySet()
+                    },
+                    onConfirmJoin = {
+                        joinSourceTableId?.let(onJoinTables)
+                        joinSourceTableId = null
+                        joinSelectedTableIds = emptySet()
+                    },
                     onOpenLivePreview = onOpenLivePreview,
                 )
             }
@@ -370,8 +553,14 @@ private fun TableDetailsContent(
     isLivePreviewDialogVisible: Boolean,
     cameraPreviewService: CameraPreviewService,
     canOpenLivePreview: Boolean,
+    joinMode: Boolean,
+    joinSourceTableLabel: String?,
+    joinSelectedTableLabels: List<String>,
+    canConfirmJoin: Boolean,
     onOpenSelectedTable: (String) -> Unit,
-    onOpenTicket: (String) -> Unit,
+    onJoinTables: (String) -> Unit,
+    onCancelJoin: () -> Unit,
+    onConfirmJoin: () -> Unit,
     onOpenLivePreview: () -> Unit,
 ) {
     Column(
@@ -389,15 +578,50 @@ private fun TableDetailsContent(
             KeyValueRow("Merged", mergedHint)
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(
-                onClick = { currentStaffId?.let(onOpenSelectedTable) },
-                enabled = currentStaffId != null,
+        if (joinMode) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
             ) {
-                Text("Open table")
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(
+                        text = "Join mode",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = joinModeSummary(joinSourceTableLabel, joinSelectedTableLabels),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Button(
+                            onClick = onConfirmJoin,
+                            enabled = canConfirmJoin,
+                        ) {
+                            Text("Confirm join")
+                        }
+                        OutlinedButton(onClick = onCancelJoin) {
+                            Text("Cancel")
+                        }
+                    }
+                }
             }
-            Button(onClick = { onOpenTicket(table.id) }) {
-                Text("Open ticket")
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button(
+                    onClick = { currentStaffId?.let(onOpenSelectedTable) },
+                    enabled = currentStaffId != null,
+                ) {
+                    Text("Open table")
+                }
+                Button(onClick = { onJoinTables(table.id) }) {
+                    Text("Join tables")
+                }
             }
         }
 
@@ -437,7 +661,7 @@ private fun TableDetailsContent(
                 ) {
                     Box(
                         modifier = Modifier
-                            .height(126.dp)
+                            .fillMaxWidth()
                             .aspectRatio(PREVIEW_SURFACE_ASPECT_RATIO)
                             .clip(RoundedCornerShape(18.dp))
                             .background(MaterialTheme.colorScheme.surface),
@@ -485,11 +709,76 @@ private fun TableDetailsContent(
 }
 
 
+private fun buildAreaFilterOptions(tables: List<RestaurantTable>): List<String> {
+    val areaNames = tables
+        .map { it.areaName.trim().ifBlank { "Unassigned" } }
+        .distinct()
+        .sorted()
+
+    return if (areaNames.isEmpty()) {
+        listOf(AREA_FILTER_ALL)
+    } else {
+        buildList {
+            add(AREA_FILTER_ALL)
+            addAll(areaNames)
+        }
+    }
+}
+
+private fun filterTablesForArea(
+    tables: List<RestaurantTable>,
+    selectedAreaName: String,
+): List<RestaurantTable> {
+    if (selectedAreaName == AREA_FILTER_ALL) {
+        return tables
+    }
+    return tables.filter { it.areaName.trim().ifBlank { "Unassigned" } == selectedAreaName }
+}
+
+@Composable
+private fun TableMapAreaSelector(
+    areas: List<String>,
+    selectedArea: String,
+    onAreaSelected: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        areas.forEach { areaName ->
+            val selected = areaName == selectedArea
+            Surface(
+                modifier = Modifier.clip(RoundedCornerShape(999.dp)),
+                shape = RoundedCornerShape(999.dp),
+                color = if (selected) TableMapVisualTokens.PanelAccentColor else TableMapVisualTokens.PanelAltColor,
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    if (selected) TableMapVisualTokens.AccentText.copy(alpha = 0.55f) else TableMapVisualTokens.BorderColor,
+                ),
+                onClick = { onAreaSelected(areaName) },
+            ) {
+                Text(
+                    text = areaName,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    color = if (selected) TableMapVisualTokens.AccentText else TableMapVisualTokens.TextSecondary,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+        }
+    }
+}
+
 
 @Composable
 private fun TableGridCard(
     table: RestaurantTable,
     selected: Boolean,
+    joinMode: Boolean,
+    joinSource: Boolean,
+    joinSelected: Boolean,
+    joinSelectable: Boolean,
     onClick: () -> Unit,
 ) {
     val mergedHint = mergedHintFor(table)
@@ -500,12 +789,30 @@ private fun TableGridCard(
         else -> MaterialTheme.colorScheme.secondary
     }
 
+    val cardColor = when {
+        joinSource -> MaterialTheme.colorScheme.primaryContainer
+        joinSelected -> MaterialTheme.colorScheme.secondaryContainer
+        selected -> MaterialTheme.colorScheme.primaryContainer
+        joinMode && !joinSelectable -> MaterialTheme.colorScheme.surfaceVariant
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }
+
     Surface(
         modifier = Modifier
             .height(164.dp)
+            .alpha(if (joinMode && !joinSource && !joinSelected && !joinSelectable) 0.42f else 1f)
+            .border(
+                width = if (joinSource || joinSelected) 2.dp else 0.dp,
+                color = when {
+                    joinSource -> MaterialTheme.colorScheme.primary
+                    joinSelected -> MaterialTheme.colorScheme.secondary
+                    else -> Color.Transparent
+                },
+                shape = RoundedCornerShape(24.dp),
+            )
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(24.dp),
-        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+        color = cardColor,
     ) {
         Column(
             modifier = Modifier
@@ -582,7 +889,19 @@ private fun MiniStatusChip(label: String, tint: Color) {
     }
 }
 
-private fun mergedHintFor(table: RestaurantTable): String? {
+private fun joinModeSummary(
+    sourceLabel: String?,
+    selectedLabels: List<String>,
+): String {
+    val primary = sourceLabel ?: "No source table"
+    return if (selectedLabels.isEmpty()) {
+        "Primary: $primary. Select tables from the map."
+    } else {
+        "Primary: $primary. Selected: ${selectedLabels.joinToString(", ")}"
+    }
+}
+
+fun mergedHintFor(table: RestaurantTable): String? {
     val normalized = table.label.uppercase()
     return when {
         "+" in normalized -> normalized

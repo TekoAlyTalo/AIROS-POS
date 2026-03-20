@@ -6,6 +6,7 @@ Requires-Python: >=3.11
 Description-Content-Type: text/markdown
 Requires-Dist: fastapi<1.0.0,>=0.115.0
 Requires-Dist: jsonschema<5.0.0,>=4.23.0
+Requires-Dist: python-multipart<1.0.0,>=0.0.9
 Requires-Dist: pydantic<3.0.0,>=2.8.0
 Requires-Dist: sqlalchemy<3.0.0,>=2.0.36
 Requires-Dist: tzdata>=2025.1
@@ -45,7 +46,7 @@ py -m pip install -e .[test,postgres]
 Edge defaults to SQLite at `./data/edge.db`.
 
 ```bash
-py -m uvicorn edge.app:create_app --factory --reload --port 8000
+py -m uvicorn edge.app:create_app --factory --reload --port 18000
 ```
 
 Hub defaults to Postgres. For local SQLite fallback:
@@ -61,19 +62,117 @@ Dev bearer tokens:
 - `dev-manager-token`
 - `dev-owner-token`
 
+## Run the Staff UI
+
+The React Staff POS UI lives under `ui/` and talks directly to the Edge API.
+
+```bash
+cd ui
+npm install
+npm run dev
+```
+
+Default frontend settings:
+
+- `VITE_EDGE_BASE_URL=http://localhost:18000`
+- dev auth header: `Authorization: Bearer dev-staff-token`
+- `VITE_BASE_PATH=/`
+- UI dev server: `http://localhost:5174`
+- table map auto-refresh: every 5 seconds via `/api/staff/pos/tables/overview`
+
+## Product catalog and grid
+
+- The selling flow is fixed:
+  - main category row
+  - subcategory row
+  - fixed product grid
+  - page buttons on the right side
+- Product pages do not scroll internally. If a subcategory has more products than fit, the Edge service auto-creates additional pages and the UI shows page buttons `1`, `2`, `3`, and so on.
+- If no manual slot layout exists, products are still visible. The Edge service auto-paginates by `sort_order` and then `name`.
+- Admin edit mode supports:
+  - category create/edit/delete
+  - subcategory create/edit/delete
+  - product create/edit
+  - product image upload
+  - allergen editing
+  - grid size changes from `2x2` up to `8x8`
+  - slot assignment and grid reset
+
+## Product import
+
+- Default CSV path for the CLI importer:
+
+```text
+C:\AIROS code clean\AIROS POS\data\products.csv
+```
+
+- CLI import:
+
+```bash
+py scripts/import_products_solmio.py
+```
+
+- API import endpoint:
+
+```text
+POST /api/staff/pos/products:import
+```
+
+- Import diagnostics always return:
+  - `created`
+  - `updated`
+  - `skipped`
+  - `failed`
+  - `failed_rows`
+
+- Rows are not silently dropped. Missing taxonomy falls back to editable category and subcategory records, while unsupported VAT rows are reported in `failed_rows`.
+
+## Product images and allergens
+
+- Product images upload to `POST /api/staff/pos/products/{product_id}/image`
+- Images are stored under `data/static/products/{product_id}.png` and served from `/static/products`
+- Allergen metadata is stored through `PUT /api/staff/pos/products/{product_id}/allergens`
+- Supported allergen codes:
+  - `gluten`
+  - `milk`
+  - `egg`
+  - `nuts`
+  - `peanuts`
+  - `fish`
+  - `shellfish`
+  - `soy`
+  - `celery`
+  - `mustard`
+  - `sesame`
+  - `lupin`
+  - `sulphites`
+  - `molluscs`
+
 ## Edge curl flow
 
 List seeded floorplan and tables:
 
 ```bash
-curl -H "Authorization: Bearer dev-staff-token" http://localhost:8000/api/staff/pos/floorplans
-curl -H "Authorization: Bearer dev-staff-token" http://localhost:8000/api/staff/pos/tables
+curl -H "Authorization: Bearer dev-staff-token" http://localhost:18000/api/staff/pos/floorplans
+curl -H "Authorization: Bearer dev-staff-token" http://localhost:18000/api/staff/pos/tables
+curl -H "Authorization: Bearer dev-staff-token" http://localhost:18000/api/staff/pos/tables/overview
 ```
+
+`/api/staff/pos/tables/overview` returns:
+
+- `table_id`
+- `label`
+- `status`
+- `current_party_id`
+- `current_table_group_id`
+- `known_checks_count`
+- `known_open_total_gross_cents`
+- `opened_at`
 
 Open a session:
 
 ```bash
-curl -X POST http://localhost:8000/api/staff/pos/sessions/open ^
+curl -X POST http://localhost:18000/api/staff/pos/sessions/open ^
   -H "Authorization: Bearer dev-staff-token" ^
   -H "Content-Type: application/json" ^
   -d "{\"opening_cash_cents\":5000}"
@@ -82,7 +181,7 @@ curl -X POST http://localhost:8000/api/staff/pos/sessions/open ^
 Open and seat a party. Replace table IDs with values from `/api/staff/pos/tables`.
 
 ```bash
-curl -X POST http://localhost:8000/api/staff/pos/parties/open ^
+curl -X POST http://localhost:18000/api/staff/pos/parties/open ^
   -H "Authorization: Bearer dev-staff-token" ^
   -H "Content-Type: application/json" ^
   -d "{\"guest_count\":2,\"table_ids\":[\"TABLE_UUID\"],\"primary_table_id\":\"TABLE_UUID\",\"note\":\"Window seat\"}"
@@ -91,7 +190,7 @@ curl -X POST http://localhost:8000/api/staff/pos/parties/open ^
 Open a check for the party:
 
 ```bash
-curl -X POST http://localhost:8000/api/staff/pos/parties/PARTY_UUID/checks/open ^
+curl -X POST http://localhost:18000/api/staff/pos/parties/PARTY_UUID/checks/open ^
   -H "Authorization: Bearer dev-staff-token" ^
   -H "Content-Type: application/json" ^
   -d "{\"label\":\"Main\"}"
@@ -100,7 +199,7 @@ curl -X POST http://localhost:8000/api/staff/pos/parties/PARTY_UUID/checks/open 
 Add a composite VAT cocktail:
 
 ```bash
-curl -X POST http://localhost:8000/api/staff/pos/checks/CHECK_UUID/items ^
+curl -X POST http://localhost:18000/api/staff/pos/checks/CHECK_UUID/items ^
   -H "Authorization: Bearer dev-staff-token" ^
   -H "Content-Type: application/json" ^
   -d "{\"items\":[{\"name_snapshot\":\"House Cocktail\",\"qty\":1,\"pricing_model\":\"COMPOSITE_VAT\",\"components\":[{\"name_snapshot\":\"Spirits\",\"vat_rate_snapshot\":0.255,\"unit_gross_cents_snapshot\":900,\"qty\":1},{\"name_snapshot\":\"Mixer\",\"vat_rate_snapshot\":0.14,\"unit_gross_cents_snapshot\":300,\"qty\":1}]}]}"
@@ -109,12 +208,12 @@ curl -X POST http://localhost:8000/api/staff/pos/checks/CHECK_UUID/items ^
 Record payment and finalize:
 
 ```bash
-curl -X POST http://localhost:8000/api/staff/pos/checks/CHECK_UUID/payments ^
+curl -X POST http://localhost:18000/api/staff/pos/checks/CHECK_UUID/payments ^
   -H "Authorization: Bearer dev-staff-token" ^
   -H "Content-Type: application/json" ^
   -d "{\"method\":\"CARD_EXTERNAL\",\"amount_cents\":1200}"
 
-curl -X POST http://localhost:8000/api/staff/pos/checks/CHECK_UUID/finalize ^
+curl -X POST http://localhost:18000/api/staff/pos/checks/CHECK_UUID/finalize ^
   -H "Authorization: Bearer dev-staff-token" ^
   -H "Content-Type: application/json" ^
   -d "{\"payment_method\":\"CARD_EXTERNAL\",\"issue_receipt\":true}"
@@ -123,13 +222,13 @@ curl -X POST http://localhost:8000/api/staff/pos/checks/CHECK_UUID/finalize ^
 Read pending outbox events:
 
 ```bash
-curl -H "Authorization: Bearer dev-staff-token" http://localhost:8000/api/staff/pos/outbox/pending
+curl -H "Authorization: Bearer dev-staff-token" http://localhost:18000/api/staff/pos/outbox/pending
 ```
 
 Mark pushed events delivered:
 
 ```bash
-curl -X POST http://localhost:8000/api/staff/pos/outbox/mark-delivered ^
+curl -X POST http://localhost:18000/api/staff/pos/outbox/mark-delivered ^
   -H "Authorization: Bearer dev-staff-token" ^
   -H "Content-Type: application/json" ^
   -d "{\"event_ids\":[\"EVENT_UUID\"]}"

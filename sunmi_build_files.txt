@@ -1,0 +1,35 @@
+﻿
+FullName                                                                              
+--------                                                                              
+C:\AIROS code clean\AIROS POS\apps\android-pos\app_build.gradle.kts                   
+C:\AIROS code clean\AIROS POS\apps\android-pos\build.gradle.kts                       
+C:\AIROS code clean\AIROS POS\apps\android-pos\device_camera_build.gradle.kts         
+C:\AIROS code clean\AIROS POS\apps\android-pos\settings.gradle.kts                    
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\build.gradle.kts                   
+C:\AIROS code clean\AIROS POS\apps\android-pos\build-logic\settings.gradle.kts        
+C:\AIROS code clean\AIROS POS\apps\android-pos\build-logic\convention\build.gradle.kts
+C:\AIROS code clean\AIROS POS\apps\android-pos\core\common\build.gradle.kts           
+C:\AIROS code clean\AIROS POS\apps\android-pos\core\database\build.gradle.kts         
+C:\AIROS code clean\AIROS POS\apps\android-pos\core\datastore\build.gradle.kts        
+C:\AIROS code clean\AIROS POS\apps\android-pos\core\model\build.gradle.kts            
+C:\AIROS code clean\AIROS POS\apps\android-pos\core\network\build.gradle.kts          
+C:\AIROS code clean\AIROS POS\apps\android-pos\core\ui\build.gradle.kts               
+C:\AIROS code clean\AIROS POS\apps\android-pos\device\camera\build.gradle.kts         
+C:\AIROS code clean\AIROS POS\apps\android-pos\device\cashdrawer\build.gradle.kts     
+C:\AIROS code clean\AIROS POS\apps\android-pos\device\platform\build.gradle.kts       
+C:\AIROS code clean\AIROS POS\apps\android-pos\device\printer\build.gradle.kts        
+C:\AIROS code clean\AIROS POS\apps\android-pos\device\scanner\build.gradle.kts        
+C:\AIROS code clean\AIROS POS\apps\android-pos\domain\build.gradle.kts                
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\auth\build.gradle.kts          
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\camera\build.gradle.kts        
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\kitchen\build.gradle.kts       
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\build.gradle.kts          
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\payment\build.gradle.kts       
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\scanner\build.gradle.kts       
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\settings\build.gradle.kts      
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\shift\build.gradle.kts         
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\tablemap\build.gradle.kts      
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\ticket\build.gradle.kts        
+C:\AIROS code clean\AIROS POS\apps\android-pos\sync\build.gradle.kts                  
+
+

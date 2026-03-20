@@ -1,0 +1,9 @@
+﻿C:\AIROS code clean\AIROS POS\apps\android-pos\device\printer\src\main\kotlin\com\airos\pos\device\printer\PrinterService.kt:23: suspend fun printReceipt(document: ReceiptDocument): PosResult<Unit>
+C:\AIROS code clean\AIROS POS\apps\android-pos\device\printer\src\main\kotlin\com\airos\pos\device\printer\PrinterService.kt:55: override suspend fun printReceipt(document: ReceiptDocument): PosResult<Unit> {
+C:\AIROS code clean\AIROS POS\apps\android-pos\device\printer\src\main\kotlin\com\airos\pos\device\printer\PrinterService.kt:105: return printReceipt(diagnostic)
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:277: val printResult = printReceipt(tableResult.receiptDocument)
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1088: MenuPaymentDialog(
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1098: onConfirmPayment(result)
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuPaymentDialog.kt:73: fun MenuPaymentDialog(
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\payment\src\main\kotlin\com\airos\pos\feature\payment\PaymentFeature.kt:99: fun printReceipt() {
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\payment\src\main\kotlin\com\airos\pos\feature\payment\PaymentFeature.kt:102: val result = printerService.printReceipt(

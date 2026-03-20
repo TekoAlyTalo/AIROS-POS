@@ -1,12 +1,13 @@
-import { ReceiptText, Users, UtensilsCrossed } from "lucide-react";
+import { ReceiptText, Users } from "lucide-react";
 
 import { CheckPanel } from "@/components/check-panel";
+import { TableCameraPanel } from "@/components/table-camera-panel";
 import { PartyForm } from "@/components/party-form";
 import { StatusChip } from "@/components/status-chip";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { CheckRecord, PartyRecord, SessionRecord, TableRecord } from "@/lib/normalize";
-import { formatCompactId } from "@/lib/utils";
+import { formatCompactId, formatCurrency } from "@/lib/utils";
 
 type TableDrawerProps = {
   table: TableRecord | null;
@@ -20,24 +21,6 @@ type TableDrawerProps = {
   onOpenCheck: (partyId: string) => Promise<void>;
   onSelectCheck: (partyId: string, checkId: string) => Promise<void>;
   onRefreshCheck: (checkId: string) => Promise<CheckRecord>;
-  onAddItems: (
-    checkId: string,
-    body: {
-      items: Array<{
-        product_id?: string;
-        name_snapshot: string;
-        qty: number;
-        pricing_model: "SINGLE_VAT" | "COMPOSITE_VAT";
-        note?: string;
-        components: Array<{
-          name_snapshot: string;
-          vat_rate_snapshot: number;
-          unit_gross_cents_snapshot: number;
-          qty: number;
-        }>;
-      }>;
-    },
-  ) => Promise<void>;
   onRecordPayment: (input: {
     checkId: string;
     method: "CASH" | "CARD_EXTERNAL";
@@ -66,19 +49,16 @@ export function TableDrawer({
   onOpenCheck,
   onSelectCheck,
   onRefreshCheck,
-  onAddItems,
   onRecordPayment,
   onFinalize,
 }: TableDrawerProps) {
   if (!table) {
     return (
-      <aside className="glass-card flex h-full min-h-[620px] flex-col justify-center p-5">
-        <div className="space-y-3 text-center">
-          <p className="text-xs uppercase tracking-[0.28em] text-muted-foreground">Table detail</p>
-          <h2 className="text-xl font-semibold tracking-[0.04em] text-foreground">Select a table</h2>
-          <p className="text-sm text-muted-foreground">
-            Pick any table on the map to open a party, manage checks, add items, or finalize payment.
-          </p>
+      <aside className="glass-card flex h-full min-h-[360px] flex-col justify-center p-4 lg:min-h-0 lg:p-3.5">
+        <div className="space-y-2 text-center">
+          <p className="text-[11px] uppercase tracking-[0.24em] text-muted-foreground">Table</p>
+          <h2 className="text-xl font-semibold tracking-[0.03em] text-foreground">Select a table</h2>
+          <p className="text-sm text-muted-foreground">Open the target on the map, then continue with checks or products.</p>
         </div>
       </aside>
     );
@@ -87,62 +67,50 @@ export function TableDrawer({
   const currentPartyId = party?.id ?? table.currentPartyId;
 
   return (
-    <aside className="glass-card flex h-full min-h-[620px] flex-col overflow-hidden p-5">
-      <div className="mb-5 flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs uppercase tracking-[0.28em] text-muted-foreground">Table detail</p>
-          <h2 className="mt-2 text-2xl font-semibold tracking-[0.04em] text-foreground">{table.label}</h2>
+    <aside className="glass-card flex h-full min-h-[620px] flex-col overflow-hidden p-3 lg:min-h-0 lg:p-3.5">
+      <div className="border-b border-white/8 pb-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[11px] uppercase tracking-[0.24em] text-muted-foreground">Selected table</p>
+            <h2 className="mt-1 truncate text-2xl font-semibold tracking-[0.03em] text-foreground">{table.label}</h2>
+          </div>
+          <StatusChip label={table.status} tone={statusTone[table.status]} />
         </div>
-        <StatusChip label={table.status} tone={statusTone[table.status]} />
+
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <div className="rounded-[20px] border border-white/[0.08] bg-white/[0.03] px-3 py-2.5">
+            <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Party</p>
+            <p className="mt-1 text-sm font-medium text-foreground">{currentPartyId ? formatCompactId(currentPartyId) : "None"}</p>
+          </div>
+          <div className="rounded-[20px] border border-white/[0.08] bg-white/[0.03] px-3 py-2.5">
+            <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Checks</p>
+            <p className="mt-1 text-sm font-medium text-foreground">{table.knownChecksCount}</p>
+          </div>
+          <div className="rounded-[20px] border border-white/[0.08] bg-white/[0.03] px-3 py-2.5">
+            <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Open gross</p>
+            <p className="mt-1 text-sm font-medium text-foreground">
+              {table.knownOpenTotalGrossCents === null ? "--" : formatCurrency(table.knownOpenTotalGrossCents)}
+            </p>
+          </div>
+          <div className="rounded-[20px] border border-white/[0.08] bg-white/[0.03] px-3 py-2.5">
+            <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Session</p>
+            <p className="mt-1 text-sm font-medium text-foreground">{sessionInfo?.status ?? "Closed"}</p>
+          </div>
+        </div>
       </div>
 
-      <div className="scrollbar-thin flex-1 space-y-4 overflow-y-auto pr-1">
-        <Card className="p-4">
-          <CardHeader className="p-0">
-            <CardTitle>Table snapshot</CardTitle>
-            <CardDescription>Geometry and live seating state from the Edge service.</CardDescription>
-          </CardHeader>
-          <CardContent className="mt-4 grid gap-3 p-0 text-sm">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-3xl border border-white/[0.08] bg-white/[0.03] p-3">
-                <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Table id</p>
-                <p className="mt-2 font-medium text-foreground">{formatCompactId(table.id)}</p>
-              </div>
-              <div className="rounded-3xl border border-white/[0.08] bg-white/[0.03] p-3">
-                <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Table group</p>
-                <p className="mt-2 font-medium text-foreground">{formatCompactId(table.currentTableGroupId)}</p>
-              </div>
-            </div>
-            <div className="rounded-3xl border border-white/[0.08] bg-white/[0.03] p-3">
-              <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Geometry</p>
-              <p className="mt-2 text-foreground">
-                x {table.geometry.x} · y {table.geometry.y} · w {table.geometry.w} · h {table.geometry.h} · rot{" "}
-                {table.geometry.rotation}
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <StatusChip
-                label={sessionInfo ? `Session ${sessionInfo.status}` : "No Open Session"}
-                tone={sessionInfo ? "info" : "warning"}
-                compactId={sessionInfo?.id}
-              />
-              {currentPartyId ? <StatusChip label="Party Linked" tone="info" compactId={currentPartyId} /> : null}
-            </div>
-          </CardContent>
-        </Card>
+      <div className="mt-3 flex-1 space-y-3 overflow-y-auto pr-1">
+        <TableCameraPanel cameraId="cam1" title="Table camera" />
 
         {table.status === "FREE" ? (
-          <Card className="p-4">
+          <Card className="p-3.5">
             <CardHeader className="p-0">
-              <CardTitle className="inline-flex items-center gap-2">
+              <CardTitle className="inline-flex items-center gap-2 text-base">
                 <Users className="h-4 w-4 text-primary" />
-                Open Party
+                Open party
               </CardTitle>
-              <CardDescription>
-                Create a new seating for this table. The backend assigns a fresh table group for every party.
-              </CardDescription>
             </CardHeader>
-            <CardContent className="mt-4 p-0">
+            <CardContent className="mt-3 p-0">
               <PartyForm table={table} busy={busy} onSubmit={onOpenParty} />
             </CardContent>
           </Card>
@@ -150,58 +118,44 @@ export function TableDrawer({
 
         {table.status === "OCCUPIED" ? (
           <>
-            <Card className="p-4">
+            <Card className="p-3.5">
               <CardHeader className="p-0">
-                <CardTitle className="inline-flex items-center gap-2">
-                  <UtensilsCrossed className="h-4 w-4 text-primary" />
-                  Party Summary
-                </CardTitle>
-                <CardDescription>
-                  Current seating linked to this table. Party detail is limited to the available Edge endpoints.
-                </CardDescription>
+                <div className="flex items-start justify-between gap-2">
+                  <CardTitle className="inline-flex items-center gap-2 text-base">
+                    <ReceiptText className="h-4 w-4 text-primary" />
+                    Party
+                  </CardTitle>
+                  <Button
+                    size="sm"
+                    className="h-9 rounded-full px-3"
+                    disabled={busy || !currentPartyId}
+                    onClick={() => {
+                      if (currentPartyId) {
+                        void onOpenCheck(currentPartyId);
+                      }
+                    }}
+                  >
+                    Open check
+                  </Button>
+                </div>
               </CardHeader>
-              <CardContent className="mt-4 grid gap-3 p-0 text-sm">
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="rounded-3xl border border-white/[0.08] bg-white/[0.03] p-3">
-                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Party</p>
-                    <p className="mt-2 font-medium text-foreground">{formatCompactId(currentPartyId)}</p>
+              <CardContent className="mt-3 space-y-2 p-0 text-sm">
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="rounded-[20px] border border-white/[0.08] bg-white/[0.03] px-3 py-2.5">
+                    <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Guests</p>
+                    <p className="mt-1 font-medium text-foreground">{party?.guestCount ?? "--"}</p>
                   </div>
-                  <div className="rounded-3xl border border-white/[0.08] bg-white/[0.03] p-3">
-                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Guests</p>
-                    <p className="mt-2 font-medium text-foreground">{party?.guestCount ?? "Not loaded"}</p>
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="rounded-3xl border border-white/[0.08] bg-white/[0.03] p-3">
-                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Party status</p>
-                    <p className="mt-2 font-medium text-foreground">{party?.status ?? "OPEN"}</p>
-                  </div>
-                  <div className="rounded-3xl border border-white/[0.08] bg-white/[0.03] p-3">
-                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Primary table</p>
-                    <p className="mt-2 font-medium text-foreground">{formatCompactId(party?.primaryTableId ?? table.id)}</p>
+                  <div className="rounded-[20px] border border-white/[0.08] bg-white/[0.03] px-3 py-2.5">
+                    <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Status</p>
+                    <p className="mt-1 font-medium text-foreground">{party?.status ?? "OPEN"}</p>
                   </div>
                 </div>
+
                 {party?.note ? (
-                  <div className="rounded-3xl border border-white/[0.08] bg-white/[0.03] p-3 text-foreground">
+                  <div className="rounded-[20px] border border-white/[0.08] bg-white/[0.03] px-3 py-2.5 text-foreground">
                     {party.note}
                   </div>
-                ) : (
-                  <div className="rounded-3xl border border-dashed border-white/10 p-3 text-muted-foreground">
-                    No party note available.
-                  </div>
-                )}
-                <Button
-                  className="w-full"
-                  disabled={busy || !currentPartyId}
-                  onClick={() => {
-                    if (currentPartyId) {
-                      void onOpenCheck(currentPartyId);
-                    }
-                  }}
-                >
-                  <ReceiptText className="h-4 w-4" />
-                  Open Check
-                </Button>
+                ) : null}
               </CardContent>
             </Card>
 
@@ -215,30 +169,26 @@ export function TableDrawer({
                 busy={busy}
                 onSelectCheck={onSelectCheck}
                 onRefreshCheck={onRefreshCheck}
-                onAddItems={onAddItems}
                 onRecordPayment={onRecordPayment}
                 onFinalize={onFinalize}
               />
             ) : (
-              <div className="rounded-3xl border border-dashed border-white/10 p-4 text-sm text-muted-foreground">
-                This table is occupied but the current party id is not available from the API payload.
+              <div className="rounded-[24px] border border-dashed border-white/10 px-3 py-3 text-sm text-muted-foreground">
+                This occupied table has no current party id in the API payload.
               </div>
             )}
           </>
         ) : null}
 
         {table.status === "DIRTY" || table.status === "RESERVED" ? (
-          <Card className="p-4">
+          <Card className="p-3.5">
             <CardHeader className="p-0">
-              <CardTitle>{table.status === "DIRTY" ? "Table awaiting reset" : "Reserved table"}</CardTitle>
-              <CardDescription>
-                This state is read-only in the current Staff UI. Use the backend staff flows to seat or release it.
-              </CardDescription>
+              <CardTitle className="text-base">{table.status === "DIRTY" ? "Awaiting reset" : "Reserved table"}</CardTitle>
             </CardHeader>
-            <CardContent className="mt-4 rounded-3xl border border-white/[0.08] bg-white/[0.03] p-4 text-sm text-muted-foreground">
+            <CardContent className="mt-3 rounded-[20px] border border-white/[0.08] bg-white/[0.03] px-3 py-2.5 text-sm text-muted-foreground">
               {table.status === "DIRTY"
-                ? "The table is marked dirty and should be cleaned before opening a new party."
-                : "The table is reserved. Open-party actions stay disabled until service marks it available."}
+                ? "Clean the table before opening a new party."
+                : "Open-party actions stay disabled until the table is released."}
             </CardContent>
           </Card>
         ) : null}

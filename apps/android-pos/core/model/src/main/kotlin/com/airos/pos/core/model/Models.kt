@@ -191,6 +191,35 @@ data class PaymentSummary(
     val refundEligible: Boolean,
 )
 
+data class PaymentEntry(
+    val method: PaymentMethod,
+    val amountCents: Int,
+    val reference: String? = null,
+    val displayLabel: String? = null,
+)
+
+data class TablePaymentRequest(
+    val tableId: String? = null,
+    val tableLabel: String? = null,
+    val lines: List<TicketLine>,
+    val payments: List<PaymentEntry>,
+    val cashTenderedCents: Int? = null,
+    val voucherBarcodeValue: String? = null,
+    val discountAmountCents: Int = 0,
+    val discountLabel: String? = null,
+)
+
+data class TablePaymentResult(
+    val ticketId: String,
+    val tableId: String? = null,
+    val tableLabel: String? = null,
+    val totalDueCents: Int,
+    val totalPaidCents: Int,
+    val changeCents: Int,
+    val payments: List<ReceiptPaymentRecord>,
+    val receiptDocument: ReceiptDocument,
+)
+
 data class RefundRequest(
     val ticketId: String,
     val amountCents: Int,
@@ -201,14 +230,118 @@ data class RefundRequest(
 data class ReceiptLine(
     val label: String,
     val value: String? = null,
+    val quantity: String? = null,
+    val unitPriceCents: Int? = null,
+    val totalPriceCents: Int? = null,
+    val note: String? = null,
+    val alignment: ReceiptAlignment = ReceiptAlignment.LEFT,
+)
+
+enum class ReceiptAlignment {
+    LEFT,
+    CENTER,
+    RIGHT,
+}
+
+enum class ReceiptImageSourceType {
+    ANDROID_RESOURCE,
+    FILE_PATH,
+    CONTENT_URI,
+    NETWORK_URL,
+}
+
+data class ReceiptImageSource(
+    val type: ReceiptImageSourceType,
+    val value: String,
+)
+
+data class ReceiptLogo(
+    val source: ReceiptImageSource,
+    val widthPx: Int? = null,
+    val heightPx: Int? = null,
+    val align: ReceiptAlignment = ReceiptAlignment.CENTER,
+)
+
+enum class ReceiptBarcodeFormat {
+    CODE128,
+    EAN13,
+    EAN8,
+    UPC_A,
+    UPC_E,
+    QR_CODE,
+    PDF417,
+}
+
+data class ReceiptBarcode(
+    val value: String,
+    val format: ReceiptBarcodeFormat = ReceiptBarcodeFormat.QR_CODE,
+    val label: String? = null,
+    val align: ReceiptAlignment = ReceiptAlignment.CENTER,
+    val heightPx: Int? = null,
+    val moduleWidth: Int? = null,
+)
+
+data class ReceiptBonusProgram(
+    val programName: String,
+    val memberId: String? = null,
+    val memberDisplayName: String? = null,
+    val pointsBalance: Int? = null,
+    val pointsEarned: Int? = null,
+    val pointsRedeemed: Int? = null,
+    val tierName: String? = null,
+    val footerMessage: String? = null,
+)
+
+data class ReceiptBusiness(
+    val displayName: String,
+    val legalName: String? = null,
+    val businessId: String? = null,
+    val vatId: String? = null,
+    val addressLines: List<String> = emptyList(),
+    val phone: String? = null,
+    val email: String? = null,
+    val website: String? = null,
+)
+
+data class ReceiptTotals(
+    val subtotalCents: Int,
+    val discountCents: Int = 0,
+    val taxCents: Int = 0,
+    val totalCents: Int,
+)
+
+data class ReceiptPaymentRecord(
+    val method: PaymentMethod,
+    val amountCents: Int,
+    val reference: String? = null,
+    val displayLabel: String? = null,
 )
 
 data class ReceiptDocument(
-    val title: String,
-    val lines: List<ReceiptLine>,
-    val footer: String,
-)
-
+    val title: String = "Receipt",
+    val lines: List<ReceiptLine> = emptyList(),
+    val footer: String = "",
+    val currencyCode: String = "EUR",
+    val business: ReceiptBusiness? = null,
+    val logo: ReceiptLogo? = null,
+    val headerText: String? = null,
+    val footerText: String? = null,
+    val barcode: ReceiptBarcode? = null,
+    val bonusProgram: ReceiptBonusProgram? = null,
+    val totals: ReceiptTotals? = null,
+    val payments: List<ReceiptPaymentRecord> = emptyList(),
+    val receiptNumber: String? = null,
+    val orderNumber: String? = null,
+    val printedAtEpochMillis: Long? = null,
+    val cashierName: String? = null,
+    val customerDisplayName: String? = null,
+    val customerNote: String? = null,
+    val internalNote: String? = null,
+    val extraTextBlocks: List<String> = emptyList(),
+) {
+    val primaryFooter: String
+        get() = footerText ?: footer
+}
 data class KitchenTicketDocument(
     val title: String,
     val lines: List<String>,

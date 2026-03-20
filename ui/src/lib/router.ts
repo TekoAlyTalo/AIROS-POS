@@ -1,4 +1,4 @@
-export type AppRoute = "table-map" | "products";
+export type AppRoute = "table-map" | "products" | "settings";
 
 const RAW_BASE_PATH = import.meta.env.VITE_BASE_PATH ?? "/";
 
@@ -13,7 +13,13 @@ function normalizeBasePath(path: string): string {
 const BASE_PATH = normalizeBasePath(RAW_BASE_PATH);
 
 export function routePath(route: AppRoute): string {
-  return route === "products" ? "/products" : "/";
+  if (route === "products") {
+    return "/products";
+  }
+  if (route === "settings") {
+    return "/settings";
+  }
+  return "/";
 }
 
 export function toAppHref(path: string): string {
@@ -27,6 +33,9 @@ export function resolveRoute(pathname: string): AppRoute {
   const relativePath = BASE_PATH && pathname.startsWith(BASE_PATH) ? pathname.slice(BASE_PATH.length) || "/" : pathname;
   if (relativePath === "/products") {
     return "products";
+  }
+  if (relativePath === "/settings") {
+    return "settings";
   }
   return "table-map";
 }

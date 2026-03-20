@@ -9,34 +9,65 @@ def test_solmio_price_and_vat_conversion() -> None:
     assert price_eur_to_cents("3,50") == 350
     assert vat_percent_to_fraction("25.5") == 0.255
     assert vat_percent_to_fraction("14") == 0.14
+    assert vat_percent_to_fraction("13.50") == 0.135
+    assert vat_percent_to_fraction("10.00") == 0.1
 
 
-def test_importer_reports_failures_and_fallback_taxonomy(edge_service) -> None:
+def test_importer_accepts_structurally_valid_vat_rates_and_fallback_taxonomy(edge_service) -> None:
     pos_service, db = edge_service
     catalog = CatalogService(db, pos_service.settings)
 
     raw_csv = dedent(
         """\
         plu_code,button_text,button_text_short,receipt_name,barcode,color_code,price,vat_level,product_groups
-        10,House Beer,BEER,House Beer,,#6b4f31,6.00,25.5,Alkoholijuomat
-        11,Kitchen Surprise,SUR,Kitchen Surprise,,#334455,8.00,14,
-        12,Broken Vat,BAD,Broken Vat,,#aa0000,5.00,10,
+        10,House Beer,BEER,House Beer,,#6b4f31,6.00,25.50,Alkoholijuomat
+        11,Kitchen Surprise,SUR,Kitchen Surprise,,#334455,8.00,13.50,
+        12,Pizza Special,PIZZA,Pizza Special,,#aa0000,5.00,10.00,"Ruoka annokset,Pizzat"
         """
     ).encode("utf-8")
 
     summary = catalog.import_solmio_products(raw_csv)
 
-    assert summary["created"] == 2
+    assert summary["total_rows"] == 3
+    assert summary["created"] == 3
     assert summary["updated"] == 0
     assert summary["skipped"] == 0
-    assert summary["failed"] == 1
-    assert summary["failed_rows"] == [{"row_number": 4, "reason": "unsupported vat_rate 0.100"}]
+    assert summary["failed"] == 0
+    assert summary["failure_reasons"] == {}
+    assert summary["failed_rows"] == []
 
     products = {product["external_plu"]: product for product in catalog.list_products()}
     assert products["10"]["category_name"] == "Alkoholijuomat"
     assert products["10"]["subcategory_name"] == "Oluet"
+    assert products["10"]["vat_rate"] == 0.255
     assert products["11"]["category_name"] == FALLBACK_CATEGORY_NAME
     assert products["11"]["subcategory_name"] == FALLBACK_SUBCATEGORY_NAME
+    assert products["11"]["vat_rate"] == 0.135
+    assert products["12"]["category_name"] == "Ruoka-annokset"
+    assert products["12"]["subcategory_name"] == "Pizzat"
+    assert products["12"]["vat_rate"] == 0.1
+
+
+def test_importer_rejects_malformed_vat_level_only_as_structural_failure(edge_service) -> None:
+    pos_service, db = edge_service
+    catalog = CatalogService(db, pos_service.settings)
+
+    raw_csv = dedent(
+        """\
+        plu_code,button_text,button_text_short,receipt_name,barcode,color_code,price,vat_level,product_groups
+        10,Bad Vat,BAD,Bad Vat,,#6b4f31,6.00,not-a-number,Alkoholijuomat
+        """
+    ).encode("utf-8")
+
+    summary = catalog.import_solmio_products(raw_csv)
+
+    assert summary["total_rows"] == 1
+    assert summary["created"] == 0
+    assert summary["updated"] == 0
+    assert summary["skipped"] == 0
+    assert summary["failed"] == 1
+    assert summary["failure_reasons"] == {"invalid vat_level: not-a-number": 1}
+    assert summary["failed_rows"] == [{"row_number": 2, "reason": "invalid vat_level: not-a-number"}]
 
 
 def test_category_and_subcategory_crud(edge_service) -> None:

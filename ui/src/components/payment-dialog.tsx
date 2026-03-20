@@ -57,7 +57,7 @@ export function PaymentDialog({ check, busy, sessionInfo, onRecordPayment, onFin
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button className="w-full">Payment / Finalize</Button>
+        <Button className="w-full sm:w-auto">Pay / Finalize</Button>
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>

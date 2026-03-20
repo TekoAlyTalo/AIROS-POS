@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Edit3,
   FolderPlus,
@@ -8,7 +8,6 @@ import {
   PackagePlus,
   PencilLine,
   Search,
-  Settings2,
   Upload,
   X,
 } from "lucide-react";
@@ -59,6 +58,7 @@ type ProductsWorkspaceProps = {
   gridSlotsByPage: Record<string, ProductGridSlotRecord[]>;
   activeCheckId: string | null;
   busy: boolean;
+  editMode: boolean;
   onAddProduct: (product: ProductRecord) => Promise<void>;
   onPatchGridPage: (
     pageId: string,
@@ -137,16 +137,12 @@ type ProductsWorkspaceProps = {
     },
   ) => Promise<void>;
   onDeleteSubcategory: (subcategoryId: string) => Promise<void>;
-  onImportProducts: (file: File) => Promise<{
-    created: number;
-    updated: number;
-    skipped: number;
-    failed: number;
-    failed_rows: Array<{ row_number: number; reason: string }>;
-  }>;
 };
 
 const squareGridOptions = [2, 3, 4, 5, 6, 7, 8];
+const desktopSellGridCols = 5;
+const desktopSellGridRows = 3;
+const desktopSellGridSlotCount = desktopSellGridCols * desktopSellGridRows;
 const allergenOptions = [
   "gluten",
   "milk",
@@ -281,6 +277,7 @@ export function ProductsWorkspace({
   gridSlotsByPage,
   activeCheckId,
   busy,
+  editMode,
   onAddProduct,
   onPatchGridPage,
   onReplaceGridSlots,
@@ -294,10 +291,7 @@ export function ProductsWorkspace({
   onCreateSubcategory,
   onPatchSubcategory,
   onDeleteSubcategory,
-  onImportProducts,
 }: ProductsWorkspaceProps) {
-  const importInputRef = useRef<HTMLInputElement | null>(null);
-  const [editMode, setEditMode] = useState(false);
   const [assignMode, setAssignMode] = useState(false);
   const [activeCategoryId, setActiveCategoryId] = useState("");
   const [activeSubcategoryId, setActiveSubcategoryId] = useState("");
@@ -314,13 +308,6 @@ export function ProductsWorkspace({
   const [productDialogOpen, setProductDialogOpen] = useState(false);
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [productForm, setProductForm] = useState<ProductFormState>(() => emptyProductForm("", ""));
-  const [lastImportSummary, setLastImportSummary] = useState<{
-    created: number;
-    updated: number;
-    skipped: number;
-    failed: number;
-    failed_rows: Array<{ row_number: number; reason: string }>;
-  } | null>(null);
 
   const activeProductCategoryIds = new Set(products.filter((product) => product.isActive && product.categoryId).map((product) => product.categoryId as string));
   const visibleCategories = useMemo(
@@ -357,6 +344,22 @@ export function ProductsWorkspace({
   const activePageId = currentSubcategory ? activePageBySubcategory[currentSubcategory.id] ?? pagesForSubcategory[0]?.id ?? null : null;
   const activePage = pagesForSubcategory.find((page) => page.id === activePageId) ?? pagesForSubcategory[0] ?? null;
   const activeSlots = activePage ? buildSlotsForPage(activePage, gridSlotsByPage[activePage.id]) : [];
+  const visibleSellingSlots =
+    !editMode && activePage
+      ? Array.from({ length: desktopSellGridSlotCount }, (_, position) => {
+          return (
+            activeSlots[position] ?? {
+              pageId: activePage.id,
+              position,
+              productId: null,
+              labelOverride: null,
+              imageOverridePath: null,
+              isManual: false,
+              product: null,
+            }
+          );
+        })
+      : activeSlots;
   const productsInSubcategory = sortProducts(products.filter((product) => product.subcategoryId === currentSubcategory?.id));
   const slotCandidates = productsInSubcategory.filter((product) => {
     const query = slotQuery.trim().toLowerCase();
@@ -446,14 +449,6 @@ export function ProductsWorkspace({
 
   function resolveProductSubcategoryOptions(categoryId: string) {
     return sortSubcategories(subcategories.filter((subcategory) => subcategory.categoryId === categoryId && subcategory.isActive));
-  }
-
-  async function handleImportFile(file: File) {
-    const summary = await onImportProducts(file);
-    setLastImportSummary(summary);
-    toast.success(
-      `Import: ${summary.created} created, ${summary.updated} updated, ${summary.skipped} skipped, ${summary.failed} failed`,
-    );
   }
 
   async function handleAutoFillPage() {
@@ -577,69 +572,25 @@ export function ProductsWorkspace({
   }
 
   return (
-    <section className="h-full">
-      <Card className="flex h-full min-h-0 flex-col p-3 sm:p-4">
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+    <section className="h-full overflow-hidden">
+      <Card className="flex h-full min-h-0 flex-col overflow-hidden p-2.5 sm:p-3">
+        <div className="mb-1 flex items-center gap-2">
           <div className="flex min-w-0 items-center gap-2">
             <p className="text-[11px] uppercase tracking-[0.28em] text-muted-foreground">Products</p>
             {currentCategory ? (
-              <span className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-xs text-muted-foreground">
+              <span className="rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-0.5 text-[11px] text-muted-foreground">
                 {currentCategory.name}
               </span>
             ) : null}
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              variant={editMode ? "default" : "secondary"}
-              size="sm"
-              onClick={() => setEditMode((current) => !current)}
-            >
-              <Settings2 className="h-3.5 w-3.5" />
-              {editMode ? "Edit mode on" : "Admin edit mode"}
-            </Button>
-            <input
-              ref={importInputRef}
-              type="file"
-              accept=".csv,text/csv"
-              className="hidden"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) {
-                  void handleImportFile(file).catch((error: unknown) => {
-                    toast.error(error instanceof Error ? error.message : "Unable to import products.");
-                  });
-                }
-                event.currentTarget.value = "";
-              }}
-            />
-            <Button type="button" variant="secondary" size="sm" onClick={() => importInputRef.current?.click()}>
-              <Upload className="h-3.5 w-3.5" />
-              Import CSV
-            </Button>
-          </div>
         </div>
 
-        <CardContent className="flex min-h-0 flex-1 flex-col gap-2.5 p-0">
-          {lastImportSummary ? (
-            <div className="rounded-[24px] border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm">
-              <p className="font-medium text-foreground">
-                Import diagnostics: {lastImportSummary.created} created, {lastImportSummary.updated} updated, {lastImportSummary.skipped} skipped, {lastImportSummary.failed} failed
-              </p>
-              {lastImportSummary.failed_rows.length > 0 ? (
-                <div className="mt-2 space-y-1 text-muted-foreground">
-                  {lastImportSummary.failed_rows.slice(0, 4).map((failure) => (
-                    <p key={`${failure.row_number}-${failure.reason}`}>
-                      Row {failure.row_number}: {failure.reason}
-                    </p>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-
+        <CardContent className="flex min-h-0 flex-1 flex-col gap-2 p-0">
           {editMode ? (
-            <div className="flex flex-wrap items-center gap-2 rounded-[24px] border border-white/10 bg-white/[0.03] px-3 py-2">
+            <div className="flex flex-wrap items-center gap-1.5 rounded-[24px] border border-white/10 bg-white/[0.03] px-2.5 py-1.5">
+              <span className="rounded-full border border-primary/25 bg-primary/10 px-3 py-1 text-xs font-medium uppercase tracking-[0.18em] text-primary">
+                Admin tools
+              </span>
               <Button
                 type="button"
                 variant={assignMode ? "default" : "secondary"}
@@ -720,14 +671,14 @@ export function ProductsWorkspace({
             </div>
           ) : null}
 
-          <div className="space-y-2">
-            <div className="scrollbar-thin flex gap-2 overflow-x-auto pb-1">
+          <div className="space-y-1.5">
+            <div className="scrollbar-thin flex gap-2 overflow-x-auto pb-0.5">
               {visibleCategories.map((category) => (
                 <Button
                   key={category.id}
                   type="button"
                   variant={category.id === currentCategory?.id ? "default" : "secondary"}
-                  className="h-10 shrink-0 rounded-full px-5 text-sm"
+                  className="h-9 shrink-0 rounded-full px-4 text-sm"
                   onClick={() => setActiveCategoryId(category.id)}
                 >
                   {category.name}
@@ -735,13 +686,13 @@ export function ProductsWorkspace({
               ))}
             </div>
 
-            <div className="scrollbar-thin flex gap-2 overflow-x-auto pb-1">
+            <div className="scrollbar-thin flex gap-2 overflow-x-auto pb-0.5">
               {categorySubcategories.map((subcategory) => (
                 <Button
                   key={subcategory.id}
                   type="button"
                   variant={subcategory.id === currentSubcategory?.id ? "default" : "secondary"}
-                  className="h-10 shrink-0 rounded-full px-5 text-sm"
+                  className="h-9 shrink-0 rounded-full px-4 text-sm"
                   onClick={() => setActiveSubcategoryId(subcategory.id)}
                 >
                   {subcategory.name}
@@ -751,22 +702,22 @@ export function ProductsWorkspace({
           </div>
 
           {!activeCheckId ? (
-            <div className="rounded-[24px] border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+            <div className="rounded-[24px] border border-amber-500/30 bg-amber-500/10 px-3.5 py-2.5 text-sm text-amber-100">
               Select table first
             </div>
           ) : null}
 
           {activePage ? (
-            <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_64px] gap-2.5 sm:grid-cols-[minmax(0,1fr)_74px]">
-              <div className="min-h-0 rounded-[28px] border border-white/10 bg-slate-950/25 p-2.5">
+            <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_60px] gap-2 sm:grid-cols-[minmax(0,1fr)_68px]">
+              <div className="min-h-0 overflow-hidden rounded-[24px] border border-white/10 bg-slate-950/25 p-2">
                 <div
-                  className="grid h-full min-h-[420px] gap-2.5"
+                  className="grid h-full min-h-0 gap-2"
                   style={{
-                    gridTemplateColumns: `repeat(${activePage.cols}, minmax(0, 1fr))`,
-                    gridTemplateRows: `repeat(${activePage.rows}, minmax(0, 1fr))`,
+                    gridTemplateColumns: `repeat(${editMode ? activePage.cols : desktopSellGridCols}, minmax(0, 1fr))`,
+                    gridTemplateRows: `repeat(${editMode ? activePage.rows : desktopSellGridRows}, minmax(0, 1fr))`,
                   }}
                 >
-                  {activeSlots.map((slot) => {
+                  {visibleSellingSlots.map((slot) => {
                     const label = slot.labelOverride ?? slot.product?.name ?? "Assign product";
                     const imageUrl = imageUrlForSlot(slot);
                     return (
@@ -774,7 +725,7 @@ export function ProductsWorkspace({
                         key={`${slot.pageId}-${slot.position}`}
                         type="button"
                         className={cn(
-                          "group flex min-h-0 flex-col overflow-hidden rounded-[20px] border border-white/10 p-2 text-left transition",
+                          "group flex min-h-0 flex-col overflow-hidden rounded-[18px] border border-white/10 p-1.5 text-left transition",
                           slot.product
                             ? "bg-white/[0.04] hover:border-primary/40 hover:bg-white/[0.06]"
                             : "bg-white/[0.02] hover:border-white/20",
@@ -783,7 +734,7 @@ export function ProductsWorkspace({
                         disabled={busy || (!editMode && slot.product?.isActive === false)}
                       >
                         <div
-                          className="flex h-full min-h-0 flex-col rounded-[16px] border border-white/8 p-2"
+                          className="flex h-full min-h-0 flex-col rounded-[14px] border border-white/8 p-1.5"
                           style={{
                             background: slot.product?.colorCode
                               ? `linear-gradient(180deg, ${slot.product.colorCode}33, rgba(15, 23, 42, 0.72))`
@@ -791,12 +742,12 @@ export function ProductsWorkspace({
                           }}
                         >
                           {editMode ? (
-                            <div className="mb-1 flex items-center justify-between gap-2 text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
+                            <div className="mb-0.5 flex items-center justify-between gap-2 text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
                               <span>{slot.product?.externalPlu ?? `Slot ${slot.position + 1}`}</span>
                               <span>{assignMode ? "Assign" : "Edit"}</span>
                             </div>
                           ) : null}
-                          <div className="min-h-0 flex-[1.18] overflow-hidden rounded-[14px] bg-slate-950/35">
+                          <div className="min-h-0 flex-[1.35] overflow-hidden rounded-[12px] bg-slate-950/35">
                             {imageUrl ? (
                               <img src={imageUrl} alt={label} className="h-full w-full object-cover" />
                             ) : (
@@ -805,10 +756,9 @@ export function ProductsWorkspace({
                               </div>
                             )}
                           </div>
-                          <div className="mt-2 space-y-0.5">
-                            <p className="line-clamp-2 text-sm font-semibold leading-tight text-foreground">{label}</p>
-                            <p className="text-sm font-medium text-primary/90">
-                              {slot.product ? formatCurrency(slot.product.unitGrossCents) : editMode ? "Tap to assign" : "No product"}
+                          <div className="mt-1.5">
+                            <p className="line-clamp-2 text-[13px] font-semibold leading-[1.2] text-foreground sm:text-sm">
+                              {label}
                             </p>
                           </div>
                         </div>
@@ -824,7 +774,7 @@ export function ProductsWorkspace({
                     key={page.id}
                     type="button"
                     variant={page.id === activePage.id ? "default" : "secondary"}
-                    className="h-14 rounded-[18px] px-0 text-base font-semibold"
+                    className="h-12 rounded-[16px] px-0 text-sm font-semibold"
                     onClick={() => setActivePageBySubcategory((current) => ({ ...current, [page.subcategoryId]: page.id }))}
                   >
                     {page.pageNumber}

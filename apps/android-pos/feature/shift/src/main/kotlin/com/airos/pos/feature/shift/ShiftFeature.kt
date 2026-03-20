@@ -1,7 +1,6 @@
 package com.airos.pos.feature.shift
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -108,6 +107,20 @@ fun ShiftScreen(
     customerDisplayProbeStatus: String?,
     isCustomerDisplayProbeFailure: Boolean,
     onRunCustomerDisplayProbe: () -> Unit,
+    receiptPrinterProbeStatus: String?,
+    isReceiptPrinterProbeFailure: Boolean,
+    onRunReceiptPrinterProbe: () -> Unit,
+    scannerProbeStatus: String?,
+    isScannerProbeFailure: Boolean,
+    scannerAvailabilityLabel: String,
+    scannerPackageLabel: String,
+    scannerServiceBindLabel: String,
+    scanManagerBindLabel: String,
+    broadcastStatusLabel: String,
+    scannerLastError: String?,
+    lastScannerValue: String?,
+    onStartScannerProbe: () -> Unit,
+    onStopScannerProbe: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxSize(),
@@ -161,6 +174,23 @@ fun ShiftScreen(
                     },
                 )
             }
+            Text(
+                text = "Receipt printer probe",
+                style = MaterialTheme.typography.titleSmall,
+            )
+            Button(onClick = onRunReceiptPrinterProbe) {
+                Text("Run receipt printer probe")
+            }
+            receiptPrinterProbeStatus?.let { status ->
+                StatusBanner(
+                    text = status,
+                    tint = if (isReceiptPrinterProbeFailure) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
+                )
+            }
         }
 
         PosPane(
@@ -181,6 +211,58 @@ fun ShiftScreen(
             KeyValueRow(
                 "Counted cash",
                 state.currentShift?.countedCashCents?.let(CentsFormatter::format) ?: "-",
+            )
+            Text(
+                text = "Scanner probe",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = "Availability: $scannerAvailabilityLabel",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                text = "Package: $scannerPackageLabel",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                text = "ScannerService bind: $scannerServiceBindLabel",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                text = "IScanManager bind: $scanManagerBindLabel",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                text = "Broadcast: $broadcastStatusLabel",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button(onClick = onStartScannerProbe) {
+                    Text("Start scanner probe")
+                }
+                Button(onClick = onStopScannerProbe) {
+                    Text("Stop scanner probe")
+                }
+            }
+            scannerProbeStatus?.let { status ->
+                StatusBanner(
+                    text = status,
+                    tint = if (isScannerProbeFailure) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
+                )
+            }
+            scannerLastError?.let { error ->
+                StatusBanner(
+                    text = error,
+                    tint = MaterialTheme.colorScheme.error,
+                )
+            }
+            Text(
+                text = "Last scanner value: ${lastScannerValue ?: "-"}",
+                style = MaterialTheme.typography.bodyMedium,
             )
         }
     }

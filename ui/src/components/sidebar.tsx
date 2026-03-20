@@ -1,4 +1,4 @@
-import { LayoutGrid, Package2, ReceiptText, Waves } from "lucide-react";
+import { LayoutGrid, Package2, ReceiptText, Settings2, Waves } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import type { AppRoute } from "@/lib/router";
@@ -9,6 +9,7 @@ const navItems = [
   { id: "products", label: "Products", icon: Package2 },
   { id: "checks", label: "Checks", icon: ReceiptText, disabled: true },
   { id: "service", label: "Service", icon: Waves, disabled: true },
+  { id: "settings", label: "Settings", icon: Settings2 },
 ] as const;
 
 type SidebarProps = {
@@ -20,10 +21,8 @@ export function Sidebar({ currentRoute, onNavigate }: SidebarProps) {
   return (
     <aside className="glass-card flex h-full flex-col justify-between p-4 xl:p-5">
       <div className="space-y-4">
-        <div className="flex justify-center rounded-[26px] border border-white/[0.08] bg-gradient-to-b from-slate-950/80 to-slate-950/35 p-3.5">
-          <div className="flex aspect-square w-full max-w-[168px] items-center justify-center overflow-hidden rounded-[26px] border border-white/[0.08] bg-black/40 shadow-[0_12px_32px_rgba(0,0,0,0.28)]">
-            <img src="/images/airos.png" alt="AIROS" className="block h-auto w-[82%] object-contain" />
-          </div>
+        <div className="flex justify-center pt-1">
+          <img src="/images/airos.png" alt="AIROS" className="block h-auto w-full max-w-[188px] rounded-[30px] object-contain" />
         </div>
 
         <div className="space-y-3">
@@ -40,7 +39,7 @@ export function Sidebar({ currentRoute, onNavigate }: SidebarProps) {
                   className={cn("w-full justify-start rounded-2xl px-4", !active && "opacity-70")}
                   disabled={disabled}
                   onClick={() => {
-                    if (item.id === "table-map" || item.id === "products") {
+                    if (item.id === "table-map" || item.id === "products" || item.id === "settings") {
                       onNavigate(item.id);
                     }
                   }}

@@ -28,30 +28,33 @@ export function PartyForm({ table, busy, onSubmit }: PartyFormProps) {
   }
 
   return (
-    <form className="space-y-4" onSubmit={(event) => void handleSubmit(event)}>
-      <div className="space-y-2">
-        <Label htmlFor="guest-count">Guest count</Label>
-        <Input
-          id="guest-count"
-          type="number"
-          min={1}
-          value={guestCount}
-          onChange={(event) => setGuestCount(event.target.value)}
-        />
-      </div>
+    <form className="space-y-3" onSubmit={(event) => void handleSubmit(event)}>
+      <div className="grid gap-3 sm:grid-cols-[112px_minmax(0,1fr)]">
+        <div className="space-y-2">
+          <Label htmlFor="guest-count">Guests</Label>
+          <Input
+            id="guest-count"
+            type="number"
+            min={1}
+            value={guestCount}
+            onChange={(event) => setGuestCount(event.target.value)}
+          />
+        </div>
 
-      <div className="space-y-2">
-        <Label htmlFor="party-note">Note</Label>
-        <Textarea
-          id="party-note"
-          value={note}
-          onChange={(event) => setNote(event.target.value)}
-          placeholder="Optional service note"
-        />
+        <div className="space-y-2">
+          <Label htmlFor="party-note">Note</Label>
+          <Textarea
+            id="party-note"
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+            placeholder="Optional service note"
+            className="min-h-[88px]"
+          />
+        </div>
       </div>
 
       <Button type="submit" className="w-full" disabled={busy}>
-        Open Party at {table.label}
+        Open Party
       </Button>
     </form>
   );

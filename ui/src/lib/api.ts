@@ -86,7 +86,7 @@ async function request<T>(path: string, init?: RequestOptions): Promise<T> {
 
 export async function getFloorplansOrTables(): Promise<FloorplanRecord[]> {
   try {
-    const floorplans = await request<any[]>("/api/staff/pos/floorplans");
+    const floorplans = await request<any>("/api/staff/pos/floorplans");
     const normalized = normalizeFloorplans(floorplans);
     if (normalized.length > 0) {
       return normalized;
@@ -95,12 +95,12 @@ export async function getFloorplansOrTables(): Promise<FloorplanRecord[]> {
     // Fall through to tables endpoint.
   }
 
-  const tables = await request<any[]>("/api/staff/pos/tables");
+  const tables = await request<any>("/api/staff/pos/tables");
   return buildSyntheticFloorplan(tables);
 }
 
 export async function getTableOverview(): Promise<TableOverviewRecord[]> {
-  const payload = await request<any[]>("/api/staff/pos/tables/overview");
+  const payload = await request<any>("/api/staff/pos/tables/overview");
   return normalizeTableOverview(payload);
 }
 
