@@ -1,0 +1,280 @@
+﻿C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:71: import com.airos.pos.core.model.TicketLine
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:104: val ticketLines: List<MenuTicketLine> = emptyList(),
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:112: data class MenuTicketLine(
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:121: private object MenuTicketDraftStore {
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:122: private val ticketLinesByTableId = mutableMapOf<String, List<MenuTicketLine>>()
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:124: fun load(tableId: String): List<MenuTicketLine> = ticketLinesByTableId[tableId].orEmpty()
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:126: fun save(tableId: String, lines: List<MenuTicketLine>) {
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:127: ticketLinesByTableId[tableId] = lines
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:131: ticketLinesByTableId.remove(tableId)
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:148: ticketLines = activeTableId?.let(MenuTicketDraftStore::load).orEmpty(),
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:161: fun addToTicket(item: MenuItem) {
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:162: updateTicketLines { currentLines ->
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:173: currentLines + MenuTicketLine(
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:183: fun decrementTicketLine(itemId: String) {
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:184: updateTicketLines { currentLines ->
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:196: fun removeTicketLine(itemId: String) {
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:197: updateTicketLines { currentLines ->
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:203: updateTicketLines { currentLines ->
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:222: updateTicketLines { currentLines ->
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:230: discountAmountCents = amountCents.coerceAtMost(line.subtotalCents()),
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:242: if (state.ticketLines.isEmpty()) {
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:243: mutableState.update { it.copy(paymentMessage = "Ticket is empty.") }
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:255: val request = buildTablePaymentRequest(result, mutableState.value.ticketLines)
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:266: clearTicketAfterSuccessfulCheckout()
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:281: add("Ticket closed and bill cleared.")
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:343: lines: List<MenuTicketLine>,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:345: val ticketLines = lines.mapIndexed { index, line ->
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:346: TicketLine(
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:352: totalPriceCents = line.totalCents(),
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:362: amountCents = result.finalTotalCents,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:372: amountCents = result.finalTotalCents,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:382: amountCents = result.finalTotalCents,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:413: lines = ticketLines,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:430: private fun clearTicketAfterSuccessfulCheckout() {
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:431: activeTableId?.let(MenuTicketDraftStore::clear)
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:434: ticketLines = emptyList(),
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:439: private fun updateTicketLines(
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:440: transform: (List<MenuTicketLine>) -> List<MenuTicketLine>,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:443: val updatedLines = transform(currentState.ticketLines)
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:446: MenuTicketDraftStore.clear(tableId)
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:448: MenuTicketDraftStore.save(tableId, updatedLines)
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:451: currentState.copy(ticketLines = updatedLines)
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:483: onAddItemToTicket: (MenuItem) -> Unit,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:484: onDecrementTicketLine: (String) -> Unit,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:485: onRemoveTicketLine: (String) -> Unit,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:513: val totalTicketItems = state.ticketLines.sumOf { it.quantity }
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:514: val ticketSubtotalCents = state.ticketLines.sumOf { it.totalCents() }
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:567: onSelectItem = onAddItemToTicket,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:584: TicketPane(
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:587: ticketLines = state.ticketLines,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:588: totalTicketItems = totalTicketItems,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:589: ticketSubtotalCents = ticketSubtotalCents,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:593: onDecrementTicketLine = onDecrementTicketLine,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:594: onRemoveTicketLine = onRemoveTicketLine,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:850: private fun RowScope.TicketPane(
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:853: ticketLines: List<MenuTicketLine>,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:854: totalTicketItems: Int,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:855: ticketSubtotalCents: Int,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:859: onDecrementTicketLine: (String) -> Unit,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:860: onRemoveTicketLine: (String) -> Unit,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:871: val selectedActionLine = ticketLines.firstOrNull { it.itemId == selectedActionLineId }
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:873: var previousTicketLines by remember { mutableStateOf(emptyList<MenuTicketLine>()) }
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:888: LaunchedEffect(ticketLines) {
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:889: findTicketAutoFollowIndex(previousTicketLines, ticketLines)?.let { targetIndex ->
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:892: previousTicketLines = ticketLines
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:942: if (ticketLines.isEmpty()) {
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:978: items = ticketLines,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:981: TicketLineRow(
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:983: onClick = { onDecrementTicketLine(line.itemId) },
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1010: MenuKeyValueRow("Items", totalTicketItems.toString())
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1011: MenuKeyValueRow("Lines", ticketLines.size.toString())
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1012: MenuKeyValueRow("Subtotal", CentsFormatter.format(ticketSubtotalCents), emphasized = true)
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1043: enabled = ticketLines.isNotEmpty() && !paymentInProgress,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1056: subtotalCents = ticketSubtotalCents,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1090: lineTotalCents = line.subtotalCents(),
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1101: lineTotalCents = line.subtotalCents(),
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1108: onRemoveTicketLine(line.itemId)
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1142: private fun TicketLineRow(
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1143: line: MenuTicketLine,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1202: text = CentsFormatter.format(line.subtotalCents()),
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1209: text = CentsFormatter.format(line.totalCents()),
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1397: line: MenuTicketLine,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1502: value = CentsFormatter.format(editor.lineTotalCents),
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1539: value = CentsFormatter.format(preview.discountedTotalCents),
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1777: "Tap a product tile to start this ticket."
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1843: val lineTotalCents: Int,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1854: it.lineTotalCents.toString(),
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1864: lineTotalCents = it[3].toInt(),
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1873: private fun MenuTicketLine.subtotalCents(): Int = quantity * unitPriceCents
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1875: private fun MenuTicketLine.discountCents(): Int {
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1876: val subtotal = subtotalCents()
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1884: private fun MenuTicketLine.totalCents(): Int = (subtotalCents() - discountCents()).coerceAtLeast(0)
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1886: private fun MenuTicketLine.hasDiscount(): Boolean = discountCents() > 0
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1888: private fun MenuTicketLine.discountLabel(): String? {
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1896: private fun buildLineMetaText(line: MenuTicketLine): String {
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1905: val discountedTotalCents: Int,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1912: val originalLineAmountCents = editor.lineTotalCents.coerceAtLeast(0)
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1931: discountedTotalCents = (originalLineAmountCents - enteredDiscountCents).coerceAtLeast(0),
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1935: private fun findTicketAutoFollowIndex(
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1936: previousLines: List<MenuTicketLine>,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuFeature.kt:1937: currentLines: List<MenuTicketLine>,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuPaymentDialog.kt:67: val finalTotalCents: Int,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuPaymentDialog.kt:72: subtotalCents: Int,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuPaymentDialog.kt:90: val billDiscountAmountCents = remember(subtotalCents, discountMode, discountInput) {
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuPaymentDialog.kt:95: ((subtotalCents * percent.coerceIn(0, 100)) / 100).coerceIn(0, subtotalCents)
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuPaymentDialog.kt:98: (parseEuroInputToCents(discountInput) ?: 0).coerceIn(0, subtotalCents)
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuPaymentDialog.kt:102: val finalTotalCents = (subtotalCents - billDiscountAmountCents).coerceAtLeast(0)
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuPaymentDialog.kt:114: MenuPaymentMode.CASH -> finalTotalCents > 0 && (cashTenderedCents ?: 0) >= finalTotalCents
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuPaymentDialog.kt:115: MenuPaymentMode.CARD -> finalTotalCents > 0
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuPaymentDialog.kt:116: MenuPaymentMode.VOUCHER -> finalTotalCents > 0 && (voucherAmountCents ?: 0) >= finalTotalCents
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuPaymentDialog.kt:117: MenuPaymentMode.SPLIT_PAYMENT -> finalTotalCents > 0 && splitPaidCents >= finalTotalCents && splitPaidCents > 0
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuPaymentDialog.kt:133: MenuPaymentMode.CARD -> finalTotalCents
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuPaymentDialog.kt:140: finalTotalCents = finalTotalCents,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuPaymentDialog.kt:173: subtotalCents = subtotalCents,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuPaymentDialog.kt:174: finalTotalCents = finalTotalCents,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuPaymentDialog.kt:325: exactAmountCents = finalTotalCents,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuPaymentDialog.kt:367: exactAmountCents = finalTotalCents,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuPaymentDialog.kt:489: subtotalCents: Int,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuPaymentDialog.kt:490: finalTotalCents: Int,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuPaymentDialog.kt:515: PaymentSummaryRow(label = "Subtotal", value = CentsFormatter.format(subtotalCents))
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuPaymentDialog.kt:527: PaymentSummaryRow(label = "To pay", value = CentsFormatter.format(finalTotalCents), emphasized = true)
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuPaymentDialog.kt:530: val changeCents = ((cashTenderedCents ?: 0) - finalTotalCents).coerceAtLeast(0)
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuPaymentDialog.kt:531: val remainingCents = (finalTotalCents - (cashTenderedCents ?: 0)).coerceAtLeast(0)
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuPaymentDialog.kt:538: PaymentSummaryRow(label = "Card amount", value = CentsFormatter.format(finalTotalCents), emphasized = true)
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuPaymentDialog.kt:543: val remainingCents = (finalTotalCents - voucherCents).coerceAtLeast(0)
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuPaymentDialog.kt:554: label = if (splitPaidCents >= finalTotalCents) "Change / overpay" else "Remaining",
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\menu\src\main\kotlin\com\airos\pos\feature\menu\MenuPaymentDialog.kt:555: value = CentsFormatter.format(abs(finalTotalCents - splitPaidCents)),
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\payment\src\main\kotlin\com\airos\pos\feature\payment\PaymentFeature.kt:40: val ticketId: String,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\payment\src\main\kotlin\com\airos\pos\feature\payment\PaymentFeature.kt:48: private val ticketId: String,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\payment\src\main\kotlin\com\airos\pos\feature\payment\PaymentFeature.kt:53: private val mutableState = MutableStateFlow(PaymentUiState(ticketId = ticketId))
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\payment\src\main\kotlin\com\airos\pos\feature\payment\PaymentFeature.kt:58: paymentRepository.observePaymentSummary(ticketId).collect { summary ->
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\payment\src\main\kotlin\com\airos\pos\feature\payment\PaymentFeature.kt:77: when (val result = paymentRepository.collectPayment(ticketId, method, summary.remainingCents)) {
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\payment\src\main\kotlin\com\airos\pos\feature\payment\PaymentFeature.kt:106: ReceiptLine("Ticket", ticketId),
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\payment\src\main\kotlin\com\airos\pos\feature\payment\PaymentFeature.kt:130: ticketId: String,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\payment\src\main\kotlin\com\airos\pos\feature\payment\PaymentFeature.kt:135: initializer { PaymentViewModel(ticketId, paymentRepository, printerService, cashDrawerService) }
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\payment\src\main\kotlin\com\airos\pos\feature\payment\PaymentFeature.kt:141: val ticketId: String,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\payment\src\main\kotlin\com\airos\pos\feature\payment\PaymentFeature.kt:149: private val ticketId: String,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\payment\src\main\kotlin\com\airos\pos\feature\payment\PaymentFeature.kt:152: private val mutableState = MutableStateFlow(RefundUiState(ticketId = ticketId))
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\payment\src\main\kotlin\com\airos\pos\feature\payment\PaymentFeature.kt:157: paymentRepository.observePaymentSummary(ticketId).collect { summary ->
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\payment\src\main\kotlin\com\airos\pos\feature\payment\PaymentFeature.kt:186: ticketId = ticketId,
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\payment\src\main\kotlin\com\airos\pos\feature\payment\PaymentFeature.kt:199: fun factory(ticketId: String, paymentRepository: PaymentRepository): ViewModelProvider.Factory = viewModelFactory {
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\payment\src\main\kotlin\com\airos\pos\feature\payment\PaymentFeature.kt:200: initializer { RefundViewModel(ticketId, paymentRepository) }
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\payment\src\main\kotlin\com\airos\pos\feature\payment\PaymentFeature.kt:217: title = "Payment • ${state.ticketId}",
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\payment\src\main\kotlin\com\airos\pos\feature\payment\PaymentFeature.kt:242: Button(onClick = { onGoToRefund(state.ticketId) }) { Text("Refund") }
+C:\AIROS code clean\AIROS POS\apps\android-pos\feature\payment\src\main\kotlin\com\airos\pos\feature\payment\PaymentFeature.kt:255: title = "Refund • ${state.ticketId}",
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\AirosPosApp.kt:99: const val PaymentPattern = "payment/{ticketId}"
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\AirosPosApp.kt:100: const val RefundPattern = "refund/{ticketId}"
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\AirosPosApp.kt:114: fun payment(ticketId: String): String = "payment/$ticketId"
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\AirosPosApp.kt:115: fun refund(ticketId: String): String = "refund/$ticketId"
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\AirosPosApp.kt:463: onAddItemToTicket = viewModel::addToTicket,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\AirosPosApp.kt:464: onDecrementTicketLine = viewModel::decrementTicketLine,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\AirosPosApp.kt:465: onRemoveTicketLine = viewModel::removeTicketLine,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\AirosPosApp.kt:514: arguments = listOf(navArgument("ticketId") { type = NavType.StringType }),
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\AirosPosApp.kt:516: val ticketId = entry.arguments?.getString("ticketId") ?: return@composable
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\AirosPosApp.kt:518: key = "payment-$ticketId",
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\AirosPosApp.kt:520: ticketId = ticketId,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\AirosPosApp.kt:535: onGoToRefund = { navController.navigate(Routes.refund(ticketId)) },
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\AirosPosApp.kt:541: arguments = listOf(navArgument("ticketId") { type = NavType.StringType }),
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\AirosPosApp.kt:543: val ticketId = entry.arguments?.getString("ticketId") ?: return@composable
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\AirosPosApp.kt:545: key = "refund-$ticketId",
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\AirosPosApp.kt:546: factory = RefundViewModel.factory(ticketId, appContainer.paymentRepository),
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\AppContainer.kt:26: import com.airos.pos.domain.TicketRepository
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\AppContainer.kt:37: val ticketRepository: TicketRepository
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\AppContainer.kt:66: override val ticketRepository: TicketRepository = FakeTicketRepository(store, authRepository, syncQueueRepository)
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:9: import com.airos.pos.core.model.KitchenTicketDocument
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:31: import com.airos.pos.core.model.Ticket
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:32: import com.airos.pos.core.model.TicketLine
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:33: import com.airos.pos.core.model.TicketStatus
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:42: import com.airos.pos.domain.TicketRepository
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:57: val tickets = MutableStateFlow(SampleData.initialTickets())
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:60: val paymentsByTicket = MutableStateFlow<Map<String, Int>>(emptyMap())
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:174: class FakeTicketRepository(
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:178: ) : TicketRepository {
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:179: override fun observeTicketForTable(tableId: String): Flow<Ticket?> {
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:180: return combine(store.floorMap, store.tickets) { floorMap, tickets ->
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:181: val activeTicketId = floorMap.tables.firstOrNull { it.id == tableId }?.activeTicketId
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:182: activeTicketId?.let(tickets::get)
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:186: override suspend fun ensureOpenTicket(tableId: String, openedByStaffId: String): PosResult<Ticket> {
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:187: return PosResult.Success(ensureOpenTicketInternal(tableId, openedByStaffId))
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:190: override suspend fun addItem(tableId: String, menuItemId: String): PosResult<Ticket> {
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:194: val ticket = ensureOpenTicketInternal(tableId, staffId)
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:195: val line = TicketLine(
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:203: val updatedTicket = recalculateTicket(ticket.copy(lines = ticket.lines + line))
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:204: store.tickets.value = store.tickets.value + (updatedTicket.id to updatedTicket)
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:208: aggregateType = "ticket",
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:209: aggregateId = updatedTicket.id,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:213: return PosResult.Success(updatedTicket)
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:216: override suspend fun sendToKitchen(ticketId: String): PosResult<Ticket> {
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:217: val ticket = store.tickets.value[ticketId] ?: return PosResult.Failure("Ticket not found.")
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:218: val updated = ticket.copy(status = TicketStatus.SENT_TO_KITCHEN, syncState = SyncState.QUEUED)
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:219: store.tickets.value = store.tickets.value + (ticketId to updated)
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:220: val tableLabel = store.floorMap.value.tables.firstOrNull { it.id == ticket.tableId }?.label ?: ticket.tableId
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:222: ticketId = ticketId,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:224: itemSummaries = ticket.lines.map { "${it.quantity}x ${it.name}" },
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:231: aggregateType = "ticket",
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:232: aggregateId = ticketId,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:234: payloadJson = """{"ticketId":"$ticketId"}""",
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:239: private fun recalculateTicket(ticket: Ticket): Ticket {
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:241: val subtotal = ticket.lines.sumOf { it.totalPriceCents }
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:242: val tax = ticket.lines.sumOf { line ->
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:246: return ticket.copy(
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:247: subtotalCents = subtotal,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:248: taxCents = tax,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:249: totalCents = subtotal,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:251: status = if (ticket.status == TicketStatus.SENT_TO_KITCHEN) TicketStatus.SENT_TO_KITCHEN else TicketStatus.OPEN,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:255: private fun ensureOpenTicketInternal(tableId: String, openedByStaffId: String): Ticket {
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:257: val currentTicket = currentTable.activeTicketId?.let { store.tickets.value[it] }
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:258: if (currentTicket != null && currentTicket.status != TicketStatus.CLOSED) {
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:259: return currentTicket
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:262: val ticket = Ticket(
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:263: id = store.nextId("ticket"),
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:267: status = TicketStatus.OPEN,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:269: subtotalCents = 0,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:270: taxCents = 0,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:271: totalCents = 0,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:274: store.tickets.value = store.tickets.value + (ticket.id to ticket)
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:278: table.copy(status = TableStatus.OCCUPIED, activeTicketId = ticket.id, guestCount = if (table.guestCount == 0) 2 else table.guestCount)
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:284: return ticket
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:293: override suspend fun markReady(ticketId: String): PosResult<Unit> {
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:294: store.kitchenOrders.value = store.kitchenOrders.value.filterNot { it.ticketId == ticketId }
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:295: store.tickets.value[ticketId]?.let { ticket ->
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:296: store.tickets.value = store.tickets.value + (ticketId to ticket.copy(status = TicketStatus.READY_TO_PAY))
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:306: override fun observePaymentSummary(ticketId: String): Flow<PaymentSummary?> {
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:307: return combine(store.tickets, store.paymentsByTicket) { tickets, payments ->
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:308: val ticket = tickets[ticketId] ?: return@combine null
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:309: val paid = payments[ticketId] ?: 0
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:311: ticketId = ticketId,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:312: totalDueCents = ticket.totalCents,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:314: remainingCents = (ticket.totalCents - paid).coerceAtLeast(0),
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:321: override suspend fun collectPayment(ticketId: String, method: PaymentMethod, amountCents: Int): PosResult<PaymentSummary> {
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:322: val ticket = store.tickets.value[ticketId] ?: return PosResult.Failure("Ticket not found.")
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:323: val nextPaid = (store.paymentsByTicket.value[ticketId] ?: 0) + amountCents
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:324: store.paymentsByTicket.value = store.paymentsByTicket.value + (ticketId to nextPaid)
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:325: val isSettled = nextPaid >= ticket.totalCents
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:326: val updatedTicket = if (isSettled) ticket.copy(status = TicketStatus.PAID, syncState = SyncState.QUEUED) else ticket
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:327: store.tickets.value = store.tickets.value + (ticketId to updatedTicket)
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:331: if (table.activeTicketId == ticketId) {
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:332: table.copy(status = TableStatus.AVAILABLE, activeTicketId = null, guestCount = 0)
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:343: aggregateId = ticketId,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:349: ticketId = ticketId,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:350: totalDueCents = ticket.totalCents,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:352: remainingCents = (ticket.totalCents - nextPaid).coerceAtLeast(0),
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:361: return PosResult.Failure("Ticket is empty.")
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:378: val ticketId = store.floorMap.value.tables
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:380: ?.activeTicketId
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:381: ?: store.nextId("ticket")
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:383: val closedTicket = Ticket(
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:384: id = ticketId,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:388: status = TicketStatus.CLOSED,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:390: subtotalCents = subtotalBeforeDiscountCents,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:391: taxCents = 0,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:392: totalCents = totalDueCents,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:396: store.tickets.value = store.tickets.value + (ticketId to closedTicket)
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:397: store.paymentsByTicket.value = store.paymentsByTicket.value + (ticketId to totalPaidCents)
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:402: if (table.id == resolvedTableId || table.activeTicketId == ticketId) {
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:403: table.copy(status = TableStatus.AVAILABLE, activeTicketId = null, guestCount = 0)
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:415: aggregateId = ticketId,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:433: add(ReceiptLine(label = "Ticket", value = ticketId))
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:465: subtotalCents = subtotalBeforeDiscountCents,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:467: taxCents = 0,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:468: totalCents = totalDueCents,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:470: receiptNumber = ticketId,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:471: orderNumber = ticketId,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:477: ticketId = ticketId,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:490: val ticket = store.tickets.value[request.ticketId] ?: return PosResult.Failure("Ticket not found.")
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:491: store.tickets.value = store.tickets.value + (request.ticketId to ticket.copy(status = TicketStatus.REFUND_PENDING))
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\FakeRepositories.kt:496: aggregateId = request.ticketId,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\SampleData.kt:10: import com.airos.pos.core.model.Ticket
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\SampleData.kt:11: import com.airos.pos.core.model.TicketLine
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\SampleData.kt:12: import com.airos.pos.core.model.TicketStatus
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\SampleData.kt:105: RestaurantTable("table-2", "T2", "Window", 4, TableStatus.OCCUPIED, guestCount = 2, activeTicketId = "ticket-t2-open", position = TablePosition(300, 88, 160, 112), cameraId = "cam1", cameraLabel = "Cam 1 · Window lane"),
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\SampleData.kt:127: fun initialTickets(): Map<String, Ticket> = mapOf(
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\SampleData.kt:128: "ticket-t2-open" to Ticket(
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\SampleData.kt:129: id = "ticket-t2-open",
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\SampleData.kt:133: status = TicketStatus.OPEN,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\SampleData.kt:135: TicketLine(
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\SampleData.kt:144: subtotalCents = 1290,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\SampleData.kt:145: taxCents = 158,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\src\main\java\com\airos\pos\app\SampleData.kt:146: totalCents = 1290,
+C:\AIROS code clean\AIROS POS\apps\android-pos\app\build.gradle.kts:23: implementation(project(":feature:ticket"))

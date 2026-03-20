@@ -1,6 +1,7 @@
 package com.airos.pos.app
 
 import com.airos.pos.core.common.PosResult
+import com.airos.pos.core.common.CentsFormatter
 import com.airos.pos.core.datastore.TerminalPreferencesStore
 import com.airos.pos.core.model.AuthSession
 import com.airos.pos.core.model.FloorMap
@@ -12,6 +13,12 @@ import com.airos.pos.core.model.MenuItem
 import com.airos.pos.core.model.PaymentMethod
 import com.airos.pos.core.model.PaymentSummary
 import com.airos.pos.core.model.PosShift
+import com.airos.pos.core.model.ReceiptDocument
+import com.airos.pos.core.model.ReceiptLine
+import com.airos.pos.core.model.ReceiptPaymentRecord
+import com.airos.pos.core.model.ReceiptTotals
+import com.airos.pos.core.model.TablePaymentRequest
+import com.airos.pos.core.model.TablePaymentResult
 import com.airos.pos.core.model.RefundRequest
 import com.airos.pos.core.model.RestaurantTable
 import com.airos.pos.core.model.ShiftStatus
@@ -345,6 +352,136 @@ class FakePaymentRepository(
                 remainingCents = (ticket.totalCents - nextPaid).coerceAtLeast(0),
                 availableMethods = listOf(PaymentMethod.CASH, PaymentMethod.CARD, PaymentMethod.VOUCHER),
                 refundEligible = nextPaid > 0,
+            ),
+        )
+    }
+
+    override suspend fun finalizeTablePayment(request: TablePaymentRequest): PosResult<TablePaymentResult> {
+        if (request.lines.isEmpty()) {
+            return PosResult.Failure("Ticket is empty.")
+        }
+
+        val subtotalBeforeDiscountCents = request.lines.sumOf { it.totalPriceCents }
+        val discountCents = request.discountAmountCents.coerceIn(0, subtotalBeforeDiscountCents)
+        val totalDueCents = (subtotalBeforeDiscountCents - discountCents).coerceAtLeast(0)
+        val totalPaidCents = request.payments.sumOf { it.amountCents.coerceAtLeast(0) }
+        if (totalPaidCents < totalDueCents) {
+            return PosResult.Failure("Payment total is smaller than the bill total.")
+        }
+
+        val resolvedTableId = request.tableId
+        val resolvedTableLabel = request.tableLabel?.ifBlank { null }
+            ?: resolvedTableId?.let { tableId ->
+                store.floorMap.value.tables.firstOrNull { it.id == tableId }?.label
+            }
+
+        val ticketId = store.floorMap.value.tables
+            .firstOrNull { table -> table.id == resolvedTableId }
+            ?.activeTicketId
+            ?: store.nextId("ticket")
+
+        val closedTicket = Ticket(
+            id = ticketId,
+            tableId = resolvedTableId ?: "walk-in",
+            openedByStaffId = "menu-checkout",
+            openedAtEpochMillis = store.now(),
+            status = TicketStatus.CLOSED,
+            lines = request.lines,
+            subtotalCents = subtotalBeforeDiscountCents,
+            taxCents = 0,
+            totalCents = totalDueCents,
+            syncState = SyncState.QUEUED,
+        )
+
+        store.tickets.value = store.tickets.value + (ticketId to closedTicket)
+        store.paymentsByTicket.value = store.paymentsByTicket.value + (ticketId to totalPaidCents)
+
+        if (resolvedTableId != null) {
+            store.floorMap.value = store.floorMap.value.copy(
+                tables = store.floorMap.value.tables.map { table ->
+                    if (table.id == resolvedTableId || table.activeTicketId == ticketId) {
+                        table.copy(status = TableStatus.AVAILABLE, activeTicketId = null, guestCount = 0)
+                    } else {
+                        table
+                    }
+                },
+            )
+        }
+
+        enqueueSyncItem(
+            store = store,
+            syncQueueRepository = syncQueueRepository,
+            aggregateType = "payment",
+            aggregateId = ticketId,
+            action = "finalize_table_payment",
+            payloadJson = """{"tableId":"${resolvedTableId ?: ""}","totalDueCents":$totalDueCents,"totalPaidCents":$totalPaidCents,"discountCents":$discountCents}""",
+        )
+
+        val paymentRecords = request.payments
+            .filter { it.amountCents > 0 }
+            .map { entry ->
+                ReceiptPaymentRecord(
+                    method = entry.method,
+                    amountCents = entry.amountCents,
+                    reference = entry.reference,
+                    displayLabel = entry.displayLabel,
+                )
+            }
+
+        val changeCents = ((request.cashTenderedCents ?: totalPaidCents) - totalDueCents).coerceAtLeast(0)
+        val receiptLines = buildList {
+            add(ReceiptLine(label = "Ticket", value = ticketId))
+            resolvedTableLabel?.let { add(ReceiptLine(label = "Table", value = it)) }
+            request.lines.forEach { line ->
+                add(ReceiptLine(label = "${line.quantity}x ${line.name}", value = CentsFormatter.format(line.totalPriceCents)))
+            }
+            if (discountCents > 0) {
+                add(
+                    ReceiptLine(
+                        label = request.discountLabel?.let { "Discount ($it)" } ?: "Discount",
+                        value = "-${CentsFormatter.format(discountCents)}",
+                    ),
+                )
+            }
+            add(ReceiptLine(label = "Total", value = CentsFormatter.format(totalDueCents)))
+            paymentRecords.forEach { payment ->
+                val paymentLabel = payment.displayLabel ?: payment.method.name.lowercase().replaceFirstChar { it.titlecase() }
+                add(ReceiptLine(label = paymentLabel, value = CentsFormatter.format(payment.amountCents)))
+            }
+            if (changeCents > 0) {
+                add(ReceiptLine(label = "Change", value = CentsFormatter.format(changeCents)))
+            }
+            request.voucherBarcodeValue?.takeIf { it.isNotBlank() }?.let { barcode ->
+                add(ReceiptLine(label = "Voucher code", value = barcode))
+            }
+        }
+
+        val receiptDocument = ReceiptDocument(
+            title = "AIROS Receipt",
+            lines = receiptLines,
+            footer = "Thank you",
+            payments = paymentRecords,
+            totals = ReceiptTotals(
+                subtotalCents = subtotalBeforeDiscountCents,
+                discountCents = discountCents,
+                taxCents = 0,
+                totalCents = totalDueCents,
+            ),
+            receiptNumber = ticketId,
+            orderNumber = ticketId,
+            printedAtEpochMillis = store.now(),
+        )
+
+        return PosResult.Success(
+            TablePaymentResult(
+                ticketId = ticketId,
+                tableId = resolvedTableId,
+                tableLabel = resolvedTableLabel,
+                totalDueCents = totalDueCents,
+                totalPaidCents = totalPaidCents,
+                changeCents = changeCents,
+                payments = paymentRecords,
+                receiptDocument = receiptDocument,
             ),
         )
     }

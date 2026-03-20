@@ -75,9 +75,24 @@ class PaymentViewModel(
         val summary = mutableState.value.summary ?: return
         viewModelScope.launch {
             when (val result = paymentRepository.collectPayment(ticketId, method, summary.remainingCents)) {
-                is PosResult.Success -> mutableState.update { it.copy(summary = result.value, message = "${method.name} payment recorded.") }
+                is PosResult.Success -> mutableState.update {
+                    it.copy(
+                        summary = result.value,
+                        message = when (method) {
+                            PaymentMethod.CASH -> "Cash payment recorded."
+                            PaymentMethod.CARD -> "Card payment recorded."
+                            PaymentMethod.VOUCHER -> "Voucher payment recorded."
+                        },
+                    )
+                }
                 is PosResult.Failure -> mutableState.update { it.copy(message = result.message) }
             }
+        }
+    }
+
+    fun showSplitPaymentPlanned() {
+        mutableState.update {
+            it.copy(message = "Split payment now belongs in the unified menu payment sheet. This legacy screen is not the active path for it anymore.")
         }
     }
 
@@ -192,6 +207,8 @@ fun PaymentScreen(
     state: PaymentUiState,
     onCollectCash: () -> Unit,
     onCollectCard: () -> Unit,
+    onCollectVoucher: () -> Unit,
+    onSplitPayment: () -> Unit,
     onPrintReceipt: () -> Unit,
     onOpenDrawer: () -> Unit,
     onGoToRefund: (String) -> Unit,
@@ -207,9 +224,19 @@ fun PaymentScreen(
         KeyValueRow("Due", state.summary?.totalDueCents?.let(CentsFormatter::format) ?: "-")
         KeyValueRow("Paid", state.summary?.paidCents?.let(CentsFormatter::format) ?: "-")
         KeyValueRow("Remaining", state.summary?.remainingCents?.let(CentsFormatter::format) ?: "-")
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = onCollectCash) { Text("Take cash") }
-            Button(onClick = onCollectCard) { Text("Take card") }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Button(onClick = onCollectCash) { Text("Cash") }
+            Button(onClick = onCollectCard) { Text("Card") }
+            Button(onClick = onCollectVoucher) { Text("Voucher") }
+            Button(onClick = onSplitPayment) { Text("Split payment") }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
             Button(onClick = onPrintReceipt) { Text("Print receipt") }
             Button(onClick = onOpenDrawer) { Text("Open drawer") }
             Button(onClick = { onGoToRefund(state.ticketId) }) { Text("Refund") }

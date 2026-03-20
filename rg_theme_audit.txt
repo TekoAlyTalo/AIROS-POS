@@ -1,0 +1,2 @@
+﻿.\README.md:22:- `core/network`: Retrofit and OkHttp foundation, TODO-CONTRACT API surface
+.\README.md:29:- `sync`: queued write primitives and sync coordinator placeholder

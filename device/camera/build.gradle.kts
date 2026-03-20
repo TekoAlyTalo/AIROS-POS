@@ -8,5 +8,5 @@ dependencies {
     implementation(project(":core:network"))
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.okhttp.core)
-    implementation(files("$rootDir/libs/google-webrtc-vetted.aar"))
+    compileOnly(files("$rootDir/libs/google-webrtc-vetted.aar"))
 }

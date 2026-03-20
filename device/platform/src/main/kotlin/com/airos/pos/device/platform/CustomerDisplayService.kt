@@ -88,18 +88,18 @@ class SunmiCustomerDisplayService(
 
     override fun updateCustomerTotalDisplay(totalCents: Int?) {
         val ticketPresent = totalCents != null
-        val formattedValue = formatCustomerDisplayTotal(totalCents)
+        val displayValue = formatCustomerDisplayTotal(totalCents)
         logInfo(
             "customerDisplayUpdate start " +
                 "ticketPresent=$ticketPresent totalCents=${totalCents ?: "-"} " +
-                "formatted=$formattedValue nullFallback=$CUSTOMER_DISPLAY_EMPTY_TOTAL",
+                "displayValue=$displayValue nullFallback=$CUSTOMER_DISPLAY_EMPTY_TOTAL",
         )
         thread(start = true, isDaemon = true, name = "sunmi-customer-display-update") {
             val sdkInstance = runCatching { PrinterSdk.getInstance() }.getOrElse { error ->
                 logWarn(
                     "customerDisplayUpdate exception class=${error.javaClass.name} " +
                         "message=${error.message ?: "-"} step=getInstance " +
-                        "ticketPresent=$ticketPresent totalCents=${totalCents ?: "-"} formatted=$formattedValue",
+                        "ticketPresent=$ticketPresent totalCents=${totalCents ?: "-"} displayValue=$displayValue",
                 )
                 return@thread
             }
@@ -129,7 +129,7 @@ class SunmiCustomerDisplayService(
                 logWarn(
                     "customerDisplayUpdate exception class=${error.javaClass.name} " +
                         "message=${error.message ?: "-"} step=getPrinter " +
-                        "ticketPresent=$ticketPresent totalCents=${totalCents ?: "-"} formatted=$formattedValue",
+                        "ticketPresent=$ticketPresent totalCents=${totalCents ?: "-"} displayValue=$displayValue",
                 )
                 return@thread
             }
@@ -138,7 +138,7 @@ class SunmiCustomerDisplayService(
                 logWarn(
                     "customerDisplayUpdate callbackTimeout " +
                         "ticketPresent=$ticketPresent totalCents=${totalCents ?: "-"} " +
-                        "formatted=$formattedValue timeoutMs=$PRINTER_X_CALLBACK_TIMEOUT_MS",
+                        "displayValue=$displayValue timeoutMs=$PRINTER_X_CALLBACK_TIMEOUT_MS",
                 )
                 return@thread
             }
@@ -148,7 +148,7 @@ class SunmiCustomerDisplayService(
                 logWarn(
                     "customerDisplayUpdate printerMissing " +
                         "ticketPresent=$ticketPresent totalCents=${totalCents ?: "-"} " +
-                        "formatted=$formattedValue callback=${callbackState.get()}",
+                        "displayValue=$displayValue callback=${callbackState.get()}",
                 )
                 return@thread
             }
@@ -157,30 +157,30 @@ class SunmiCustomerDisplayService(
                 logWarn(
                     "customerDisplayUpdate exception class=${error.javaClass.name} " +
                         "message=${error.message ?: "-"} step=lcdApi " +
-                        "ticketPresent=$ticketPresent totalCents=${totalCents ?: "-"} formatted=$formattedValue",
+                        "ticketPresent=$ticketPresent totalCents=${totalCents ?: "-"} displayValue=$displayValue",
                 )
                 return@thread
             }
             logInfo(
                 "customerDisplayUpdate lcdApiObtained=${lcdApi != null} " +
-                    "ticketPresent=$ticketPresent totalCents=${totalCents ?: "-"} formatted=$formattedValue",
+                    "ticketPresent=$ticketPresent totalCents=${totalCents ?: "-"} displayValue=$displayValue",
             )
             if (lcdApi == null) {
                 return@thread
             }
 
-            runCatching { lcdApi.showDigital(formattedValue) }
+            runCatching { lcdApi.showDigital(displayValue) }
                 .onSuccess {
                     logInfo(
                         "customerDisplayUpdate success " +
-                            "ticketPresent=$ticketPresent totalCents=${totalCents ?: "-"} formatted=$formattedValue",
+                            "ticketPresent=$ticketPresent totalCents=${totalCents ?: "-"} displayValue=$displayValue",
                     )
                 }
                 .onFailure { error ->
                     logWarn(
                         "customerDisplayUpdate exception class=${error.javaClass.name} " +
                             "message=${error.message ?: "-"} step=showDigital " +
-                            "ticketPresent=$ticketPresent totalCents=${totalCents ?: "-"} formatted=$formattedValue",
+                            "ticketPresent=$ticketPresent totalCents=${totalCents ?: "-"} displayValue=$displayValue",
                     )
                 }
         }
@@ -3520,7 +3520,10 @@ class SunmiCustomerDisplayService(
     }
 
     private fun formatCustomerDisplayTotal(totalCents: Int?): String {
-        val cents = totalCents ?: 0
+        if (totalCents == null) {
+            return CUSTOMER_DISPLAY_EMPTY_TOTAL
+        }
+        val cents = totalCents
         val sign = if (cents < 0) "-" else ""
         val absoluteCents = kotlin.math.abs(cents)
         val whole = absoluteCents / 100

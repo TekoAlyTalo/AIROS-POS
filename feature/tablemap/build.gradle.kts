@@ -17,6 +17,6 @@ dependencies {
     implementation(libs.androidx.compose.foundation)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.ui)
-    implementation(files("$rootDir/libs/google-webrtc-vetted.aar"))
+    compileOnly(files("$rootDir/libs/google-webrtc-vetted.aar"))
     implementation(libs.kotlinx.coroutines.android)
 }

@@ -10,6 +10,8 @@ import com.airos.pos.core.model.MenuItem
 import com.airos.pos.core.model.PaymentMethod
 import com.airos.pos.core.model.PaymentSummary
 import com.airos.pos.core.model.PosShift
+import com.airos.pos.core.model.TablePaymentRequest
+import com.airos.pos.core.model.TablePaymentResult
 import com.airos.pos.core.model.RefundRequest
 import com.airos.pos.core.model.RestaurantTable
 import com.airos.pos.core.model.StaffMember
@@ -65,6 +67,7 @@ interface KitchenRepository {
 interface PaymentRepository {
     fun observePaymentSummary(ticketId: String): Flow<PaymentSummary?>
     suspend fun collectPayment(ticketId: String, method: PaymentMethod, amountCents: Int): PosResult<PaymentSummary>
+    suspend fun finalizeTablePayment(request: TablePaymentRequest): PosResult<TablePaymentResult>
     suspend fun refund(request: RefundRequest): PosResult<Unit>
 }
 
