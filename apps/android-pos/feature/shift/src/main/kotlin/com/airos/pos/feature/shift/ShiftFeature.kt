@@ -1,6 +1,9 @@
 package com.airos.pos.feature.shift
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -113,14 +116,18 @@ fun ShiftScreen(
     scannerProbeStatus: String?,
     isScannerProbeFailure: Boolean,
     scannerAvailabilityLabel: String,
-    scannerPackageLabel: String,
-    scannerServiceBindLabel: String,
-    scanManagerBindLabel: String,
-    broadcastStatusLabel: String,
-    scannerLastError: String?,
     lastScannerValue: String?,
-    onStartScannerProbe: () -> Unit,
+    scannerDiagnosticEvents: List<String>,
+    onPrepareScanner: () -> Unit,
+    onTriggerScanner: () -> Unit,
+    onCameraOnAndScan: () -> Unit,
+    onTriggerKeyDown: () -> Unit,
+    onTriggerKeyUp: () -> Unit,
     onStopScannerProbe: () -> Unit,
+    onLaunchScannerUi: () -> Unit,
+    onOpenScannerSettings: () -> Unit,
+    onOpenScannerDeviceSettings: () -> Unit,
+    onOpenScannerKeyboardSettings: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxSize(),
@@ -198,72 +205,93 @@ fun ShiftScreen(
             supportingText = "Shift metrics are stored in cents for deterministic money integrity.",
             modifier = Modifier.weight(1f),
         ) {
-            KeyValueRow("Status", state.currentShift?.status?.name ?: "CLOSED")
-            KeyValueRow("Opened by", state.currentShift?.openedByStaffId ?: "-")
-            KeyValueRow(
-                "Opening float",
-                state.currentShift?.openingFloatCents?.let(CentsFormatter::format) ?: CentsFormatter.format(0),
-            )
-            KeyValueRow(
-                "Expected cash",
-                state.currentShift?.expectedCashCents?.let(CentsFormatter::format) ?: CentsFormatter.format(0),
-            )
-            KeyValueRow(
-                "Counted cash",
-                state.currentShift?.countedCashCents?.let(CentsFormatter::format) ?: "-",
-            )
-            Text(
-                text = "Scanner probe",
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                text = "Availability: $scannerAvailabilityLabel",
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Text(
-                text = "Package: $scannerPackageLabel",
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Text(
-                text = "ScannerService bind: $scannerServiceBindLabel",
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Text(
-                text = "IScanManager bind: $scanManagerBindLabel",
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Text(
-                text = "Broadcast: $broadcastStatusLabel",
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(onClick = onStartScannerProbe) {
-                    Text("Start scanner probe")
-                }
-                Button(onClick = onStopScannerProbe) {
-                    Text("Stop scanner probe")
-                }
-            }
-            scannerProbeStatus?.let { status ->
-                StatusBanner(
-                    text = status,
-                    tint = if (isScannerProbeFailure) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.primary
-                    },
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = "Scanner",
+                    style = MaterialTheme.typography.titleMedium,
                 )
-            }
-            scannerLastError?.let { error ->
-                StatusBanner(
-                    text = error,
-                    tint = MaterialTheme.colorScheme.error,
+                Text(
+                    text = "Last scanner value: ${lastScannerValue ?: "-"}",
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.fillMaxWidth(),
                 )
+                Text(
+                    text = "Availability: $scannerAvailabilityLabel",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                scannerProbeStatus?.let { status ->
+                    StatusBanner(
+                        text = status,
+                        tint = if (isScannerProbeFailure) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        },
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(onClick = onPrepareScanner) {
+                        Text("Prepare scanner")
+                    }
+                    Button(onClick = onTriggerScanner) {
+                        Text("Trigger scan")
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(onClick = onCameraOnAndScan) {
+                        Text("Camera on + scan")
+                    }
+                    Button(onClick = onTriggerKeyDown) {
+                        Text("Key down")
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(onClick = onTriggerKeyUp) {
+                        Text("Key up")
+                    }
+                    Button(onClick = onStopScannerProbe) {
+                        Text("Stop scanner")
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(onClick = onLaunchScannerUi) {
+                        Text("Launch Sunmi UI")
+                    }
+                    Button(onClick = onOpenScannerSettings) {
+                        Text("Scanner settings")
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(onClick = onOpenScannerDeviceSettings) {
+                        Text("Device settings")
+                    }
+                    Button(onClick = onOpenScannerKeyboardSettings) {
+                        Text("Keyboard settings")
+                    }
+                }
+
+                Text(
+                    text = "Recent scanner events",
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                scannerDiagnosticEvents.take(6).forEach { event ->
+                    Text(
+                        text = "• $event",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+
+                Text(
+                    text = "Shift status",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                KeyValueRow("Status", state.currentShift?.status?.name ?: "CLOSED")
             }
-            Text(
-                text = "Last scanner value: ${lastScannerValue ?: "-"}",
-                style = MaterialTheme.typography.bodyMedium,
-            )
         }
     }
 }

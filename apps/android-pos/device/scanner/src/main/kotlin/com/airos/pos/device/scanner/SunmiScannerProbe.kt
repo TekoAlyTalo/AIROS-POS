@@ -6,10 +6,13 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.ServiceConnection
-import android.content.pm.PackageManager
+import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.os.IInterface
+import android.os.Parcel
 import android.util.Log
+import android.view.KeyEvent
 import com.airos.pos.core.model.DeviceConnectionState
 import com.airos.pos.core.model.ScanEvent
 
@@ -17,352 +20,643 @@ internal class SunmiScannerProbe(
     private val context: Context,
     private val onAvailabilityChanged: (DeviceConnectionState) -> Unit,
     private val onScanEvent: (ScanEvent) -> Unit,
-    private val onDebugStateChanged: (ScannerProbeDebugState) -> Unit,
+    private val onDiagnosticEvent: (String) -> Unit,
 ) {
-    private var started = false
-    private var broadcastRegistered = false
+    private var prepared = false
+    private var receiverRegistered = false
+    private var callbackRegistered = false
+    private var scannerBinder: IBinder? = null
     private var scannerConnection: ServiceConnection? = null
-    private var managerConnection: ServiceConnection? = null
-    private var debugState = ScannerProbeDebugState()
+    private var pendingFlashControl: Boolean? = null
 
-    fun start() {
-        if (started) return
-        started = true
 
-        val scannerInstalled = isPackageInstalled(SUNMI_SCANNER_PACKAGE)
-        val qrScannerInstalled = isPackageInstalled(SUNMI_QR_SCANNER_PACKAGE)
-        updateDebugState {
-            copy(
-                scannerPackageFound = scannerInstalled,
-                qrScannerPackageFound = qrScannerInstalled,
-                lastStatus = "Probe starting",
-                lastError = null,
-            )
+    private val callbackKey = "${context.packageName}-airos-scan"
+    private val dataCallback = object : Binder(), IInterface {
+        init {
+            attachInterface(this, DATA_CALLBACK_TOKEN)
         }
 
-        if (!scannerInstalled && !qrScannerInstalled) {
-            onAvailabilityChanged(DeviceConnectionState.UNAVAILABLE)
-            updateDebugState {
-                copy(
-                    lastStatus = "No supported Sunmi scanner package found",
-                    lastError = "Neither com.sunmi.scanner nor com.sunmi.sunmiqrcodescanner is installed",
-                )
+        override fun asBinder(): IBinder = this
+
+        override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
+            return when (code) {
+                IBinder.INTERFACE_TRANSACTION -> {
+                    reply?.writeString(DATA_CALLBACK_TOKEN)
+                    true
+                }
+                TRANSACTION_CALLBACK_DATA -> {
+                    data.enforceInterface(DATA_CALLBACK_TOKEN)
+                    val first = data.readString().orEmpty()
+                    val bytes = data.createByteArray() ?: ByteArray(0)
+                    val second = data.readString().orEmpty()
+                    reply?.writeNoException()
+                    handleCallback(first, bytes, second)
+                    true
+                }
+                else -> super.onTransact(code, data, reply, flags)
             }
-            Log.i(TAG, "Sunmi scanner package not found on device.")
+        }
+    }
+
+    fun prepare() {
+        if (!isScannerPackageInstalled()) {
+            onAvailabilityChanged(DeviceConnectionState.UNAVAILABLE)
+            emitDiagnostic("Scanner package not found.")
+            Log.i(TAG, "Sunmi scanner package not found.")
             return
         }
-
+        emitDiagnostic("Prepare scanner requested.")
         registerBroadcastReceiver()
         bindScannerService()
-        bindScanManagerService()
+    }
 
-        updateDebugState {
-            copy(lastStatus = "Probe started. Waiting for bind and scan data")
+    fun triggerScan() {
+        prepare()
+        val binder = scannerBinder
+        if (binder == null) {
+            emitDiagnostic("Trigger requested before scanner binder was ready.")
+            Log.i(TAG, "Trigger requested before scanner binder was ready.")
+            return
         }
-        Log.i(
-            TAG,
-            "Sunmi scanner probe started. scannerInstalled=$scannerInstalled qrScannerInstalled=$qrScannerInstalled",
-        )
+        val ok = transactNoArg(binder, TRANSACTION_SCAN, "scan")
+        emitDiagnostic("Binder scan transaction result=$ok")
+        Log.i(TAG, "Trigger scan result=$ok")
+        if (ok) {
+            onAvailabilityChanged(resolveConnectedState())
+        }
+    }
+
+    fun cameraOnAndScan() {
+        prepare()
+        val binder = scannerBinder
+        if (binder == null) {
+            emitDiagnostic("Camera-on scan requested before scanner binder was ready.")
+            Log.i(TAG, "Camera-on scan requested before scanner binder was ready.")
+            return
+        }
+        val cameraOnOk = transactInt(binder, TRANSACTION_ON_CAMERA_ON, 1500, "onCameraOn")
+        emitDiagnostic("onCameraOn transaction result=$cameraOnOk")
+        Log.i(TAG, "Camera on result=$cameraOnOk")
+        val scanOk = transactNoArg(binder, TRANSACTION_SCAN, "scan")
+        emitDiagnostic("Camera on + scan transaction result=$scanOk")
+        Log.i(TAG, "Camera on + scan result=$scanOk")
+        if (cameraOnOk || scanOk) {
+            onAvailabilityChanged(resolveConnectedState())
+        }
+    }
+
+    fun sendKeyDown() {
+        sendKeyEvent(KeyEvent.ACTION_DOWN)
+    }
+
+    fun sendKeyUp() {
+        sendKeyEvent(KeyEvent.ACTION_UP)
+    }
+
+    fun stopScanOnly() {
+        val binder = scannerBinder ?: return
+        val ok = transactNoArg(binder, TRANSACTION_STOP, "stop")
+        emitDiagnostic("Stop scan transaction result=$ok")
+        Log.i(TAG, "Stop scan result=$ok")
     }
 
     fun stop() {
-        if (!started) return
-        started = false
-
+        stopScanOnly()
+        unregisterCallback()
+        unbindScannerService()
         unregisterBroadcastReceiver()
-        unbind(scannerConnection)
-        unbind(managerConnection)
-        scannerConnection = null
-        managerConnection = null
+        scannerBinder = null
+        prepared = false
         onAvailabilityChanged(DeviceConnectionState.UNAVAILABLE)
-        updateDebugState {
-            copy(
-                broadcastReceiverRegistered = false,
-                scannerServiceBound = false,
-                scanManagerBound = false,
-                lastStatus = "Probe stopped",
-            )
-        }
-        Log.i(TAG, "Sunmi scanner probe stopped.")
+        emitDiagnostic("Scanner probe stopped.")
+        Log.i(TAG, "Sunmi scanner stopped.")
     }
 
-    private fun registerBroadcastReceiver() {
-        if (broadcastRegistered) return
+    fun launchScannerUi(): Boolean {
+    // Ensure receivers + binder callbacks are registered BEFORE launching the vendor UI,
+    // so we can catch broadcast/callback based output modes.
+    prepare()
+    return launchActivity(
+        action = ACTION_QR_SCANNER,
+        diagnosticLabel = "Launch Sunmi scanner UI",
+    )
+}
 
-        val filter = IntentFilter(ACTION_DATA_CODE_RECEIVED)
-        val receiver = scannerResultReceiver
+    fun openScannerSettings(): Boolean = launchActivity(
+        action = ACTION_SCANNER_SETTINGS,
+        diagnosticLabel = "Open scanner settings",
+    )
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            @Suppress("DEPRECATION")
-            context.registerReceiver(receiver, filter)
+    fun openScannerDeviceSettings(): Boolean = launchActivity(
+        action = ACTION_DEVICE_SETTINGS,
+        diagnosticLabel = "Open device settings",
+    )
+
+    fun openScannerKeyboardSettings(): Boolean = launchActivity(
+        action = ACTION_KEYBOARD_SETTINGS,
+        diagnosticLabel = "Open keyboard settings",
+    )
+
+    /**
+     * Best-effort torch/illumination control for the Sunmi scanner UI (NOT Android camera torch).
+     *
+     * We use the config key found in reverse engineering: scan00000107=1; / scan00000107=0;
+     * Transaction code for the underlying "sendCommand" is not confirmed on D3 Mini, so we probe
+     * a small set of likely binder transaction codes and log which ones acknowledge the call.
+     */
+    fun setFlashControl(enabled: Boolean) {
+        pendingFlashControl = enabled
+        prepare()
+
+        val binder = scannerBinder
+        if (binder == null) {
+            emitDiagnostic("FlashControl pending enabled=$enabled (binder not ready)")
+            Log.i(TAG, "FlashControl pending enabled=$enabled (binder not ready)")
+            return
         }
-
-        broadcastRegistered = true
-        updateDebugState {
-            copy(
-                broadcastReceiverRegistered = true,
-                lastStatus = "Broadcast receiver registered",
-            )
-        }
-        Log.i(TAG, "Registered scanner broadcast receiver for $ACTION_DATA_CODE_RECEIVED")
+        applyFlashControl(binder = binder, enabled = enabled)
     }
 
-    private fun unregisterBroadcastReceiver() {
-        if (!broadcastRegistered) return
-        runCatching { context.unregisterReceiver(scannerResultReceiver) }
-            .onFailure {
-                updateDebugState {
-                    copy(
-                        lastStatus = "Broadcast receiver unregister failed",
-                        lastError = it.message,
-                    )
+    private fun applyFlashControl(
+        binder: IBinder,
+        enabled: Boolean,
+    ) {
+        val value = if (enabled) "1" else "0"
+        val cmdWithSemicolon = "${FLASH_CONTROL_COMMAND_KEY}=$value;"
+        val cmdNoSemicolon = "${FLASH_CONTROL_COMMAND_KEY}=$value"
+        val commands = listOf(cmdWithSemicolon, cmdNoSemicolon)
+
+        val okTx = mutableListOf<Int>()
+        for (tx in FLASH_CONTROL_TX_GUESSES) {
+            var txOk = false
+            for (cmd in commands) {
+                val ok = transactStringQuiet(
+                    binder = binder,
+                    transactionCode = tx,
+                    value = cmd,
+                    callLabel = "flashControl tx=$tx",
+                )
+                if (ok) {
+                    txOk = true
+                    break
                 }
-                Log.w(TAG, "Failed to unregister scanner broadcast receiver.", it)
             }
-        broadcastRegistered = false
+            if (txOk) okTx.add(tx)
+        }
+
+        val txLabel = if (okTx.isEmpty()) "-" else okTx.joinToString()
+        emitDiagnostic("FlashControl requested enabled=$enabled okTx=$txLabel")
+        Log.i(TAG, "FlashControl requested enabled=$enabled okTx=$txLabel")
     }
 
     private fun bindScannerService() {
-        if (scannerConnection != null) return
+        if (scannerConnection != null) {
+            ensureCallbackRegistered()
+            return
+        }
 
-        updateDebugState {
-            copy(
-                scannerServiceBindAttempted = true,
-                lastStatus = "Binding ScannerService",
-            )
-        }
         val component = ComponentName(SUNMI_SCANNER_PACKAGE, SCANNER_SERVICE_CLASS)
-        val connection = loggingServiceConnection("ScannerService") { descriptor ->
-            updateDebugState {
-                copy(
-                    scannerServiceBound = true,
-                    scannerServiceDescriptor = descriptor,
-                    lastStatus = "ScannerService connected",
-                    lastError = null,
-                )
+        val connection = object : ServiceConnection {
+            override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+                scannerBinder = service
+                val descriptor = runCatching { service?.interfaceDescriptor }.getOrNull()
+                emitDiagnostic("ScannerService connected. descriptor=$descriptor")
+                Log.i(TAG, "ScannerService connected. component=$name descriptor=$descriptor")
+                ensureCallbackRegistered()
+                pendingFlashControl?.let { enabled ->
+                    service?.let { binder ->
+                        applyFlashControl(binder = binder, enabled = enabled)
+                    }
+                }
+                onAvailabilityChanged(resolveConnectedState())
+            }
+
+            override fun onServiceDisconnected(name: ComponentName?) {
+                callbackRegistered = false
+                scannerBinder = null
+                onAvailabilityChanged(DeviceConnectionState.UNAVAILABLE)
+                emitDiagnostic("ScannerService disconnected.")
+                Log.i(TAG, "ScannerService disconnected. component=$name")
             }
         }
+
         val bound = runCatching {
-            context.bindService(Intent().setComponent(component), connection, Context.BIND_AUTO_CREATE)
+            context.bindService(
+                Intent().setComponent(component),
+                connection,
+                Context.BIND_AUTO_CREATE,
+            )
         }.getOrElse { error ->
-            updateDebugState {
-                copy(
-                    lastStatus = "ScannerService bind threw an exception",
-                    lastError = error.message,
-                )
-            }
             Log.w(TAG, "ScannerService bind failed.", error)
             false
         }
 
         if (bound) {
             scannerConnection = connection
-            updateDebugState {
-                copy(lastStatus = "ScannerService bind requested")
-            }
+            prepared = true
+            emitDiagnostic("ScannerService bind requested.")
+            Log.i(TAG, "ScannerService bind requested.")
         } else {
-            updateDebugState {
-                copy(
-                    lastStatus = "ScannerService bind returned false",
-                    lastError = "bindService returned false for ScannerService",
-                )
-            }
+            onAvailabilityChanged(DeviceConnectionState.UNAVAILABLE)
+            emitDiagnostic("ScannerService bind returned false.")
             Log.i(TAG, "ScannerService bind returned false.")
         }
     }
 
-    private fun bindScanManagerService() {
-        if (managerConnection != null) return
-
-        updateDebugState {
-            copy(
-                scanManagerBindAttempted = true,
-                lastStatus = "Binding IScanManager",
-            )
-        }
-        val component = ComponentName(SUNMI_SCANNER_PACKAGE, SCAN_MANAGER_SERVICE_CLASS)
-        val connection = loggingServiceConnection("IScanManager") { descriptor ->
-            updateDebugState {
-                copy(
-                    scanManagerBound = true,
-                    scanManagerDescriptor = descriptor,
-                    lastStatus = "IScanManager connected",
-                    lastError = null,
-                )
-            }
-        }
-        val bound = runCatching {
-            context.bindService(Intent().setComponent(component), connection, Context.BIND_AUTO_CREATE)
-        }.getOrElse { error ->
-            updateDebugState {
-                copy(
-                    lastStatus = "IScanManager bind threw an exception",
-                    lastError = error.message,
-                )
-            }
-            Log.w(TAG, "IScanManager bind failed.", error)
-            false
-        }
-
-        if (bound) {
-            managerConnection = connection
-            updateDebugState {
-                copy(lastStatus = "IScanManager bind requested")
-            }
-        } else {
-            updateDebugState {
-                copy(
-                    lastStatus = "IScanManager bind returned false",
-                    lastError = "bindService returned false for IScanManager",
-                )
-            }
-            Log.i(TAG, "IScanManager bind returned false.")
-        }
-    }
-
-    private fun loggingServiceConnection(
-        label: String,
-        onConnected: (descriptor: String?) -> Unit,
-    ): ServiceConnection =
-        object : ServiceConnection {
-            override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-                val descriptor = runCatching { service?.interfaceDescriptor }.getOrNull()
-                val alive = service?.isBinderAlive ?: false
-                val ping = service?.pingBinder() ?: false
-
-                onConnected(descriptor)
-                Log.i(
-                    TAG,
-                    "$label connected. component=$name descriptor=$descriptor alive=$alive ping=$ping",
-                )
-            }
-
-            override fun onServiceDisconnected(name: ComponentName?) {
-                if (label == "ScannerService") {
-                    updateDebugState {
-                        copy(
-                            scannerServiceBound = false,
-                            lastStatus = "ScannerService disconnected",
-                        )
-                    }
-                } else {
-                    updateDebugState {
-                        copy(
-                            scanManagerBound = false,
-                            lastStatus = "IScanManager disconnected",
-                        )
-                    }
-                }
-                Log.i(TAG, "$label disconnected. component=$name")
-            }
-
-            override fun onBindingDied(name: ComponentName?) {
-                updateDebugState {
-                    copy(
-                        lastStatus = "$label binding died",
-                        lastError = name?.flattenToShortString(),
-                    )
-                }
-                Log.w(TAG, "$label binding died. component=$name")
-            }
-
-            override fun onNullBinding(name: ComponentName?) {
-                updateDebugState {
-                    copy(
-                        lastStatus = "$label returned null binding",
-                        lastError = name?.flattenToShortString(),
-                    )
-                }
-                Log.w(TAG, "$label returned null binding. component=$name")
-            }
-        }
-
-    private fun unbind(connection: ServiceConnection?) {
-        if (connection == null) return
+    private fun unbindScannerService() {
+        val connection = scannerConnection ?: return
         runCatching { context.unbindService(connection) }
-            .onFailure {
-                updateDebugState {
-                    copy(
-                        lastStatus = "Failed to unbind scanner service",
-                        lastError = it.message,
-                    )
-                }
-                Log.w(TAG, "Failed to unbind scanner service.", it)
-            }
+            .onFailure { Log.w(TAG, "Failed to unbind ScannerService.", it) }
+        scannerConnection = null
     }
 
-    private fun isPackageInstalled(packageName: String): Boolean =
-        runCatching {
-            context.packageManager.getPackageInfoCompat(packageName)
-            true
-        }.getOrElse { false }
+    private fun ensureCallbackRegistered() {
+        if (callbackRegistered) return
+        val binder = scannerBinder ?: return
+        val ok = transactRegisterCallback(
+            binder = binder,
+            key = callbackKey,
+            callbackBinder = dataCallback,
+        )
+        callbackRegistered = ok
+        emitDiagnostic("Callback registration result=$ok key=$callbackKey")
+        Log.i(TAG, "Callback registration result=$ok key=$callbackKey")
+    }
 
-    private val scannerResultReceiver =
-        object : BroadcastReceiver() {
-            override fun onReceive(context: Context?, intent: Intent?) {
-                if (intent?.action != ACTION_DATA_CODE_RECEIVED) return
+    private fun unregisterCallback() {
+        if (!callbackRegistered) return
+        val binder = scannerBinder ?: return
+        val ok = transactString(binder, TRANSACTION_UNREGISTER_CALLBACK, callbackKey, "unregisterCallback")
+        emitDiagnostic("Callback unregister result=$ok key=$callbackKey")
+        Log.i(TAG, "Callback unregister result=$ok key=$callbackKey")
+        callbackRegistered = false
+    }
 
-                val rawValue = intent.getStringExtra(EXTRA_DATA)
-                    ?.trim()
-                    ?.takeIf { it.isNotEmpty() }
-                    ?: return
-
-                val event = ScanEvent(
-                    rawValue = rawValue,
-                    symbology = inferSymbology(intent),
-                    scannedAtEpochMillis = System.currentTimeMillis(),
-                )
-
-                updateDebugState {
-                    copy(
-                        broadcastSeen = true,
-                        lastStatus = "Broadcast scan received",
-                        lastError = null,
-                    )
-                }
-                Log.i(
-                    TAG,
-                    "Received scanner broadcast. action=${intent.action} value=$rawValue symbology=${event.symbology}",
-                )
-                onScanEvent(event)
-            }
+    private fun sendKeyEvent(action: Int) {
+        prepare()
+        val binder = scannerBinder
+        if (binder == null) {
+            emitDiagnostic("Key event requested before scanner binder was ready.")
+            Log.i(TAG, "Key event requested before scanner binder was ready.")
+            return
         }
 
-    private fun inferSymbology(intent: Intent): String =
-        intent.getStringExtra(EXTRA_CODE_TYPE)
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
-            ?: intent.getStringExtra(EXTRA_TYPE)
-                ?.trim()
-                ?.takeIf { it.isNotEmpty() }
-            ?: "SUNMI_BROADCAST"
+        val keyEvent = KeyEvent(action, KeyEvent.KEYCODE_UNKNOWN)
+        val ok = transactKeyEvent(binder, keyEvent, "sendKeyEvent action=$action")
+        emitDiagnostic("Key event result=$ok action=$action")
+        Log.i(TAG, "Key event result=$ok action=$action")
+        if (ok) {
+            onAvailabilityChanged(resolveConnectedState())
+        }
+    }
 
-    private fun PackageManager.getPackageInfoCompat(packageName: String) {
+    private fun handleCallback(first: String, bytes: ByteArray, second: String) {
+        val decodedBytes = bytes.toReadableString()
+        val rawValue = when {
+            second.isNotBlank() -> second
+            decodedBytes.isNotBlank() -> decodedBytes
+            first.isNotBlank() -> first
+            else -> "(empty callback)"
+        }
+        val symbology = when {
+            first.isNotBlank() && first != rawValue -> first
+            else -> "CALLBACK"
+        }
+
+        emitDiagnostic("IDataCallback hit. first=$first second=$second bytes=${bytes.size}")
+        Log.i(
+            TAG,
+            "IDataCallback hit. first='$first' second='$second' bytes=${bytes.size} decoded='$decodedBytes'",
+        )
+
+        onScanEvent(
+            ScanEvent(
+                rawValue = rawValue,
+                symbology = symbology,
+                scannedAtEpochMillis = System.currentTimeMillis(),
+            ),
+        )
+
+        // Turn the illumination back off after a successful decode.
+        if (pendingFlashControl == true) {
+            pendingFlashControl = false
+            scannerBinder?.let { binder ->
+                applyFlashControl(binder = binder, enabled = false)
+            }
+        }
+    }
+
+    private fun ByteArray.toReadableString(): String {
+        if (isEmpty()) return ""
+        return try {
+            val decoded = decodeToString()
+            if (decoded.isBlank()) "" else decoded.trim('\u0000', '\n', '\r', ' ')
+        } catch (_: Throwable) {
+            joinToString(separator = " ") { byte -> "%02X".format(byte) }
+        }
+    }
+
+    private fun transactNoArg(
+        binder: IBinder,
+        transactionCode: Int,
+        callLabel: String,
+    ): Boolean {
+        val data = Parcel.obtain()
+        val reply = Parcel.obtain()
+        return try {
+            data.writeInterfaceToken(INTERFACE_TOKEN)
+            val transactOk = binder.transact(transactionCode, data, reply, 0)
+            if (!transactOk) {
+                Log.w(TAG, "Binder transact returned false for $callLabel.")
+                false
+            } else {
+                reply.readException()
+                true
+            }
+        } catch (error: Throwable) {
+            Log.w(TAG, "Binder transact failed for $callLabel.", error)
+            false
+        } finally {
+            reply.recycle()
+            data.recycle()
+        }
+    }
+
+    private fun transactString(
+        binder: IBinder,
+        transactionCode: Int,
+        value: String,
+        callLabel: String,
+    ): Boolean {
+        val data = Parcel.obtain()
+        val reply = Parcel.obtain()
+        return try {
+            data.writeInterfaceToken(INTERFACE_TOKEN)
+            data.writeString(value)
+            val transactOk = binder.transact(transactionCode, data, reply, 0)
+            if (!transactOk) {
+                Log.w(TAG, "Binder transact returned false for $callLabel.")
+                false
+            } else {
+                reply.readException()
+                true
+            }
+        } catch (error: Throwable) {
+            Log.w(TAG, "Binder transact failed for $callLabel.", error)
+            false
+        } finally {
+            reply.recycle()
+            data.recycle()
+        }
+    }
+
+    private fun transactStringQuiet(
+        binder: IBinder,
+        transactionCode: Int,
+        value: String,
+        callLabel: String,
+    ): Boolean {
+        val data = Parcel.obtain()
+        val reply = Parcel.obtain()
+        return try {
+            data.writeInterfaceToken(INTERFACE_TOKEN)
+            data.writeString(value)
+            val transactOk = binder.transact(transactionCode, data, reply, 0)
+            if (!transactOk) {
+                false
+            } else {
+                reply.readException()
+                true
+            }
+        } catch (_: Throwable) {
+            false
+        } finally {
+            reply.recycle()
+            data.recycle()
+        }
+    }
+
+
+    private fun transactInt(
+        binder: IBinder,
+        transactionCode: Int,
+        value: Int,
+        callLabel: String,
+    ): Boolean {
+        val data = Parcel.obtain()
+        val reply = Parcel.obtain()
+        return try {
+            data.writeInterfaceToken(INTERFACE_TOKEN)
+            data.writeInt(value)
+            val transactOk = binder.transact(transactionCode, data, reply, 0)
+            if (!transactOk) {
+                Log.w(TAG, "Binder transact returned false for $callLabel.")
+                false
+            } else {
+                reply.readException()
+                true
+            }
+        } catch (error: Throwable) {
+            Log.w(TAG, "Binder transact failed for $callLabel.", error)
+            false
+        } finally {
+            reply.recycle()
+            data.recycle()
+        }
+    }
+
+    private fun transactKeyEvent(
+        binder: IBinder,
+        keyEvent: KeyEvent,
+        callLabel: String,
+    ): Boolean {
+        val data = Parcel.obtain()
+        val reply = Parcel.obtain()
+        return try {
+            data.writeInterfaceToken(INTERFACE_TOKEN)
+            data.writeInt(1)
+            keyEvent.writeToParcel(data, 0)
+            val transactOk = binder.transact(TRANSACTION_SEND_KEY_EVENT, data, reply, 0)
+            if (!transactOk) {
+                Log.w(TAG, "Binder transact returned false for $callLabel.")
+                false
+            } else {
+                reply.readException()
+                true
+            }
+        } catch (error: Throwable) {
+            Log.w(TAG, "Binder transact failed for $callLabel.", error)
+            false
+        } finally {
+            reply.recycle()
+            data.recycle()
+        }
+    }
+
+    private fun transactRegisterCallback(
+        binder: IBinder,
+        key: String,
+        callbackBinder: IBinder,
+    ): Boolean {
+        val data = Parcel.obtain()
+        val reply = Parcel.obtain()
+        return try {
+            data.writeInterfaceToken(INTERFACE_TOKEN)
+            data.writeString(key)
+            data.writeStrongBinder(callbackBinder)
+            val transactOk = binder.transact(TRANSACTION_REGISTER_CALLBACK, data, reply, 0)
+            if (!transactOk) {
+                Log.w(TAG, "Binder transact returned false for registerCallback.")
+                false
+            } else {
+                reply.readException()
+                val result = reply.readInt()
+                Log.i(TAG, "registerCallback returned result=$result")
+                result >= 0
+            }
+        } catch (error: Throwable) {
+            Log.w(TAG, "Binder transact failed for registerCallback.", error)
+            false
+        } finally {
+            reply.recycle()
+            data.recycle()
+        }
+    }
+
+    private fun registerBroadcastReceiver() {
+        if (receiverRegistered) return
+
+        val filter = IntentFilter(ACTION_DATA_CODE_RECEIVED)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0))
+            context.registerReceiver(scannerResultReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
             @Suppress("DEPRECATION")
-            getPackageInfo(packageName, 0)
+            context.registerReceiver(scannerResultReceiver, filter)
+        }
+        receiverRegistered = true
+        emitDiagnostic("Broadcast receiver registered for $ACTION_DATA_CODE_RECEIVED")
+        Log.i(TAG, "Registered receiver for $ACTION_DATA_CODE_RECEIVED")
+    }
+
+    private fun unregisterBroadcastReceiver() {
+        if (!receiverRegistered) return
+        runCatching { context.unregisterReceiver(scannerResultReceiver) }
+            .onFailure { Log.w(TAG, "Failed to unregister scanner receiver.", it) }
+        receiverRegistered = false
+    }
+
+    private val scannerResultReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != ACTION_DATA_CODE_RECEIVED) return
+
+            val rawValue = (
+                intent.getStringExtra(EXTRA_DATA)
+                    ?: intent.getStringExtra(EXTRA_VALUE)
+            )?.trim().orEmpty()
+            if (rawValue.isBlank()) {
+                emitDiagnostic("Scanner broadcast received without payload.")
+                Log.i(TAG, "Scanner broadcast received without payload.")
+                return
+            }
+
+            val symbology =
+                intent.getStringExtra(EXTRA_CODE_TYPE)
+                    ?: intent.getStringExtra(EXTRA_TYPE)
+                    ?: "BROADCAST"
+
+            onScanEvent(
+                ScanEvent(
+                    rawValue = rawValue,
+                    symbology = symbology,
+                    scannedAtEpochMillis = System.currentTimeMillis(),
+                ),
+            )
+
+            // Turn the illumination back off after a successful decode.
+            if (pendingFlashControl == true) {
+                pendingFlashControl = false
+                scannerBinder?.let { binder ->
+                    applyFlashControl(binder = binder, enabled = false)
+                }
+            }
+
+            emitDiagnostic("Scanner broadcast value=$rawValue symbology=$symbology")
+            Log.i(TAG, "Scanner broadcast value=$rawValue symbology=$symbology")
         }
     }
 
-    private fun updateDebugState(transform: ScannerProbeDebugState.() -> ScannerProbeDebugState) {
-        debugState = debugState.transform()
-        onDebugStateChanged(debugState)
+    private fun launchActivity(
+        action: String,
+        diagnosticLabel: String,
+    ): Boolean {
+        val launchIntent = Intent(action)
+            .setPackage(SUNMI_SCANNER_PACKAGE)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+        val resolved = runCatching {
+            context.packageManager.resolveActivity(launchIntent, 0)
+        }.getOrNull()
+
+        if (resolved == null) {
+            emitDiagnostic("$diagnosticLabel failed: no activity resolved for $action")
+            return false
+        }
+
+        return runCatching {
+            context.startActivity(launchIntent)
+            emitDiagnostic("$diagnosticLabel succeeded via $action")
+            true
+        }.getOrElse { error ->
+            emitDiagnostic("$diagnosticLabel failed: ${error.message ?: error::class.java.simpleName}")
+            Log.w(TAG, "$diagnosticLabel failed for action=$action", error)
+            false
+        }
     }
 
-    private companion object {
+    private fun emitDiagnostic(message: String) {
+        onDiagnosticEvent(message)
+    }
+
+    private fun isScannerPackageInstalled(): Boolean =
+        runCatching { context.packageManager.getPackageInfo(SUNMI_SCANNER_PACKAGE, 0) }.isSuccess
+
+    private fun resolveConnectedState(): DeviceConnectionState {
+        return tryEnum("READY")
+            ?: tryEnum("CONNECTED")
+            ?: tryEnum("AVAILABLE")
+            ?: DeviceConnectionState.UNAVAILABLE
+    }
+
+    private fun tryEnum(name: String): DeviceConnectionState? =
+        runCatching { java.lang.Enum.valueOf(DeviceConnectionState::class.java, name) }.getOrNull()
+
+    companion object {
         private const val TAG = "SunmiScannerProbe"
         private const val SUNMI_SCANNER_PACKAGE = "com.sunmi.scanner"
-        private const val SUNMI_QR_SCANNER_PACKAGE = "com.sunmi.sunmiqrcodescanner"
         private const val SCANNER_SERVICE_CLASS = "com.sunmi.scanner.service.ScannerService"
-        private const val SCAN_MANAGER_SERVICE_CLASS = "com.sunmi.scannerdevice.service.IScanManager"
+        private const val INTERFACE_TOKEN = "com.sunmi.scanner.IScanInterface"
+        private const val DATA_CALLBACK_TOKEN = "com.sunmi.scanner.IDataCallback"
 
+        private const val ACTION_QR_SCANNER = "com.sunmi.scanner.qrscanner"
+        private const val ACTION_SCANNER_SETTINGS = "com.sunmi.scanner.SettingActivity"
+        private const val ACTION_DEVICE_SETTINGS = "com.sunmi.scanner.ui.DeviceSettingActivity"
+        private const val ACTION_KEYBOARD_SETTINGS = "com.sunmi.scanner.ui.KeyboardSettingActivity"
         private const val ACTION_DATA_CODE_RECEIVED = "com.sunmi.scanner.ACTION_DATA_CODE_RECEIVED"
         private const val EXTRA_DATA = "data"
+        private const val EXTRA_VALUE = "VALUE"
         private const val EXTRA_TYPE = "TYPE"
         private const val EXTRA_CODE_TYPE = "codeType"
+
+        private const val FLASH_CONTROL_COMMAND_KEY = "scan00000107"
+        private val FLASH_CONTROL_TX_GUESSES = intArrayOf(5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16)
+
+        private const val TRANSACTION_SEND_KEY_EVENT = 1
+        private const val TRANSACTION_SCAN = 2
+        private const val TRANSACTION_STOP = 3
+        private const val TRANSACTION_ON_CAMERA_ON = 11
+        private const val TRANSACTION_REGISTER_CALLBACK = 17
+        private const val TRANSACTION_UNREGISTER_CALLBACK = 18
+
+        private const val TRANSACTION_CALLBACK_DATA = 1
     }
 }
