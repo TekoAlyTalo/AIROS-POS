@@ -29,7 +29,6 @@ internal class SunmiScannerProbe(
     private var scannerConnection: ServiceConnection? = null
     private var pendingFlashControl: Boolean? = null
 
-
     private val callbackKey = "${context.packageName}-airos-scan"
     private val dataCallback = object : Binder(), IInterface {
         init {
@@ -133,14 +132,14 @@ internal class SunmiScannerProbe(
     }
 
     fun launchScannerUi(): Boolean {
-    // Ensure receivers + binder callbacks are registered BEFORE launching the vendor UI,
-    // so we can catch broadcast/callback based output modes.
-    prepare()
-    return launchActivity(
-        action = ACTION_QR_SCANNER,
-        diagnosticLabel = "Launch Sunmi scanner UI",
-    )
-}
+        // Ensure receivers + binder callbacks are registered BEFORE launching the vendor UI,
+        // so we can catch broadcast/callback based output modes.
+        prepare()
+        return launchActivity(
+            action = ACTION_QR_SCANNER,
+            diagnosticLabel = "Launch Sunmi scanner UI",
+        )
+    }
 
     fun openScannerSettings(): Boolean = launchActivity(
         action = ACTION_SCANNER_SETTINGS,
@@ -166,6 +165,17 @@ internal class SunmiScannerProbe(
      */
     fun setFlashControl(enabled: Boolean) {
         pendingFlashControl = enabled
+
+        // Safety rule:
+        // Turning the light OFF should never wake up or bind the whole scanner stack by itself.
+        // If the scanner binder is not already alive, we simply remember the requested state and return.
+        // This keeps the OFF action passive instead of poking an unready service.
+        if (!enabled && scannerBinder == null && scannerConnection == null) {
+            emitDiagnostic("FlashControl OFF ignored because scanner binder is not ready.")
+            Log.i(TAG, "FlashControl OFF ignored because scanner binder is not ready.")
+            return
+        }
+
         prepare()
 
         val binder = scannerBinder
@@ -436,7 +446,6 @@ internal class SunmiScannerProbe(
         }
     }
 
-
     private fun transactInt(
         binder: IBinder,
         transactionCode: Int,
@@ -552,7 +561,7 @@ internal class SunmiScannerProbe(
             val rawValue = (
                 intent.getStringExtra(EXTRA_DATA)
                     ?: intent.getStringExtra(EXTRA_VALUE)
-            )?.trim().orEmpty()
+                )?.trim().orEmpty()
             if (rawValue.isBlank()) {
                 emitDiagnostic("Scanner broadcast received without payload.")
                 Log.i(TAG, "Scanner broadcast received without payload.")
