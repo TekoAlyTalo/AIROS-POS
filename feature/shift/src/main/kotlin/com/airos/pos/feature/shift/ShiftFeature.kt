@@ -121,6 +121,13 @@ fun ShiftScreen(
     onPrepareScanner: () -> Unit,
     onTriggerScanner: () -> Unit,
     onCameraOnAndScan: () -> Unit,
+    onScannerFlashOn: () -> Unit = {},
+    onScannerFlashOff: () -> Unit = {},
+    onScannerTestA: () -> Unit = {},
+    onScannerTestB: () -> Unit = {},
+    onScannerTestC: () -> Unit = {},
+    onAndroidTorchOn: () -> Unit = {},
+    onAndroidTorchOff: () -> Unit = {},
     onTriggerKeyDown: () -> Unit,
     onTriggerKeyUp: () -> Unit,
     onStopScannerProbe: () -> Unit,
@@ -248,6 +255,33 @@ fun ShiftScreen(
                     }
                     Button(onClick = onTriggerKeyDown) {
                         Text("Key down")
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(onClick = onAndroidTorchOn) {
+                        Text("Android torch ON")
+                    }
+                    Button(onClick = onAndroidTorchOff) {
+                        Text("Android torch OFF")
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(onClick = onScannerFlashOn) {
+                        Text("Scanner flash ON")
+                    }
+                    Button(onClick = onScannerFlashOff) {
+                        Text("Scanner flash OFF")
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(onClick = onScannerTestA) {
+                        Text("Test A")
+                    }
+                    Button(onClick = onScannerTestB) {
+                        Text("Test B")
+                    }
+                    Button(onClick = onScannerTestC) {
+                        Text("Test C")
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {

@@ -23,10 +23,16 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.ExitToApp
+import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -43,6 +49,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -126,20 +133,48 @@ private object Routes {
 private data class RailDestination(
     val route: String,
     val label: String,
-    val iconText: String,
+    val icon: ImageVector,
+    val iconContainerColor: Color,
+    val iconTint: Color,
 )
 
-private val topRailDestinations = listOf(
-    RailDestination(Routes.TableMap, "Tables", "T"),
-    RailDestination(Routes.Menu, "Menu", "M"),
+private val mainRailDestinations = listOf(
+    RailDestination(
+        route = Routes.TableMap,
+        label = "Tables",
+        icon = Icons.Filled.Dashboard,
+        iconContainerColor = Color(0xFF143A45),
+        iconTint = Color(0xFF8DF2E0),
+    ),
+    RailDestination(
+        route = Routes.Menu,
+        label = "Menu",
+        icon = Icons.Filled.List,
+        iconContainerColor = Color(0xFF1D3143),
+        iconTint = Color(0xFFB8D8F5),
+    ),
+    RailDestination(
+        route = Routes.Scanner,
+        label = "Scan",
+        icon = Icons.Filled.Search,
+        iconContainerColor = Color(0xFF2E2A4A),
+        iconTint = Color(0xFFD7C8FF),
+    ),
+    RailDestination(
+        route = Routes.Shift,
+        label = "Shift",
+        icon = Icons.Filled.Tune,
+        iconContainerColor = Color(0xFF3B2E23),
+        iconTint = Color(0xFFFFD8A8),
+    ),
+    RailDestination(
+        route = Routes.Settings,
+        label = "Settings",
+        icon = Icons.Filled.Settings,
+        iconContainerColor = Color(0xFF2D353F),
+        iconTint = Color(0xFFE5EEF6),
+    ),
 )
-
-private val moreRailDestinations = listOf(
-    RailDestination(Routes.Shift, "Shift", "S"),
-    RailDestination(Routes.Settings, "Settings", "⚙"),
-)
-
-private val signInDestination = RailDestination(Routes.Auth, "Sign in", "↪")
 
 @Composable
 private fun TemporaryFloorPlanStyleCard(
@@ -611,6 +646,7 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                                      ).show()
 
                                      val intent = Intent("com.sunmi.scanner.qrscanner")
+                                     intent.putExtra("IS_OPEN_LIGHT", true)
                                      scope.launch {
                                          if (activity != null) {
                                              sunmiScannerUiLauncher.launch(intent)
@@ -797,13 +833,28 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                 }
 
                 composable(Routes.Scanner) {
-                    val viewModel: ScannerViewModel = viewModel(factory = ScannerViewModel.factory(appContainer.scannerService))
+                    val viewModel: ScannerViewModel = viewModel(
+                        factory = ScannerViewModel.factory(
+                            scannerService = appContainer.scannerService,
+                            setTorch = appContainer.torchService::setTorch,
+                        ),
+                    )
                     val state by viewModel.uiState.collectAsState()
+                    val lastPresentedValue by viewModel.lastPresentedValue.collectAsState()
+                    val lastPresentedSymbology by viewModel.lastPresentedSymbology.collectAsState()
+                    val scanStatus by viewModel.scanStatus.collectAsState()
+                    val isMultiScanEnabled by viewModel.isMultiScanEnabled.collectAsState()
+                    val isBusy by viewModel.isBusy.collectAsState()
                     ScannerScreen(
                         state = state,
-                        onStart = viewModel::startScanner,
-                        onStop = viewModel::stopScanner,
-                        onDebugScan = viewModel::emitDebugScan,
+                        lastPresentedValue = lastPresentedValue,
+                        lastPresentedSymbology = lastPresentedSymbology,
+                        scanStatus = scanStatus,
+                        isMultiScanEnabled = isMultiScanEnabled,
+                        isBusy = isBusy,
+                        onMultiScanEnabledChange = viewModel::setMultiScanEnabled,
+                        onScanWithLight = viewModel::scanWithLight,
+                        onStopScanning = viewModel::stopScanning,
                     )
                 }
 
@@ -893,7 +944,6 @@ private fun AppRail(
 ) {
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
-    var showMoreMenu by rememberSaveable { mutableStateOf(false) }
 
     Surface(
         modifier = Modifier
@@ -920,10 +970,12 @@ private fun AppRail(
                 contentScale = ContentScale.Fit,
             )
 
-            topRailDestinations.forEach { destination ->
+            mainRailDestinations.forEach { destination ->
                 RailButton(
                     label = destination.label,
-                    iconText = destination.iconText,
+                    icon = destination.icon,
+                    iconContainerColor = destination.iconContainerColor,
+                    iconTint = destination.iconTint,
                     selected = isRailDestinationSelected(currentRoute, destination.route),
                     onClick = { navController.navigate(destination.route) },
                 )
@@ -932,47 +984,13 @@ private fun AppRail(
             Spacer(modifier = Modifier.weight(1f))
 
             RailButton(
-                label = signInDestination.label,
-                iconText = signInDestination.iconText,
-                selected = isRailDestinationSelected(currentRoute, signInDestination.route),
-                onClick = { navController.navigate(signInDestination.route) },
-            )
-
-            RailButton(
                 label = "Sign out",
-                iconText = "⏻",
+                icon = Icons.Filled.ExitToApp,
+                iconContainerColor = Color(0xFF3C2630),
+                iconTint = Color(0xFFFFC6D4),
                 selected = false,
                 onClick = onSignOut,
             )
-
-            Box {
-                RailButton(
-                    label = "More",
-                    iconText = "…",
-                    selected = showMoreMenu,
-                    onClick = { showMoreMenu = true },
-                )
-                DropdownMenu(
-                    expanded = showMoreMenu,
-                    onDismissRequest = { showMoreMenu = false },
-                    modifier = Modifier.background(AppShellPanelColor),
-                ) {
-                    moreRailDestinations.forEach { destination ->
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    text = destination.label,
-                                    color = AppShellTextPrimary,
-                                )
-                            },
-                            onClick = {
-                                showMoreMenu = false
-                                navController.navigate(destination.route)
-                            },
-                        )
-                    }
-                }
-            }
         }
     }
 }
@@ -980,7 +998,9 @@ private fun AppRail(
 @Composable
 private fun RailButton(
     label: String,
-    iconText: String,
+    icon: ImageVector,
+    iconContainerColor: Color,
+    iconTint: Color,
     selected: Boolean,
     onClick: () -> Unit,
 ) {
@@ -998,15 +1018,29 @@ private fun RailButton(
         Column(
             modifier = Modifier
                 .width(82.dp)
-                .padding(vertical = 12.dp, horizontal = 8.dp),
+                .padding(vertical = 10.dp, horizontal = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            Text(
-                text = iconText,
-                style = MaterialTheme.typography.titleLarge,
-                color = if (selected) AppShellAccentText else AppShellTextSecondary,
-            )
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(
+                        if (selected) iconContainerColor.copy(alpha = 0.95f) else iconContainerColor.copy(alpha = 0.72f),
+                    )
+                    .size(42.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = label,
+                    tint = if (selected) AppShellTextPrimary else iconTint,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+
+            Spacer(modifier = Modifier.width(1.dp))
+
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelLarge,
