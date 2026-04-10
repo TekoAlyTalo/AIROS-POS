@@ -52,6 +52,44 @@ data class AuthSession(
 val AuthSession.staffName: String
     get() = displayName
 
+enum class NfcLinkedEntityType {
+    STAFF,
+    LOYALTY_MEMBER,
+    RECEIPT_HANDOFF,
+    GENERIC_TRIGGER,
+}
+
+enum class NfcIdentityEventType {
+    ENROLLED,
+    REPLACED,
+    REMOVED,
+    MATCHED,
+    UNKNOWN_TAG,
+}
+
+data class NfcIdentityRecord(
+    val canonicalUid: String,
+    val entityType: NfcLinkedEntityType,
+    val entityId: String,
+    val entityDisplayLabel: String,
+    val entityRoleLabel: String? = null,
+    val nickname: String? = null,
+    val enabled: Boolean = true,
+    val createdAtEpochMillis: Long,
+    val updatedAtEpochMillis: Long,
+)
+
+data class NfcIdentityEvent(
+    val id: Long,
+    val type: NfcIdentityEventType,
+    val canonicalUid: String? = null,
+    val entityType: NfcLinkedEntityType? = null,
+    val entityId: String? = null,
+    val entityDisplayLabel: String? = null,
+    val message: String,
+    val occurredAtEpochMillis: Long,
+)
+
 enum class ManagerOverrideReason {
     REFUND,
     VOID_TICKET,

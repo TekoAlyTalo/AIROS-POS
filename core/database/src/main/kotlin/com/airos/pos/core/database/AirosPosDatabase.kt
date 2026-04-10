@@ -8,6 +8,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.airos.pos.core.database.dao.BackendMenuCacheDao
 import com.airos.pos.core.database.dao.MenuItemDao
+import com.airos.pos.core.database.dao.NfcIdentityDao
 import com.airos.pos.core.database.dao.ShiftDao
 import com.airos.pos.core.database.dao.StaffDao
 import com.airos.pos.core.database.dao.SyncQueueDao
@@ -16,6 +17,8 @@ import com.airos.pos.core.database.dao.TicketDao
 import com.airos.pos.core.database.entity.BackendMenuItemEntity
 import com.airos.pos.core.database.entity.MenuCacheMetadataEntity
 import com.airos.pos.core.database.entity.MenuItemLocalEntity
+import com.airos.pos.core.database.entity.NfcIdentityEnrollmentEntity
+import com.airos.pos.core.database.entity.NfcIdentityEventEntity
 import com.airos.pos.core.database.entity.RestaurantTableLocalEntity
 import com.airos.pos.core.database.entity.ShiftLocalEntity
 import com.airos.pos.core.database.entity.StaffLocalEntity
@@ -34,8 +37,10 @@ import com.airos.pos.core.database.entity.TicketLocalEntity
         SyncQueueLocalEntity::class,
         BackendMenuItemEntity::class,
         MenuCacheMetadataEntity::class,
+        NfcIdentityEnrollmentEntity::class,
+        NfcIdentityEventEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class AirosPosDatabase : RoomDatabase() {
@@ -46,6 +51,7 @@ abstract class AirosPosDatabase : RoomDatabase() {
     abstract fun shiftDao(): ShiftDao
     abstract fun syncQueueDao(): SyncQueueDao
     abstract fun backendMenuCacheDao(): BackendMenuCacheDao
+    abstract fun nfcIdentityDao(): NfcIdentityDao
 
     companion object {
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -81,12 +87,77 @@ abstract class AirosPosDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `nfc_identity_enrollments` (
+                        `canonicalUid` TEXT NOT NULL,
+                        `entityType` TEXT NOT NULL,
+                        `entityId` TEXT NOT NULL,
+                        `entityDisplayLabel` TEXT NOT NULL,
+                        `entityRoleLabel` TEXT,
+                        `nickname` TEXT,
+                        `enabled` INTEGER NOT NULL,
+                        `createdAtEpochMillis` INTEGER NOT NULL,
+                        `updatedAtEpochMillis` INTEGER NOT NULL,
+                        PRIMARY KEY(`canonicalUid`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS `index_nfc_identity_enrollments_entityType_entityId`
+                    ON `nfc_identity_enrollments` (`entityType`, `entityId`)
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `index_nfc_identity_enrollments_entityType`
+                    ON `nfc_identity_enrollments` (`entityType`)
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `index_nfc_identity_enrollments_enabled`
+                    ON `nfc_identity_enrollments` (`enabled`)
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `nfc_identity_events` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `eventType` TEXT NOT NULL,
+                        `canonicalUid` TEXT,
+                        `entityType` TEXT,
+                        `entityId` TEXT,
+                        `entityDisplayLabel` TEXT,
+                        `message` TEXT NOT NULL,
+                        `occurredAtEpochMillis` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `index_nfc_identity_events_eventType`
+                    ON `nfc_identity_events` (`eventType`)
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `index_nfc_identity_events_occurredAtEpochMillis`
+                    ON `nfc_identity_events` (`occurredAtEpochMillis`)
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun build(context: Context): AirosPosDatabase {
             return Room.databaseBuilder(
                 context,
                 AirosPosDatabase::class.java,
                 "airos-pos.db",
-            ).addMigrations(MIGRATION_1_2).build()
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
         }
     }
 }

@@ -23,6 +23,7 @@ import com.airos.pos.domain.AuthRepository
 import com.airos.pos.domain.DefaultAirosPosLedgerHttpClient
 import com.airos.pos.domain.KitchenRepository
 import com.airos.pos.domain.MenuRepository
+import com.airos.pos.domain.NfcIdentityRepository
 import com.airos.pos.domain.PaymentRepository
 import com.airos.pos.domain.SettingsRepository
 import com.airos.pos.domain.ShiftRepository
@@ -45,6 +46,8 @@ interface AppContainer {
     val kitchenRepository: KitchenRepository
     val paymentRepository: PaymentRepository
     val settingsRepository: SettingsRepository
+    val nfcIdentityRepository: NfcIdentityRepository
+    val nfcStaffResolver: NfcStaffResolver
     val syncQueueRepository: SyncQueueRepository
     val syncCoordinator: SyncCoordinator
     val printerService: PrinterService
@@ -68,6 +71,9 @@ class DefaultAppContainer(
     override val syncQueueRepository: SyncQueueRepository = InMemorySyncQueueRepository()
     override val syncCoordinator: SyncCoordinator = SyncCoordinator(syncQueueRepository)
     override val authRepository: AuthRepository = FakeAuthRepository(SampleData.localAuthStaffRecords())
+    private val roomNfcIdentityRepository = RoomNfcIdentityRepository(database)
+    override val nfcIdentityRepository: NfcIdentityRepository = roomNfcIdentityRepository
+    override val nfcStaffResolver: NfcStaffResolver = RepositoryNfcStaffResolver(roomNfcIdentityRepository)
     override val shiftRepository: ShiftRepository = FakeShiftRepository(store, syncQueueRepository)
     override val tableRepository: TableRepository = FakeTableRepository(store, syncQueueRepository)
     override val menuRepository: MenuRepository = BackendMenuRepository(
@@ -88,6 +94,14 @@ class DefaultAppContainer(
             context = appContext,
             deviceInfoService = androidDeviceInfoService,
         )
+
+    init {
+        runBlocking {
+            roomNfcIdentityRepository.seedLegacyStaffEnrollmentsIfEmpty(
+                buildLegacyStaffEnrollmentDefaults(SampleData.localAuthStaffRecords()),
+            )
+        }
+    }
 
     /**
      * Best-effort current terminal settings lookup.

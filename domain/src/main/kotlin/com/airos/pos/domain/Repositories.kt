@@ -7,6 +7,8 @@ import com.airos.pos.core.model.KitchenOrder
 import com.airos.pos.core.model.ManagerOverrideGrant
 import com.airos.pos.core.model.ManagerOverrideReason
 import com.airos.pos.core.model.MenuItem
+import com.airos.pos.core.model.NfcIdentityEvent
+import com.airos.pos.core.model.NfcIdentityRecord
 import com.airos.pos.core.model.PaymentMethod
 import com.airos.pos.core.model.PaymentSummary
 import com.airos.pos.core.model.PosShift
@@ -89,6 +91,15 @@ interface SettingsRepository {
     suspend fun updateEdgeBaseUrl(value: String)
     suspend fun setOfflineMode(enabled: Boolean)
     suspend fun setNfcDirectLoginEnabled(enabled: Boolean)
+}
+
+interface NfcIdentityRepository {
+    fun observeStaffEnrollments(): Flow<List<NfcIdentityRecord>>
+    fun observeRecentEvents(limit: Int = 20): Flow<List<NfcIdentityEvent>>
+    suspend fun resolveEnabledIdentity(canonicalUid: String): NfcIdentityRecord?
+    suspend fun enrollStaffTag(staff: StaffMember, canonicalUid: String): PosResult<NfcIdentityRecord>
+    suspend fun removeStaffTag(staffId: String): PosResult<Unit>
+    suspend fun recordUnknownTag(canonicalUid: String)
 }
 
 interface SyncQueueRepository {
