@@ -10,4 +10,6 @@
     <string name="webrtc_smoke_test_status_label">Status</string>
     <string name="webrtc_smoke_test_logs_label">Activity Log</string>
     <string name="webrtc_smoke_test_renderer_placeholder">Video surface appears here after the renderer is initialized.</string>
+    <string name="startup_logo_content_description">AIROS POS startup logo</string>
+    <string name="startup_preparing_label">Preparing workspace</string>
 </resources>

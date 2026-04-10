@@ -1,5 +1,6 @@
 package com.airos.pos.app
 
+import android.util.Log
 import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.common.CentsFormatter
 import com.airos.pos.core.datastore.TerminalPreferencesStore
@@ -31,9 +32,12 @@ import com.airos.pos.core.model.TerminalSettings
 import com.airos.pos.core.model.Ticket
 import com.airos.pos.core.model.TicketLine
 import com.airos.pos.core.model.TicketStatus
+import com.airos.pos.domain.AirosPosLedgerFinalizeBridge
+import com.airos.pos.domain.AirosPosLedgerHttpClient
 import com.airos.pos.domain.AuthRepository
 import com.airos.pos.domain.KitchenRepository
 import com.airos.pos.domain.MenuRepository
+import com.airos.pos.domain.MenuSyncResult
 import com.airos.pos.domain.PaymentRepository
 import com.airos.pos.domain.SettingsRepository
 import com.airos.pos.domain.ShiftRepository
@@ -48,6 +52,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.roundToInt
 
 class FakePosStore {
     private val idCounter = AtomicInteger(100)
@@ -164,10 +169,19 @@ class FakeTableRepository(
 class FakeMenuRepository(
     private val store: FakePosStore,
 ) : MenuRepository {
+    private val _syncState = MutableStateFlow<MenuSyncResult?>(null)
+    override val syncState: StateFlow<MenuSyncResult?> = _syncState.asStateFlow()
+
     override fun observeMenuItems(): Flow<List<MenuItem>> = store.menuItems
 
     override suspend fun findItemByBarcode(rawValue: String): MenuItem? {
         return store.menuItems.value.firstOrNull { it.barcode == rawValue }
+    }
+
+    override suspend fun refresh(): MenuSyncResult {
+        val result = MenuSyncResult.Fresh
+        _syncState.value = result
+        return result
     }
 }
 
@@ -199,6 +213,7 @@ class FakeTicketRepository(
             quantity = 1,
             unitPriceCents = menuItem.priceCents,
             totalPriceCents = menuItem.priceCents,
+            taxRatePercent = menuItem.taxRatePercent,
         )
         val updatedTicket = recalculateTicket(ticket.copy(lines = ticket.lines + line))
         store.tickets.value = store.tickets.value + (updatedTicket.id to updatedTicket)
@@ -237,11 +252,10 @@ class FakeTicketRepository(
     }
 
     private fun recalculateTicket(ticket: Ticket): Ticket {
-        val menuIndex = store.menuItems.value.associateBy { it.id }
         val subtotal = ticket.lines.sumOf { it.totalPriceCents }
         val tax = ticket.lines.sumOf { line ->
-            val taxRate = menuIndex[line.menuItemId]?.taxRatePercent ?: 0
-            if (taxRate <= 0) 0 else (line.totalPriceCents * taxRate) / (100 + taxRate)
+            val taxRate = line.taxRatePercent
+            if (taxRate <= 0.0) 0 else ((line.totalPriceCents * taxRate) / (100.0 + taxRate)).roundToInt()
         }
         return ticket.copy(
             subtotalCents = subtotal,
@@ -302,7 +316,19 @@ class FakeKitchenRepository(
 class FakePaymentRepository(
     private val store: FakePosStore,
     private val syncQueueRepository: SyncQueueRepository,
+    private val ledgerHttpClient: AirosPosLedgerHttpClient? = null,
+    private val ledgerBackendBaseUrlProvider: (() -> String?)? = null,
+    private val terminalIdProvider: (() -> String?)? = null,
+    private val terminalNameProvider: (() -> String?)? = null,
+    private val restaurantIdProvider: (() -> String?)? = null,
+    private val cashierStaffIdProvider: (() -> String?)? = null,
+    private val cashierNameProvider: (() -> String?)? = null,
+    private val restaurantReceiptSettingsClient: RestaurantReceiptSettingsClient? = null,
 ) : PaymentRepository {
+    private companion object {
+        const val TAG = "AIROS_LEDGER"
+    }
+
     override fun observePaymentSummary(ticketId: String): Flow<PaymentSummary?> {
         return combine(store.tickets, store.paymentsByTicket) { tickets, payments ->
             val ticket = tickets[ticketId] ?: return@combine null
@@ -380,6 +406,114 @@ class FakePaymentRepository(
             ?.activeTicketId
             ?: store.nextId("ticket")
 
+        val paymentRecords = request.payments
+            .filter { it.amountCents > 0 }
+            .map { entry ->
+                ReceiptPaymentRecord(
+                    method = entry.method,
+                    amountCents = entry.amountCents,
+                    reference = entry.reference,
+                    displayLabel = entry.displayLabel,
+                )
+            }
+
+        val changeCents = ((request.cashTenderedCents ?: totalPaidCents) - totalDueCents).coerceAtLeast(0)
+        val taxCents = request.lines.sumOf { line ->
+            val taxRate = line.taxRatePercent
+            if (taxRate <= 0.0) 0 else ((line.totalPriceCents * taxRate) / (100.0 + taxRate)).roundToInt()
+        }
+        val receiptNumber = "receipt-${ticketId}-${store.now()}"
+        val receiptLines = request.lines.map { line ->
+            ReceiptLine(
+                label = line.name,
+                quantity = "${line.quantity}x",
+                totalPriceCents = line.totalPriceCents,
+                note = line.note,
+            )
+        }
+
+        val baseReceiptDocument = ReceiptDocument(
+            title = "AIROS Receipt",
+            lines = receiptLines,
+            footer = "Thank you",
+            payments = paymentRecords,
+            totals = ReceiptTotals(
+                subtotalCents = subtotalBeforeDiscountCents,
+                discountCents = discountCents,
+                taxCents = taxCents,
+                totalCents = totalDueCents,
+            ),
+            receiptNumber = receiptNumber,
+            orderNumber = ticketId,
+            printedAtEpochMillis = store.now(),
+            cashierName = cashierNameProvider?.invoke(),
+        )
+
+        val settingsAppliedReceiptDocument = when (val client = restaurantReceiptSettingsClient) {
+            null -> {
+                Log.w(TAG, "finalizeTablePayment: receipt settings client missing, using base receipt document receipt=$receiptNumber")
+                baseReceiptDocument
+            }
+            else -> {
+                when (val settingsResult = client.fetchCurrent()) {
+                    is PosResult.Success -> {
+                        Log.i(TAG, "finalizeTablePayment: receipt settings applied receipt=$receiptNumber logoEnabled=${settingsResult.value.logoEnabled}")
+                        applyBackendReceiptSettings(baseReceiptDocument, settingsResult.value)
+                    }
+                    is PosResult.Failure -> {
+                        Log.w(TAG, "finalizeTablePayment: receipt settings fetch failed, using base receipt document receipt=$receiptNumber reason=${settingsResult.message}")
+                        baseReceiptDocument
+                    }
+                }
+            }
+        }
+
+        val receiptDocument = when {
+            ledgerHttpClient != null && !ledgerBackendBaseUrlProvider?.invoke().isNullOrBlank() -> {
+                val ledgerBaseUrl = ledgerBackendBaseUrlProvider?.invoke().orEmpty()
+                Log.i(TAG, "finalizeTablePayment: attempting ledger finalize receipt=$receiptNumber baseUrl=$ledgerBaseUrl tableId=$resolvedTableId totalDueCents=$totalDueCents totalPaidCents=$totalPaidCents")
+                when (
+                    val ledgerFinalize = AirosPosLedgerFinalizeBridge.finalizeSaleAndAttachQr(
+                        client = ledgerHttpClient,
+                        backendBaseUrl = ledgerBaseUrl,
+                        paymentRequest = request,
+                        paymentResult = TablePaymentResult(
+                            ticketId = ticketId,
+                            tableId = resolvedTableId,
+                            tableLabel = resolvedTableLabel,
+                            totalDueCents = totalDueCents,
+                            totalPaidCents = totalPaidCents,
+                            changeCents = changeCents,
+                            payments = paymentRecords,
+                            receiptDocument = settingsAppliedReceiptDocument,
+                        ),
+                        terminalId = terminalIdProvider?.invoke(),
+                        terminalName = terminalNameProvider?.invoke(),
+                        restaurantId = restaurantIdProvider?.invoke(),
+                        cashierStaffId = cashierStaffIdProvider?.invoke(),
+                        cashierName = cashierNameProvider?.invoke(),
+                        countryProfile = "FI",
+                        languageCode = "fi",
+                        currencyCode = settingsAppliedReceiptDocument.currencyCode,
+                        saleChannel = if (resolvedTableId.isNullOrBlank()) "walk_in" else "table_service",
+                    )
+                ) {
+                    is PosResult.Success -> {
+                        Log.i(TAG, "finalizeTablePayment: ledger finalize success receipt=$receiptNumber publicUrl=${ledgerFinalize.value.ledgerResponse.public_url_path} token=${ledgerFinalize.value.ledgerResponse.raw_public_token != null}")
+                        ledgerFinalize.value.receiptDocumentWithQr
+                    }
+                    is PosResult.Failure -> {
+                        Log.e(TAG, "finalizeTablePayment: ledger finalize failure receipt=$receiptNumber baseUrl=$ledgerBaseUrl reason=${ledgerFinalize.message}")
+                        return ledgerFinalize
+                    }
+                }
+            }
+            else -> {
+                Log.w(TAG, "finalizeTablePayment: ledger finalize skipped receipt=$receiptNumber clientPresent=${ledgerHttpClient != null} baseUrl=${ledgerBackendBaseUrlProvider?.invoke()}")
+                settingsAppliedReceiptDocument
+            }
+        }
+
         val closedTicket = Ticket(
             id = ticketId,
             tableId = resolvedTableId ?: "walk-in",
@@ -388,7 +522,7 @@ class FakePaymentRepository(
             status = TicketStatus.CLOSED,
             lines = request.lines,
             subtotalCents = subtotalBeforeDiscountCents,
-            taxCents = 0,
+            taxCents = taxCents,
             totalCents = totalDueCents,
             syncState = SyncState.QUEUED,
         )
@@ -415,61 +549,6 @@ class FakePaymentRepository(
             aggregateId = ticketId,
             action = "finalize_table_payment",
             payloadJson = """{"tableId":"${resolvedTableId ?: ""}","totalDueCents":$totalDueCents,"totalPaidCents":$totalPaidCents,"discountCents":$discountCents}""",
-        )
-
-        val paymentRecords = request.payments
-            .filter { it.amountCents > 0 }
-            .map { entry ->
-                ReceiptPaymentRecord(
-                    method = entry.method,
-                    amountCents = entry.amountCents,
-                    reference = entry.reference,
-                    displayLabel = entry.displayLabel,
-                )
-            }
-
-        val changeCents = ((request.cashTenderedCents ?: totalPaidCents) - totalDueCents).coerceAtLeast(0)
-        val receiptLines = buildList {
-            add(ReceiptLine(label = "Ticket", value = ticketId))
-            resolvedTableLabel?.let { add(ReceiptLine(label = "Table", value = it)) }
-            request.lines.forEach { line ->
-                add(ReceiptLine(label = "${line.quantity}x ${line.name}", value = CentsFormatter.format(line.totalPriceCents)))
-            }
-            if (discountCents > 0) {
-                add(
-                    ReceiptLine(
-                        label = request.discountLabel?.let { "Discount ($it)" } ?: "Discount",
-                        value = "-${CentsFormatter.format(discountCents)}",
-                    ),
-                )
-            }
-            add(ReceiptLine(label = "Total", value = CentsFormatter.format(totalDueCents)))
-            paymentRecords.forEach { payment ->
-                val paymentLabel = payment.displayLabel ?: payment.method.name.lowercase().replaceFirstChar { it.titlecase() }
-                add(ReceiptLine(label = paymentLabel, value = CentsFormatter.format(payment.amountCents)))
-            }
-            if (changeCents > 0) {
-                add(ReceiptLine(label = "Change", value = CentsFormatter.format(changeCents)))
-            }
-            request.voucherBarcodeValue?.takeIf { it.isNotBlank() }?.let { barcode ->
-                add(ReceiptLine(label = "Voucher code", value = barcode))
-            }
-        }
-
-        val receiptDocument = ReceiptDocument(
-            title = "AIROS Receipt",
-            lines = receiptLines,
-            footer = "Thank you",
-            payments = paymentRecords,
-            totals = ReceiptTotals(
-                subtotalCents = subtotalBeforeDiscountCents,
-                discountCents = discountCents,
-                taxCents = 0,
-                totalCents = totalDueCents,
-            ),
-            receiptNumber = ticketId,
-            orderNumber = ticketId,
-            printedAtEpochMillis = store.now(),
         )
 
         return PosResult.Success(

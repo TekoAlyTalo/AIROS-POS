@@ -1,6 +1,7 @@
 package com.airos.pos.app
 
 import android.content.Intent
+import android.util.Log
 import android.os.Build
 import android.os.Bundle
 import android.view.View
@@ -8,27 +9,101 @@ import android.view.Window
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.lifecycle.lifecycleScope
 import com.airos.pos.core.ui.AirosPosTheme
-import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.net.HttpURLConnection
+import java.net.URL
+import java.nio.charset.StandardCharsets
+
+private const val MenuPushLogTag = "AIROS_MENU_PUSH"
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        installSplashScreen()
         super.onCreate(savedInstanceState)
+        val appContainer = (application as AirosPosApplication).appContainer
         setSunmiStickFullScreen(window)
         sendSunmiStatusBarBroadcast()
-        MainScope().launch {
+
+        lifecycleScope.launch {
             runCatching {
-                (application as AirosPosApplication)
-                    .appContainer
-                    .customerDisplayService
-                    .updateCustomerTotalDisplay(null)
+                appContainer.customerDisplayService.updateCustomerTotalDisplay(null)
             }
+            val syncResult = appContainer.menuRepository.refresh()
+            Log.d("AIROS", "[MainActivity] menuRepository.refresh() -> $syncResult")
         }
+
+        startMenuPushListener(appContainer)
 
         setContent {
             AirosPosTheme {
-                AirosPosApp((application as AirosPosApplication).appContainer)
+                AirosPosStartupHost(appContainer = appContainer)
+            }
+        }
+    }
+
+    private fun startMenuPushListener(appContainer: AppContainer) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            while (true) {
+                val baseUrl = runCatching {
+                    appContainer.terminalPreferencesStore.settings.first().edgeBaseUrl.trim().trimEnd('/')
+                }.getOrDefault("")
+
+                if (baseUrl.isBlank()) {
+                    Log.w(MenuPushLogTag, "Listener skipped: backend base URL is empty")
+                    kotlinx.coroutines.delay(5000)
+                    continue
+                }
+
+                val eventUrl = "$baseUrl/api/menu/catalog/events"
+                var connection: HttpURLConnection? = null
+
+                try {
+                    Log.d(MenuPushLogTag, "Connecting to $eventUrl")
+                    connection = (URL(eventUrl).openConnection() as HttpURLConnection).apply {
+                        requestMethod = "GET"
+                        connectTimeout = 5000
+                        readTimeout = 0
+                        doInput = true
+                        useCaches = false
+                        setRequestProperty("Accept", "text/event-stream")
+                    }
+
+                    val status = connection.responseCode
+                    if (status !in 200..299) {
+                        Log.w(MenuPushLogTag, "Listener HTTP $status from $eventUrl")
+                        connection.disconnect()
+                        kotlinx.coroutines.delay(3000)
+                        continue
+                    }
+
+                    BufferedReader(
+                        InputStreamReader(connection.inputStream, StandardCharsets.UTF_8)
+                    ).use { reader ->
+                        while (true) {
+                            val line = reader.readLine() ?: break
+                            if (!line.startsWith("data:")) continue
+
+                            val payload = line.removePrefix("data:").trim()
+                            if (payload.isBlank()) continue
+
+                            Log.d(MenuPushLogTag, "Event received: $payload")
+                            val syncResult = appContainer.menuRepository.refresh()
+                            Log.d(MenuPushLogTag, "Refresh after push -> $syncResult")
+                        }
+                    }
+                } catch (t: Throwable) {
+                    Log.w(MenuPushLogTag, "Listener error: ${t.javaClass.simpleName}: ${t.message}")
+                    kotlinx.coroutines.delay(1500)
+                } finally {
+                    runCatching { connection?.disconnect() }
+                }
             }
         }
     }

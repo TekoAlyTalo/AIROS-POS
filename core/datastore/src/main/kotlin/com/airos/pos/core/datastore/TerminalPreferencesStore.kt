@@ -16,10 +16,10 @@ import java.io.IOException
 import java.net.URI
 
 private val Context.terminalPreferencesDataStore: DataStore<Preferences> by preferencesDataStore(name = "terminal_preferences")
-private const val DEFAULT_EDGE_BASE_URL = "http://192.168.8.158:18000/"
+private const val DEFAULT_EDGE_BASE_URL = "http://192.168.8.158:8000/"
 private const val LEGACY_EMULATOR_HOST = "10.0.2.2"
 private const val PHYSICAL_EDGE_HOST = "192.168.8.158"
-private const val DEFAULT_EDGE_PORT = 18000
+private const val DEFAULT_EDGE_PORT = 8000
 
 class TerminalPreferencesStore(
     private val context: Context,
