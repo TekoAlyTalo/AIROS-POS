@@ -64,6 +64,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.model.ManagerOverrideReason
+import com.airos.pos.domain.MenuSyncResult
 import com.airos.pos.core.model.ScanEvent
 import com.airos.pos.feature.auth.AuthScreen
 import com.airos.pos.feature.auth.AuthViewModel
@@ -272,10 +273,52 @@ fun AirosPosApp(
         return
     }
 
-    SignedInApp(
-        appContainer = appContainer,
-        currentStaffId = session!!.staffId,
-    )
+    val syncState by appContainer.menuRepository.syncState.collectAsState()
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        SignedInApp(
+            appContainer = appContainer,
+            currentStaffId = session!!.staffId,
+        )
+        MenuSyncBanner(syncState = syncState)
+    }
+}
+
+@Composable
+private fun MenuSyncBanner(syncState: MenuSyncResult?) {
+    when (syncState) {
+        is MenuSyncResult.FromCache -> {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFFB45309))
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "Offline — tuotelista välimuistista",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFFFEF3C7),
+                )
+            }
+        }
+        is MenuSyncResult.NoData -> {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF991B1B))
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "Ei yhteyttä — tuotelista ei saatavilla",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFFFEE2E2),
+                )
+            }
+        }
+        else -> Unit
+    }
 }
 
 @Composable

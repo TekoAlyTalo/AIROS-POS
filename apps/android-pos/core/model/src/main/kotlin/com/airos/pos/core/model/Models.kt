@@ -124,8 +124,10 @@ data class MenuItem(
     val name: String,
     val category: String,
     val priceCents: Int,
-    val taxRatePercent: Int,
+    val taxRatePercent: Double,
     val barcode: String? = null,
+    val imageUrl: String? = null,
+    val subcategory: String? = null,
     val requiresManagerOverride: Boolean = false,
 )
 
@@ -136,6 +138,7 @@ data class TicketLine(
     val quantity: Int,
     val unitPriceCents: Int,
     val totalPriceCents: Int,
+    val taxRatePercent: Double = 0.0,
     val note: String? = null,
 )
 
@@ -248,6 +251,7 @@ enum class ReceiptImageSourceType {
     FILE_PATH,
     CONTENT_URI,
     NETWORK_URL,
+    DATA_URL,
 }
 
 data class ReceiptImageSource(
@@ -338,6 +342,9 @@ data class ReceiptDocument(
     val customerNote: String? = null,
     val internalNote: String? = null,
     val extraTextBlocks: List<String> = emptyList(),
+    val tableLabel: String? = null,
+    val countryProfile: String = "FI",
+    val languageCode: String = "fi",
 ) {
     val primaryFooter: String
         get() = footerText ?: footer

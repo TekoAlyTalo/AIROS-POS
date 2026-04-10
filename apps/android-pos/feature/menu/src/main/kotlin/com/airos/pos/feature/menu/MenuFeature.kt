@@ -2,8 +2,10 @@ package com.airos.pos.feature.menu
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import coil.compose.AsyncImagePainter
+import coil.compose.SubcomposeAsyncImage
+import coil.compose.SubcomposeAsyncImageContent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
@@ -49,7 +51,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
@@ -116,6 +117,7 @@ data class MenuTicketLine(
     val name: String,
     val quantity: Int,
     val unitPriceCents: Int,
+    val taxRatePercent: Double,
     val discountPercent: Int? = null,
     val discountAmountCents: Int? = null,
 )
@@ -193,6 +195,7 @@ class MenuViewModel(
                     name = item.name,
                     quantity = 1,
                     unitPriceCents = item.priceCents,
+                    taxRatePercent = item.taxRatePercent,
                 )
             }
         }
@@ -373,6 +376,7 @@ class MenuViewModel(
                 quantity = line.quantity,
                 unitPriceCents = line.unitPriceCents,
                 totalPriceCents = line.totalCents(),
+                taxRatePercent = line.taxRatePercent,
             )
         }
 
@@ -530,23 +534,36 @@ fun MenuScreen(
     val categoryGroups = remember(state.items) { buildCategoryGroups(state.items) }
     var selectedCategory by rememberSaveable { mutableStateOf<String?>(null) }
     val activePageByCategory = remember { mutableStateMapOf<String, Int>() }
+    var selectedSubcategory by rememberSaveable { mutableStateOf<String?>(null) }
 
     val currentGroup = categoryGroups.firstOrNull { it.name == selectedCategory } ?: categoryGroups.firstOrNull()
     val gridConfig = (currentGroup?.gridConfig ?: state.gridConfig).sanitized()
     val currentCategory = currentGroup?.name
-    val pageCount = currentGroup?.items?.let { items ->
-        maxOf(
-            ((items.size + gridConfig.itemsPerPage - 1) / gridConfig.itemsPerPage).coerceAtLeast(1),
-            minimumPageCountForCategory(currentCategory),
-        )
-    } ?: 0
+    val subcategories = remember(currentGroup) {
+        currentGroup?.items
+            ?.mapNotNull { it.subcategory?.takeIf { s -> s.isNotBlank() } }
+            ?.distinct()
+            ?.sorted()
+            ?: emptyList()
+    }
+    val showSubcategoryPicker = subcategories.isNotEmpty() && selectedSubcategory == null
+    val filteredItems = remember(currentGroup, selectedSubcategory, subcategories) {
+        val base = currentGroup?.items.orEmpty()
+        when {
+            subcategories.isEmpty() -> base
+            selectedSubcategory != null -> base.filter { it.subcategory == selectedSubcategory }
+            else -> emptyList()
+        }
+    }
+    val pageCount = if (filteredItems.isEmpty()) 0 else maxOf(
+        ((filteredItems.size + gridConfig.itemsPerPage - 1) / gridConfig.itemsPerPage).coerceAtLeast(1),
+        minimumPageCountForCategory(currentCategory),
+    )
     val requestedPage = currentCategory?.let { activePageByCategory[it] } ?: 0
     val activePageIndex = if (pageCount == 0) 0 else requestedPage.coerceIn(0, pageCount - 1)
-    val activePageItems = currentGroup
-        ?.items
-        ?.drop(activePageIndex * gridConfig.itemsPerPage)
-        ?.take(gridConfig.itemsPerPage)
-        .orEmpty()
+    val activePageItems = filteredItems
+        .drop(activePageIndex * gridConfig.itemsPerPage)
+        .take(gridConfig.itemsPerPage)
     val pageSlots = List(gridConfig.itemsPerPage) { index -> activePageItems.getOrNull(index) }
     val totalTicketItems = state.ticketLines.sumOf { it.quantity }
     val ticketSubtotalCents = state.ticketLines.sumOf { it.totalCents() }
@@ -589,7 +606,14 @@ fun MenuScreen(
                             ProductGroupChip(
                                 label = group.name,
                                 selected = group.name == currentCategory,
-                                onClick = { selectedCategory = group.name },
+                                onClick = {
+                                    if (group.name == currentCategory) {
+                                        selectedSubcategory = null
+                                    } else {
+                                        selectedCategory = group.name
+                                        selectedSubcategory = null
+                                    }
+                                },
                             )
                         }
                     }
@@ -598,22 +622,32 @@ fun MenuScreen(
                         modifier = Modifier.weight(1f),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        ProductGrid(
-                            modifier = Modifier.weight(1f),
-                            config = gridConfig,
-                            slots = pageSlots,
-                            onSelectItem = onAddItemToTicket,
-                        )
-
-                        PageRail(
-                            pageCount = pageCount,
-                            activePageIndex = activePageIndex,
-                            onSelectPage = { pageIndex ->
-                                currentCategory?.let { category ->
-                                    activePageByCategory[category] = pageIndex
-                                }
-                            },
-                        )
+                        if (showSubcategoryPicker) {
+                            SubcategoryPickerGrid(
+                                modifier = Modifier.weight(1f),
+                                subcategories = subcategories,
+                                onSelectSubcategory = { sub ->
+                                    selectedSubcategory = sub
+                                    currentCategory?.let { activePageByCategory[it] = 0 }
+                                },
+                            )
+                        } else {
+                            ProductGrid(
+                                modifier = Modifier.weight(1f),
+                                config = gridConfig,
+                                slots = pageSlots,
+                                onSelectItem = onAddItemToTicket,
+                            )
+                            PageRail(
+                                pageCount = pageCount,
+                                activePageIndex = activePageIndex,
+                                onSelectPage = { pageIndex ->
+                                    currentCategory?.let { category ->
+                                        activePageByCategory[category] = pageIndex
+                                    }
+                                },
+                            )
+                        }
                     }
                 }
             }
@@ -730,11 +764,49 @@ private fun ProductGrid(
 }
 
 @Composable
-private fun ProductCard(
-    item: MenuItem,
-    onClick: () -> Unit,
+private fun SubcategoryPickerGrid(
+    modifier: Modifier = Modifier,
+    subcategories: List<String>,
+    onSelectSubcategory: (String) -> Unit,
 ) {
-    val imageRes = resolveLocalMenuImage(item)
+    val config = ProductGridConfig(rows = 3, columns = 3)
+    val slots = List(config.itemsPerPage) { index -> subcategories.getOrNull(index) }
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        repeat(config.rows) { rowIndex ->
+            Row(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                repeat(config.columns) { columnIndex ->
+                    val slotIndex = (rowIndex * config.columns) + columnIndex
+                    val sub = slots.getOrNull(slotIndex)
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight(),
+                    ) {
+                        if (sub == null) {
+                            EmptyProductCard()
+                        } else {
+                            SubcategoryCard(
+                                label = sub,
+                                onClick = { onSelectSubcategory(sub) },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubcategoryCard(label: String, onClick: () -> Unit) {
     Surface(
         modifier = Modifier
             .fillMaxSize()
@@ -757,28 +829,62 @@ private fun ProductCard(
                 shape = RoundedCornerShape(18.dp),
                 color = MenuPanelAltColor,
             ) {
-                if (imageRes != null) {
-                    Image(
-                        painter = painterResource(id = imageRes),
-                        contentDescription = item.name,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop,
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = label.take(2).uppercase(),
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MenuTextSecondary,
                     )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(MenuShellColor),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = item.name.take(2).uppercase(),
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MenuTextSecondary,
-                        )
-                    }
                 }
+            }
+            Text(
+                text = label,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MenuTextPrimary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ProductCard(
+    item: MenuItem,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxSize()
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(24.dp),
+        color = MenuPanelColor,
+        border = BorderStroke(1.dp, Color(0x1AFFFFFF)),
+        contentColor = MenuTextPrimary,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                shape = RoundedCornerShape(18.dp),
+                color = MenuPanelAltColor,
+            ) {
+                ProductImage(
+                    imageUrl = item.imageUrl,
+                    contentDescription = item.name,
+                    fallbackLabel = item.name.take(2).uppercase(),
+                )
             }
 
             Text(
@@ -790,6 +896,46 @@ private fun ProductCard(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+    }
+}
+
+@Composable
+private fun ProductImage(
+    imageUrl: String?,
+    contentDescription: String,
+    fallbackLabel: String,
+) {
+    if (!imageUrl.isNullOrBlank()) {
+        SubcomposeAsyncImage(
+            model = imageUrl,
+            contentDescription = contentDescription,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop,
+        ) {
+            when (painter.state) {
+                is AsyncImagePainter.State.Success -> SubcomposeAsyncImageContent()
+                else -> ProductImageFallback(fallbackLabel)
+            }
+        }
+    } else {
+        ProductImageFallback(fallbackLabel)
+    }
+}
+
+@Composable
+private fun ProductImageFallback(fallbackLabel: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MenuShellColor),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = fallbackLabel,
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            color = MenuTextSecondary,
+        )
     }
 }
 

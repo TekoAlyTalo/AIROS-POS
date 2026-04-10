@@ -47,9 +47,20 @@ interface TableRepository {
     suspend fun openTable(tableId: String, guestCount: Int, openedByStaffId: String): PosResult<RestaurantTable>
 }
 
+sealed class MenuSyncResult {
+    /** Network fetch succeeded; cache is up to date. */
+    object Fresh : MenuSyncResult()
+    /** Network unavailable; serving stale cache. */
+    data class FromCache(val lastSyncedAt: Long) : MenuSyncResult()
+    /** Network unavailable and no cache exists. */
+    data class NoData(val reason: String) : MenuSyncResult()
+}
+
 interface MenuRepository {
+    val syncState: StateFlow<MenuSyncResult?>
     fun observeMenuItems(): Flow<List<MenuItem>>
     suspend fun findItemByBarcode(rawValue: String): MenuItem?
+    suspend fun refresh(): MenuSyncResult
 }
 
 interface TicketRepository {

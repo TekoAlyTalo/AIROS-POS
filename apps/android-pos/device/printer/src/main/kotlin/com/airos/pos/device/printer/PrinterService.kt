@@ -1,11 +1,18 @@
 package com.airos.pos.device.printer
 
 import android.content.Context
+import android.graphics.BitmapFactory
 import android.os.RemoteException
+import android.util.Base64
 import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.model.DeviceConnectionState
 import com.airos.pos.core.model.KitchenTicketDocument
+import com.airos.pos.core.model.PaymentMethod
+import com.airos.pos.core.model.ReceiptBarcodeFormat
 import com.airos.pos.core.model.ReceiptDocument
+import com.airos.pos.core.model.ReceiptLine
+import com.airos.pos.core.model.ReceiptPaymentRecord
+import com.airos.pos.core.model.ReceiptTotals
 import com.sunmi.peripheral.printer.InnerPrinterCallback
 import com.sunmi.peripheral.printer.InnerPrinterException
 import com.sunmi.peripheral.printer.InnerPrinterManager
@@ -17,6 +24,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 interface PrinterService {
     val availability: StateFlow<DeviceConnectionState>
@@ -60,24 +70,25 @@ class SunmiPrinterService(
 
         return try {
             val callback = createNoOpCallback()
+            val meta = buildReceiptMeta(document)
 
             invokeIfPresent(service, "printerInit", callback)
-            invokeIfPresent(service, "setAlignment", 1, callback)
-            invokeIfPresent(service, "printText", "${document.title}\n", callback)
-            invokeIfPresent(service, "setAlignment", 0, callback)
-            invokeIfPresent(service, "printText", "------------------------------\n", callback)
 
-            document.lines.forEach { line ->
-                val rendered = if (line.value.isNullOrBlank()) {
-                    line.label
-                } else {
-                    "${line.label}: ${line.value}"
-                }
-                invokeIfPresent(service, "printText", "$rendered\n", callback)
-            }
-
-            invokeIfPresent(service, "printText", "------------------------------\n", callback)
-            invokeIfPresent(service, "printText", "${document.footer}\n", callback)
+            printLogoIfPresent(service, document, callback)
+            printCenteredLine(service, document.title, callback)
+            printBusinessBlock(service, document, callback)
+            printHeaderText(service, document, callback)
+            printDivider(service, callback)
+            printReceiptLines(service, document.lines, document.currencyCode, callback)
+            printDivider(service, callback)
+            printTotals(service, document.totals, document.currencyCode, callback)
+            printDivider(service, callback)
+            printPayments(service, document.payments, document.currencyCode, callback)
+            printDivider(service, callback)
+            printMeta(service, meta, callback)
+            printExtraTextBlocks(service, document, callback)
+            printFooter(service, document, callback)
+            printBarcodeIfPresent(service, document, callback)
 
             val wrapped = invokeIfPresent(service, "lineWrap", 3, callback)
             if (!wrapped) {
@@ -96,11 +107,13 @@ class SunmiPrinterService(
         val diagnostic = ReceiptDocument(
             title = "AIROS TEST",
             lines = listOf(
-                com.airos.pos.core.model.ReceiptLine(label = "Device", value = "SUNMI D3 MINI"),
-                com.airos.pos.core.model.ReceiptLine(label = "Message", value = "Hello World"),
-                com.airos.pos.core.model.ReceiptLine(label = "Path", value = "Receipt path probe"),
+                ReceiptLine(label = "Device", value = "SUNMI D3 MINI"),
+                ReceiptLine(label = "Message", value = "Hello World"),
+                ReceiptLine(label = "Path", value = "Receipt path probe"),
             ),
             footer = "If you can read this, the printer path works.",
+            footerText = "If you can read this, the printer path works.",
+            printedAtEpochMillis = System.currentTimeMillis()
         )
         return printReceipt(diagnostic)
     }
@@ -146,6 +159,250 @@ class SunmiPrinterService(
                 availabilityFlow.value = DeviceConnectionState.READY
                 PosResult.Success(connected)
             }
+        }
+    }
+
+    private fun printLogoIfPresent(
+        service: SunmiInnerPrinterService,
+        document: ReceiptDocument,
+        callback: InnerResultCallback,
+    ) {
+        val logo = document.logo ?: return
+        val source = logo.source
+        if (source.type.name != "DATA_URL") return
+        val bitmap = decodeDataUrlBitmap(source.value) ?: return
+        invokeIfPresent(service, "setAlignment", 1, callback)
+        invokeIfPresent(service, "printBitmap", bitmap, callback)
+        invokeIfPresent(service, "printText", "\n", callback)
+        invokeIfPresent(service, "setAlignment", 0, callback)
+    }
+
+    private fun printHeaderText(
+        service: SunmiInnerPrinterService,
+        document: ReceiptDocument,
+        callback: InnerResultCallback,
+    ) {
+        val headerText = document.headerText?.trim().orEmpty()
+        if (headerText.isEmpty()) return
+        printCenteredMultiline(service, headerText, callback)
+    }
+
+    private fun printBusinessBlock(
+        service: SunmiInnerPrinterService,
+        document: ReceiptDocument,
+        callback: InnerResultCallback,
+    ) {
+        val business = document.business ?: return
+        val rows = mutableListOf<String>().apply {
+            add(business.displayName)
+            business.legalName?.takeIf { it.isNotBlank() && it != business.displayName }?.let { add(it) }
+            business.businessId?.takeIf { it.isNotBlank() }?.let { add("Business ID: $it") }
+            business.vatId?.takeIf { it.isNotBlank() }?.let { add("VAT: $it") }
+            addAll(business.addressLines.filter { it.isNotBlank() })
+            business.phone?.takeIf { it.isNotBlank() }?.let { add(it) }
+            business.email?.takeIf { it.isNotBlank() }?.let { add(it) }
+            business.website?.takeIf { it.isNotBlank() }?.let { add(it) }
+        }.filter { it.isNotBlank() }
+
+        if (rows.isEmpty()) return
+        invokeIfPresent(service, "setAlignment", 1, callback)
+        rows.forEach { row -> invokeIfPresent(service, "printText", "$row\n", callback) }
+        invokeIfPresent(service, "setAlignment", 0, callback)
+    }
+
+    private fun printReceiptLines(
+        service: SunmiInnerPrinterService,
+        lines: List<ReceiptLine>,
+        currencyCode: String,
+        callback: InnerResultCallback,
+    ) {
+        lines.forEach { line ->
+            val rendered = renderReceiptLine(line, currencyCode)
+            rendered.forEach { invokeIfPresent(service, "printText", "$it\n", callback) }
+        }
+    }
+
+    private fun printTotals(
+        service: SunmiInnerPrinterService,
+        totals: ReceiptTotals?,
+        currencyCode: String,
+        callback: InnerResultCallback,
+    ) {
+        if (totals == null) return
+        invokeIfPresent(service, "printText", "Subtotal: ${formatMoney(totals.subtotalCents, currencyCode)}\n", callback)
+        if (totals.discountCents != 0) {
+            invokeIfPresent(service, "printText", "Discount: -${formatMoney(totals.discountCents, currencyCode)}\n", callback)
+        }
+        if (totals.taxCents != 0) {
+            invokeIfPresent(service, "printText", "Tax: ${formatMoney(totals.taxCents, currencyCode)}\n", callback)
+        }
+        invokeIfPresent(service, "printText", "TOTAL: ${formatMoney(totals.totalCents, currencyCode)}\n", callback)
+    }
+
+    private fun printPayments(
+        service: SunmiInnerPrinterService,
+        payments: List<ReceiptPaymentRecord>,
+        currencyCode: String,
+        callback: InnerResultCallback,
+    ) {
+        payments.forEach { payment ->
+            val label = payment.displayLabel?.takeIf { it.isNotBlank() }
+                ?: payment.method.name.lowercase().replaceFirstChar { it.titlecase(Locale.ROOT) }
+            invokeIfPresent(service, "printText", "$label: ${formatMoney(payment.amountCents, currencyCode)}\n", callback)
+        }
+    }
+
+    private fun printMeta(
+        service: SunmiInnerPrinterService,
+        meta: ReceiptMeta,
+        callback: InnerResultCallback,
+    ) {
+        meta.rows.forEach { row -> invokeIfPresent(service, "printText", "$row\n", callback) }
+    }
+
+    private fun printExtraTextBlocks(
+        service: SunmiInnerPrinterService,
+        document: ReceiptDocument,
+        callback: InnerResultCallback,
+    ) {
+        val blocks = document.extraTextBlocks
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        if (blocks.isEmpty()) return
+        printDivider(service, callback)
+        blocks.forEach { block ->
+            printCenteredMultiline(service, block, callback)
+        }
+    }
+
+    private fun printFooter(
+        service: SunmiInnerPrinterService,
+        document: ReceiptDocument,
+        callback: InnerResultCallback,
+    ) {
+        val footer = document.primaryFooter.trim()
+        if (footer.isEmpty()) return
+        printDivider(service, callback)
+        printCenteredMultiline(service, footer, callback)
+    }
+
+    private fun printBarcodeIfPresent(
+        service: SunmiInnerPrinterService,
+        document: ReceiptDocument,
+        callback: InnerResultCallback,
+    ) {
+        val barcode = document.barcode ?: return
+        val barcodeLabel = barcode.label?.takeIf { it.isNotBlank() }
+        if (barcodeLabel != null) {
+            printDivider(service, callback)
+            printCenteredLine(service, barcodeLabel, callback)
+        }
+        if (barcode.format == ReceiptBarcodeFormat.QR_CODE) {
+            invokeIfPresent(service, "setAlignment", 1, callback)
+            val printed = invokeIfPresent(service, "printQRCode", barcode.value, 8, 0, callback) ||
+                invokeIfPresent(service, "print2DCode", barcode.value, 4, 3, 0, callback)
+            if (!printed) {
+                invokeIfPresent(service, "printText", "${barcode.value}\n", callback)
+            }
+            invokeIfPresent(service, "printText", "\n", callback)
+            invokeIfPresent(service, "setAlignment", 0, callback)
+        }
+    }
+
+    private fun printDivider(service: SunmiInnerPrinterService, callback: InnerResultCallback) {
+        invokeIfPresent(service, "setAlignment", 0, callback)
+        invokeIfPresent(service, "printText", "------------------------------\n", callback)
+    }
+
+    private fun printCenteredLine(
+        service: SunmiInnerPrinterService,
+        text: String,
+        callback: InnerResultCallback,
+    ) {
+        if (text.isBlank()) return
+        invokeIfPresent(service, "setAlignment", 1, callback)
+        invokeIfPresent(service, "printText", "${text.trim()}\n", callback)
+        invokeIfPresent(service, "setAlignment", 0, callback)
+    }
+
+    private fun printCenteredMultiline(
+        service: SunmiInnerPrinterService,
+        text: String,
+        callback: InnerResultCallback,
+    ) {
+        val lines = text.lines().map { it.trimEnd() }.filter { it.isNotBlank() }
+        if (lines.isEmpty()) return
+        invokeIfPresent(service, "setAlignment", 1, callback)
+        lines.forEach { line -> invokeIfPresent(service, "printText", "$line\n", callback) }
+        invokeIfPresent(service, "setAlignment", 0, callback)
+    }
+
+    private fun buildReceiptMeta(document: ReceiptDocument): ReceiptMeta {
+        val printedAt = document.printedAtEpochMillis
+        val date = printedAt?.let { formatReceiptDate(it) }
+        val time = printedAt?.let { formatReceiptTime(it) }
+        val rows = buildList {
+            val receiptNumber = document.receiptNumber
+            val orderNumber = document.orderNumber
+            val cashierName = document.cashierName
+            if (!receiptNumber.isNullOrBlank()) add("Receipt: $receiptNumber")
+            if (!orderNumber.isNullOrBlank()) add("Order: $orderNumber")
+            if (!cashierName.isNullOrBlank()) add("Cashier: $cashierName")
+            if (date != null) add("Date: $date")
+            if (time != null) add("Time: $time")
+        }
+        return ReceiptMeta(rows)
+    }
+
+    private fun renderReceiptLine(line: ReceiptLine, currencyCode: String): List<String> {
+        val rendered = mutableListOf<String>()
+        val totalPriceCents = line.totalPriceCents
+        if (!line.quantity.isNullOrBlank() && totalPriceCents != null) {
+            rendered += "${line.quantity} ${line.label}".trim()
+            rendered += formatMoney(totalPriceCents, currencyCode)
+        } else if (!line.value.isNullOrBlank()) {
+            rendered += "${line.label}: ${line.value}"
+        } else {
+            rendered += line.label
+        }
+        line.note?.takeIf { it.isNotBlank() }?.let { rendered += "  $it" }
+        return rendered
+    }
+
+    private fun decodeDataUrlBitmap(value: String): android.graphics.Bitmap? {
+        return try {
+            val markerIndex = value.indexOf("base64,")
+            val payload = if (markerIndex >= 0) value.substring(markerIndex + 7) else value
+            val bytes = Base64.decode(payload, Base64.DEFAULT)
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun formatReceiptDate(epochMillis: Long): String {
+        return SimpleDateFormat("dd.MM.yyyy", Locale.US).format(Date(epochMillis))
+    }
+
+    private fun formatReceiptTime(epochMillis: Long): String {
+        return SimpleDateFormat("HH:mm", Locale.US).format(Date(epochMillis))
+    }
+
+    private fun formatMoney(amountCents: Int, currencyCode: String): String {
+        val sign = if (amountCents < 0) "-" else ""
+        val absCents = kotlin.math.abs(amountCents)
+        val major = absCents / 100
+        val minor = absCents % 100
+        return "$sign$major,${minor.toString().padStart(2, '0')} ${currencySymbol(currencyCode)}"
+    }
+
+    private fun currencySymbol(currencyCode: String): String {
+        return when (currencyCode.uppercase(Locale.ROOT)) {
+            "EUR" -> "€"
+            "SEK" -> "kr"
+            "USD" -> "$"
+            "GBP" -> "£"
+            else -> currencyCode.uppercase(Locale.ROOT)
         }
     }
 
@@ -203,4 +460,8 @@ class SunmiPrinterService(
             }
         }
     }
+
+    private data class ReceiptMeta(
+        val rows: List<String>,
+    )
 }
