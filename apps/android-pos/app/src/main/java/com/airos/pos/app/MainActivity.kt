@@ -1,6 +1,9 @@
 package com.airos.pos.app
 
 import android.content.Intent
+import android.nfc.NfcAdapter
+import android.nfc.NfcManager
+import android.nfc.Tag
 import android.util.Log
 import android.os.Build
 import android.os.Bundle
@@ -22,14 +25,21 @@ import java.net.URL
 import java.nio.charset.StandardCharsets
 
 private const val MenuPushLogTag = "AIROS_MENU_PUSH"
+private const val NfcLogTag = "AIROS_NFC"
 
 class MainActivity : ComponentActivity() {
+
+    private var nfcAdapter: NfcAdapter? = null
+    private val nfcStaffResolver: NfcStaffResolver = LocalNfcStaffResolver()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
         val appContainer = (application as AirosPosApplication).appContainer
         setSunmiStickFullScreen(window)
         sendSunmiStatusBarBroadcast()
+
+        probeNfcAdapter()
 
         lifecycleScope.launch {
             runCatching {
@@ -47,6 +57,110 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onResume() {
+        super.onResume()
+        // Re-probe: the user may have toggled NFC in system settings and returned.
+        probeNfcAdapter()
+        enableNfcReaderMode()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        disableNfcReaderMode()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            setSunmiStickFullScreen(window)
+            sendSunmiStatusBarBroadcast()
+        }
+    }
+
+    // ── NFC probe ──────────────────────────────────────────────────────────────
+
+    /**
+     * Checks NFC adapter presence and enabled state, updates [NfcProbe], logs result.
+     * Idempotent — safe to call on every resume.
+     */
+    private fun probeNfcAdapter() {
+        val manager = getSystemService(NfcManager::class.java)
+        val adapter = manager?.defaultAdapter
+        nfcAdapter = adapter
+
+        val present = adapter != null
+        val enabled = adapter?.isEnabled == true
+        NfcProbe.updateAdapterStatus(adapterPresent = present, enabled = enabled)
+
+        when {
+            !present -> Log.d(NfcLogTag, "Probe: no NFC adapter on this device")
+            !enabled -> Log.d(NfcLogTag, "Probe: adapter present but NFC is disabled in system settings")
+            else     -> Log.d(NfcLogTag, "Probe: adapter present and enabled")
+        }
+    }
+
+    /**
+     * Activates NFC reader mode for all common tag technologies.
+     *
+     * Reader mode delivers tags to [onNfcTagDiscovered] while the app is in the
+     * foreground, without requiring intent filters or foreground dispatch setup.
+     * [FLAG_READER_SKIP_NDEF_CHECK] speeds up tag detection by skipping NDEF parsing.
+     */
+    private fun enableNfcReaderMode() {
+        val adapter = nfcAdapter ?: return
+        if (!adapter.isEnabled) {
+            Log.d(NfcLogTag, "Reader mode NOT started — NFC is disabled")
+            return
+        }
+        val flags =
+            NfcAdapter.FLAG_READER_NFC_A or   // ISO 14443-A (Mifare, most cards)
+            NfcAdapter.FLAG_READER_NFC_B or   // ISO 14443-B
+            NfcAdapter.FLAG_READER_NFC_F or   // FeliCa
+            NfcAdapter.FLAG_READER_NFC_V or   // ISO 15693
+            NfcAdapter.FLAG_READER_SKIP_NDEF_CHECK
+        adapter.enableReaderMode(this, ::onNfcTagDiscovered, flags, null)
+        Log.d(NfcLogTag, "Reader mode enabled (flags=0x${flags.toString(16)})")
+    }
+
+    private fun disableNfcReaderMode() {
+        runCatching { nfcAdapter?.disableReaderMode(this) }
+        Log.d(NfcLogTag, "Reader mode disabled")
+    }
+
+    /**
+     * Called on the NFC binder thread when a tag enters the field.
+     * Extracts UID (uppercase colon-separated hex) and tech list, publishes to
+     * [NfcProbe], then resolves the UID to a staff member via [nfcStaffResolver].
+     *
+     * UID canonical form: uppercase hex bytes joined by ":", e.g. "08:7D:F6:83".
+     * This form is used consistently in [NfcStaffResolver] mappings.
+     */
+    private fun onNfcTagDiscovered(tag: Tag) {
+        val uid = tag.id.joinToString(":") { "%02X".format(it) }
+        val techs = tag.techList.map { it.substringAfterLast('.') }
+        Log.d(NfcLogTag, "Tag detected | uid=$uid | techs=${techs.joinToString()}")
+        NfcProbe.onTagDetected(
+            NfcTagEvent(
+                uid = uid,
+                techList = techs,
+                action = "TAG_DISCOVERED",
+                timestamp = System.currentTimeMillis(),
+            )
+        )
+        val resolution = nfcStaffResolver.resolve(uid)
+            ?.let { NfcStaffResolution.Matched(it) }
+            ?: NfcStaffResolution.Unknown(uid, System.currentTimeMillis())
+        NfcProbe.onTagResolved(resolution)
+        when (resolution) {
+            is NfcStaffResolution.Matched ->
+                Log.d(NfcLogTag, "Staff match | uid=$uid staffId=${resolution.match.staffId} name=${resolution.match.displayName}")
+            is NfcStaffResolution.Unknown ->
+                Log.d(NfcLogTag, "Unknown NFC tag | uid=$uid — not in staff mapping")
+        }
+    }
+
+    // ── Menu push listener ─────────────────────────────────────────────────────
 
     private fun startMenuPushListener(appContainer: AppContainer) {
         lifecycleScope.launch(Dispatchers.IO) {
@@ -105,14 +219,6 @@ class MainActivity : ComponentActivity() {
                     runCatching { connection?.disconnect() }
                 }
             }
-        }
-    }
-
-    override fun onWindowFocusChanged(hasFocus: Boolean) {
-        super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) {
-            setSunmiStickFullScreen(window)
-            sendSunmiStatusBarBroadcast()
         }
     }
 

@@ -135,6 +135,13 @@ fun ShiftScreen(
     onOpenScannerSettings: () -> Unit,
     onOpenScannerDeviceSettings: () -> Unit,
     onOpenScannerKeyboardSettings: () -> Unit,
+    nfcAdapterSummary: String = "NFC not checked",
+    nfcProbeStatus: String? = null,
+    isNfcProbeFailure: Boolean = false,
+    lastNfcTagSummary: String? = null,
+    onRunNfcProbe: () -> Unit = {},
+    lastNfcStaffResolutionSummary: String? = null,
+    isNfcStaffResolutionUnknown: Boolean = false,
 ) {
     Row(
         modifier = Modifier.fillMaxSize(),
@@ -145,6 +152,12 @@ fun ShiftScreen(
             supportingText = "Open and close the cash shift with deterministic local records.",
             modifier = Modifier.weight(1f),
         ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
             state.message?.let { StatusBanner(text = it, tint = MaterialTheme.colorScheme.error) }
             OutlinedTextField(
                 value = state.openingFloatInput,
@@ -205,6 +218,53 @@ fun ShiftScreen(
                     },
                 )
             }
+            Text(
+                text = "NFC probe",
+                style = MaterialTheme.typography.titleSmall,
+            )
+            Text(
+                text = nfcAdapterSummary,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Button(onClick = onRunNfcProbe) {
+                Text("Run NFC probe")
+            }
+            nfcProbeStatus?.let { status ->
+                StatusBanner(
+                    text = status,
+                    tint = if (isNfcProbeFailure) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
+                )
+            }
+            lastNfcTagSummary?.let { summary ->
+                StatusBanner(
+                    text = summary,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+            Text(
+                text = "NFC staff match",
+                style = MaterialTheme.typography.titleSmall,
+            )
+            if (lastNfcStaffResolutionSummary != null) {
+                StatusBanner(
+                    text = lastNfcStaffResolutionSummary,
+                    tint = if (isNfcStaffResolutionUnknown) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
+                )
+            } else {
+                Text(
+                    text = "No tag tapped yet.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+            } // end scrollable Column
         }
 
         PosPane(

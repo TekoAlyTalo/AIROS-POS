@@ -35,6 +35,14 @@
         android:name="android.hardware.camera.any"
         android:required="false" />
 
+    <!-- NFC — capability probe and future staff identification. required=false so the
+         app installs on devices without NFC hardware (e.g. basic terminals). -->
+    <uses-permission android:name="android.permission.NFC" />
+
+    <uses-feature
+        android:name="android.hardware.nfc"
+        android:required="false" />
+
     <permission
         android:name="com.airos.pos.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
         android:protectionLevel="signature" />
