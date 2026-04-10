@@ -85,6 +85,7 @@ import com.airos.pos.feature.shift.ShiftViewModel
 import com.airos.pos.feature.tablemap.TableMapScreen
 import com.airos.pos.feature.tablemap.TableMapViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -255,6 +256,25 @@ fun AirosPosApp(
     if (session == null) {
         val authViewModel: AuthViewModel = viewModel(factory = AuthViewModel.factory(appContainer.authRepository))
         val authState by authViewModel.uiState.collectAsState()
+
+        // NFC preselect: react to new tag resolutions that happen while auth screen is open.
+        // drop(1) skips the current StateFlow value so a stale resolution from a previous
+        // session does not auto-select staff on screen entry.
+        LaunchedEffect(Unit) {
+            NfcProbe.status.drop(1).collect { status ->
+                when (val r = status.lastStaffResolution) {
+                    is NfcStaffResolution.Matched ->
+                        authViewModel.selectStaffByNfc(
+                            staffId = r.match.staffId,
+                            noticeMessage = "NFC: ${r.match.displayName}",
+                        )
+                    is NfcStaffResolution.Unknown ->
+                        authViewModel.showNfcUnknownTagNotice("Unknown NFC tag — not enrolled")
+                    null -> { /* initial state, no tag tapped yet */ }
+                }
+            }
+        }
+
         AuthScreen(
             state = authState,
             onStaffSelected = authViewModel::selectStaff,
@@ -366,6 +386,9 @@ private fun SignedInApp(
                     var scannerProbeStatus by rememberSaveable { mutableStateOf<String?>(null) }
                     var isScannerProbeFailure by rememberSaveable { mutableStateOf(false) }
                     var lastScannerValue by rememberSaveable { mutableStateOf<String?>(null) }
+                    val nfcStatus by NfcProbe.status.collectAsState()
+                    var nfcProbeStatus by rememberSaveable { mutableStateOf<String?>(null) }
+                    var isNfcProbeFailure by rememberSaveable { mutableStateOf(false) }
                     val activity = context as? Activity
                     val sunmiScannerUiLauncher = rememberLauncherForActivityResult(
                         contract = ActivityResultContracts.StartActivityForResult(),
@@ -763,6 +786,39 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                                         }
                                     }
                                 },
+                                nfcAdapterSummary = when {
+                                    !nfcStatus.adapterPresent -> "No NFC adapter on this device"
+                                    !nfcStatus.enabled -> "NFC adapter present but disabled in system settings"
+                                    else -> "NFC adapter present and enabled"
+                                },
+                                nfcProbeStatus = nfcProbeStatus,
+                                isNfcProbeFailure = isNfcProbeFailure,
+                                lastNfcTagSummary = nfcStatus.lastTagEvent?.let { event ->
+                                    "Last tag: uid=${event.uid} techs=${event.techList.joinToString()}"
+                                },
+                                onRunNfcProbe = {
+                                    val manager = context.getSystemService(android.nfc.NfcManager::class.java)
+                                    val adapter = manager?.defaultAdapter
+                                    NfcProbe.updateAdapterStatus(
+                                        adapterPresent = adapter != null,
+                                        enabled = adapter?.isEnabled == true,
+                                    )
+                                    nfcProbeStatus = when {
+                                        adapter == null -> "No NFC adapter on this device"
+                                        !adapter.isEnabled -> "NFC adapter present but disabled — enable in system settings"
+                                        else -> "NFC adapter ready. Tap a card to test."
+                                    }
+                                    isNfcProbeFailure = adapter == null || adapter?.isEnabled != true
+                                },
+                                lastNfcStaffResolutionSummary = when (val r = nfcStatus.lastStaffResolution) {
+                                    is NfcStaffResolution.Matched ->
+                                        "Matched: ${r.match.displayName} · ${r.match.role} · staffId=${r.match.staffId}"
+                                    is NfcStaffResolution.Unknown ->
+                                        "Unknown tag: ${r.uid} — not in staff mapping"
+                                    null -> null
+                                },
+                                isNfcStaffResolutionUnknown =
+                                    nfcStatus.lastStaffResolution is NfcStaffResolution.Unknown,
                     )
                         }
                     }

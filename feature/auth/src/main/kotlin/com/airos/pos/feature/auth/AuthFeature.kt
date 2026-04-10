@@ -131,8 +131,36 @@ class AuthViewModel(
                 selectedStaffId = staffId,
                 pin = "",
                 errorMessage = null,
+                noticeMessage = null,
             )
         }
+    }
+
+    /**
+     * Preselects a staff member identified by an NFC tag match and shows a notice.
+     * PIN entry is still required — this is selection only, not sign-in.
+     *
+     * Called from [AirosPosApp] when an NFC match is detected while the auth screen
+     * is visible. Takes only primitives so [feature.auth] stays decoupled from the
+     * NFC types in the [app] package.
+     */
+    fun selectStaffByNfc(staffId: String, noticeMessage: String) {
+        mutableState.update { current ->
+            current.copy(
+                selectedStaffId = staffId,
+                pin = "",
+                errorMessage = null,
+                noticeMessage = noticeMessage,
+            )
+        }
+    }
+
+    /**
+     * Shows a notice for an unrecognized NFC tag without changing staff selection.
+     * Called from [AirosPosApp] when an unknown tag is read on the auth screen.
+     */
+    fun showNfcUnknownTagNotice(message: String) {
+        mutableState.update { it.copy(noticeMessage = message) }
     }
 
     fun appendPin(digit: String) {
