@@ -85,6 +85,16 @@ class FakeAuthRepository(
     override fun observeQuickSelectStaff(): Flow<List<StaffMember>> = staffFlow
     override fun observeManagerQuickSelectStaff(): Flow<List<StaffMember>> = managerFlow
 
+    private fun buildSession(authRecord: StaffAuthRecord): AuthSession {
+        return AuthSession(
+            staffId = authRecord.staffId,
+            displayName = authRecord.displayName,
+            role = authRecord.role,
+            isManager = authRecord.isManager,
+            authenticatedAtEpochMillis = System.currentTimeMillis(),
+        )
+    }
+
     override suspend fun signInWithPin(staffId: String, pin: String): PosResult<AuthSession> {
         val authRecord = authRecords.firstOrNull { it.staffId == staffId }
             ?: return PosResult.Failure("Staff profile was not found.")
@@ -94,13 +104,18 @@ class FakeAuthRepository(
         if (authRecord.pin != pin) {
             return PosResult.Failure("Incorrect PIN.")
         }
-        val session = AuthSession(
-            staffId = authRecord.staffId,
-            displayName = authRecord.displayName,
-            role = authRecord.role,
-            isManager = authRecord.isManager,
-            authenticatedAtEpochMillis = System.currentTimeMillis(),
-        )
+        val session = buildSession(authRecord)
+        activeSessionFlow.value = session
+        return PosResult.Success(session)
+    }
+
+    override suspend fun signInWithNfc(staffId: String): PosResult<AuthSession> {
+        val authRecord = authRecords.firstOrNull { it.staffId == staffId }
+            ?: return PosResult.Failure("Staff profile was not found.")
+        if (!authRecord.isEnabled) {
+            return PosResult.Failure("This staff profile is disabled.")
+        }
+        val session = buildSession(authRecord)
         activeSessionFlow.value = session
         return PosResult.Success(session)
     }
@@ -642,6 +657,10 @@ class DataStoreSettingsRepository(
 
     override suspend fun setOfflineMode(enabled: Boolean) {
         preferencesStore.setOfflineMode(enabled)
+    }
+
+    override suspend fun setNfcDirectLoginEnabled(enabled: Boolean) {
+        preferencesStore.setNfcDirectLoginEnabled(enabled)
     }
 }
 
