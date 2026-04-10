@@ -180,6 +180,11 @@ class MenuViewModel(
 
     fun addToTicket(item: MenuItem) {
         updateTicketLines { currentLines ->
+            // A product appears at most once per ticket. When it is already on the ticket,
+            // only the quantity is incremented — unitPriceCents is never updated, even if
+            // the backend menu price has since changed. This locks the sale price to the
+            // moment the line was first opened. The new menu price takes effect only on
+            // tickets that don't yet have this product.
             val existingIndex = currentLines.indexOfFirst { it.itemId == item.id }
             if (existingIndex >= 0) {
                 currentLines.mapIndexed { index, line ->
