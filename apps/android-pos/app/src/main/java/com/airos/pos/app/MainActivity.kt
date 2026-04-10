@@ -4,9 +4,9 @@ import android.content.Intent
 import android.nfc.NfcAdapter
 import android.nfc.NfcManager
 import android.nfc.Tag
-import android.util.Log
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.View
 import android.view.Window
 import android.view.WindowManager
@@ -30,12 +30,14 @@ private const val NfcLogTag = "AIROS_NFC"
 class MainActivity : ComponentActivity() {
 
     private var nfcAdapter: NfcAdapter? = null
-    private val nfcStaffResolver: NfcStaffResolver = LocalNfcStaffResolver()
+    private val appContainer: AppContainer
+        get() = (application as AirosPosApplication).appContainer
+    private val nfcStaffResolver: NfcStaffResolver by lazy { appContainer.nfcStaffResolver }
+    private val nfcIdentityRepository by lazy { appContainer.nfcIdentityRepository }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
-        val appContainer = (application as AirosPosApplication).appContainer
         setSunmiStickFullScreen(window)
         sendSunmiStatusBarBroadcast()
 
@@ -139,24 +141,40 @@ class MainActivity : ComponentActivity() {
     private fun onNfcTagDiscovered(tag: Tag) {
         val uid = tag.id.joinToString(":") { "%02X".format(it) }
         val techs = tag.techList.map { it.substringAfterLast('.') }
+        val detectedAt = System.currentTimeMillis()
         Log.d(NfcLogTag, "Tag detected | uid=$uid | techs=${techs.joinToString()}")
         NfcProbe.onTagDetected(
             NfcTagEvent(
                 uid = uid,
                 techList = techs,
                 action = "TAG_DISCOVERED",
-                timestamp = System.currentTimeMillis(),
+                timestamp = detectedAt,
             )
         )
-        val resolution = nfcStaffResolver.resolve(uid)
-            ?.let { NfcStaffResolution.Matched(it) }
-            ?: NfcStaffResolution.Unknown(uid, System.currentTimeMillis())
-        NfcProbe.onTagResolved(resolution)
-        when (resolution) {
-            is NfcStaffResolution.Matched ->
-                Log.d(NfcLogTag, "Staff match | uid=$uid staffId=${resolution.match.staffId} name=${resolution.match.displayName}")
-            is NfcStaffResolution.Unknown ->
-                Log.d(NfcLogTag, "Unknown NFC tag | uid=$uid — not in staff mapping")
+        lifecycleScope.launch(Dispatchers.IO) {
+            val resolution = runCatching {
+                nfcStaffResolver.resolve(uid)?.let { NfcStaffResolution.Matched(it) }
+                    ?: run {
+                        nfcIdentityRepository.recordUnknownTag(uid)
+                        NfcStaffResolution.Unknown(uid, detectedAt)
+                    }
+            }.getOrElse { error ->
+                Log.e(NfcLogTag, "NFC resolve failed | uid=$uid reason=${error.message}", error)
+                nfcIdentityRepository.recordUnknownTag(uid)
+                NfcStaffResolution.Unknown(uid, detectedAt)
+            }
+
+            NfcProbe.onTagResolved(resolution)
+            when (resolution) {
+                is NfcStaffResolution.Matched ->
+                    Log.d(
+                        NfcLogTag,
+                        "Staff match | uid=$uid staffId=${resolution.match.staffId} name=${resolution.match.displayName}",
+                    )
+
+                is NfcStaffResolution.Unknown ->
+                    Log.d(NfcLogTag, "Unknown NFC tag | uid=$uid — not enrolled")
+            }
         }
     }
 

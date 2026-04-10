@@ -843,7 +843,7 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                                     is NfcStaffResolution.Matched ->
                                         "Matched: ${r.match.displayName} · ${r.match.role} · staffId=${r.match.staffId}"
                                     is NfcStaffResolution.Unknown ->
-                                        "Unknown tag: ${r.uid} — not in staff mapping"
+                                        "Unknown tag: ${r.uid} — not enrolled"
                                     null -> null
                                 },
                                 isNfcStaffResolutionUnknown =
@@ -989,12 +989,28 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                 composable(Routes.Settings) {
                     val viewModel: SettingsViewModel = viewModel(
                         factory = SettingsViewModel.factory(
-                            appContainer.settingsRepository,
-                            appContainer.syncQueueRepository,
-                            appContainer.deviceInfoService,
+                            settingsRepository = appContainer.settingsRepository,
+                            syncQueueRepository = appContainer.syncQueueRepository,
+                            authRepository = appContainer.authRepository,
+                            nfcIdentityRepository = appContainer.nfcIdentityRepository,
+                            deviceInfoService = appContainer.deviceInfoService,
                         ),
                     )
                     val state by viewModel.uiState.collectAsState()
+                    val nfcStatus by NfcProbe.status.collectAsState()
+                    LaunchedEffect(viewModel, state.pendingNfcEnrollmentStaffId) {
+                        if (state.pendingNfcEnrollmentStaffId == null) {
+                            return@LaunchedEffect
+                        }
+                        NfcProbe.status.drop(1).collect { status ->
+                            status.lastTagEvent?.let { event ->
+                                viewModel.handlePendingNfcTag(
+                                    canonicalUid = event.uid,
+                                    detectedAtEpochMillis = event.timestamp,
+                                )
+                            }
+                        }
+                    }
                     SettingsScreen(
                         state = state,
                         onTerminalNameChanged = viewModel::updateTerminalNameInput,
@@ -1002,6 +1018,16 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                         onSaveSettings = viewModel::saveSettings,
                         onOfflineModeChanged = viewModel::setOfflineMode,
                         onNfcDirectLoginChanged = viewModel::setNfcDirectLoginEnabled,
+                        onBeginNfcEnrollment = viewModel::beginNfcEnrollment,
+                        onCancelNfcEnrollment = viewModel::cancelNfcEnrollment,
+                        onUseLastSeenNfcTag = {
+                            nfcStatus.lastTagEvent?.uid?.let(viewModel::useLastSeenNfcTag)
+                        },
+                        onRemoveNfcEnrollment = viewModel::removeNfcEnrollment,
+                        lastNfcTagSummary = nfcStatus.lastTagEvent?.let { event ->
+                            "uid=${event.uid} techs=${event.techList.joinToString()}"
+                        },
+                        lastNfcTagUid = nfcStatus.lastTagEvent?.uid,
                     )
                 }
 

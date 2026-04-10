@@ -1,11 +1,13 @@
 package com.airos.pos.app
 
+import com.airos.pos.core.model.NfcLinkedEntityType
+import com.airos.pos.domain.NfcIdentityRepository
+
 /**
  * A resolved NFC tag → staff member mapping result.
  *
- * [staffId] matches the ids used in [SampleData.localAuthStaffRecords] so that
- * a future tap-login path can look up the full staff record by id without extra
- * mapping work.
+ * [staffId] matches the ids used in the auth repository so that both direct-login
+ * and auth-screen preselect can keep using the existing sign-in path.
  */
 data class NfcStaffMatch(
     /** Canonical UID that produced this match (uppercase colon-separated hex). */
@@ -28,54 +30,50 @@ sealed class NfcStaffResolution {
 }
 
 /**
- * Resolves a canonical NFC UID to a staff member.
+ * Canonicalizes a raw NFC UID into uppercase colon-separated hex bytes.
  *
- * **Swap point**: replace [LocalNfcStaffResolver] with a Room/backend-backed impl
- * when persistent tag management is ready. Callers ([MainActivity] and [NfcProbe])
- * only depend on this interface and do not need to change.
+ * Accepted delimiters are ":" / "-" / whitespace. Each byte is padded to two hex
+ * characters so both manual input and runtime values converge to the same form.
  */
-interface NfcStaffResolver {
-    /**
-     * @param canonicalUid Uppercase colon-separated hex bytes, e.g. "08:7D:F6:83"
-     * @return [NfcStaffMatch] if the UID is in the mapping, null if unmapped
-     */
-    fun resolve(canonicalUid: String): NfcStaffMatch?
+fun canonicalizeNfcUid(rawValue: String): String {
+    val normalizedParts = rawValue
+        .trim()
+        .uppercase()
+        .replace('-', ':')
+        .split(':')
+        .flatMap { part ->
+            part.split(Regex("\\s+")).filter { it.isNotBlank() }
+        }
+        .map { token ->
+            require(token.length in 1..2 && token.all { it in '0'..'9' || it in 'A'..'F' }) {
+                "NFC UID must contain 1-2 digit hex tokens."
+            }
+            token.padStart(2, '0')
+        }
+
+    require(normalizedParts.isNotEmpty()) { "NFC UID is empty." }
+    return normalizedParts.joinToString(":")
 }
 
 /**
- * Local test implementation backed by a hardcoded map.
- *
- * Add known tag UIDs here during device onboarding / lab testing.
- * When an admin interface and backend tag registry exist, replace this class with
- * a `RepositoryNfcStaffResolver` that queries Room (synced from backend) — the
- * [NfcStaffResolver] interface is the only change surface.
- *
- * UIDs must be **uppercase colon-separated hex**, matching the canonical form
- * produced by `tag.id.joinToString(":") { "%02X".format(it) }` in
- * [MainActivity.onNfcTagDiscovered].
+ * Resolves a canonical NFC UID to an enrolled staff identity.
  */
-class LocalNfcStaffResolver : NfcStaffResolver {
+interface NfcStaffResolver {
+    suspend fun resolve(canonicalUid: String): NfcStaffMatch?
+}
 
-    /**
-     * uid (canonical) → Triple(staffId, displayName, roleLabel)
-     *
-     * staffId values must match [SampleData.localAuthStaffRecords] staffIds
-     * so a future tap-login path can do `authRepository.signInWithNfc(staffId)`.
-     */
-    private val mapping: Map<String, Triple<String, String, String>> = mapOf(
-        // ─── Lab / Sunmi D3 Mini test tag ──────────────────────────────────
-        "08:7D:F6:83" to Triple("staff-1", "Aino Korhonen", "Server"),
-        "02:5A:85:BE:C4:40:00" to Triple("staff-1", "Aino Korhonen", "Server"),
-        // ─── Add more enrolled tags below as they are onboarded ─────────────
-    )
-
-    override fun resolve(canonicalUid: String): NfcStaffMatch? {
-        val (staffId, displayName, role) = mapping[canonicalUid] ?: return null
+class RepositoryNfcStaffResolver(
+    private val nfcIdentityRepository: NfcIdentityRepository,
+) : NfcStaffResolver {
+    override suspend fun resolve(canonicalUid: String): NfcStaffMatch? {
+        val record = nfcIdentityRepository.resolveEnabledIdentity(canonicalizeNfcUid(canonicalUid))
+            ?.takeIf { it.entityType == NfcLinkedEntityType.STAFF }
+            ?: return null
         return NfcStaffMatch(
-            uid = canonicalUid,
-            staffId = staffId,
-            displayName = displayName,
-            role = role,
+            uid = record.canonicalUid,
+            staffId = record.entityId,
+            displayName = record.entityDisplayLabel,
+            role = record.entityRoleLabel ?: "STAFF",
             matchedAtEpochMillis = System.currentTimeMillis(),
         )
     }
