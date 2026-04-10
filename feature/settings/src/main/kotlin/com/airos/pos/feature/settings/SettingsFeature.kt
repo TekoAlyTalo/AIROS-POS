@@ -94,6 +94,21 @@ class SettingsViewModel(
         }
     }
 
+    fun setNfcDirectLoginEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsRepository.setNfcDirectLoginEnabled(enabled)
+            mutableState.update {
+                it.copy(
+                    message = if (enabled) {
+                        "NFC direct login enabled."
+                    } else {
+                        "NFC direct login disabled."
+                    },
+                )
+            }
+        }
+    }
+
     companion object {
         fun factory(
             settingsRepository: SettingsRepository,
@@ -112,6 +127,7 @@ fun SettingsScreen(
     onEdgeBaseUrlChanged: (String) -> Unit,
     onSaveSettings: () -> Unit,
     onOfflineModeChanged: (Boolean) -> Unit,
+    onNfcDirectLoginChanged: (Boolean) -> Unit,
 ) {
     PosPane(
         title = "Settings",
@@ -139,6 +155,16 @@ fun SettingsScreen(
             Switch(
                 checked = state.settings?.offlineModeEnabled ?: false,
                 onCheckedChange = onOfflineModeChanged,
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text("NFC direct login")
+            Switch(
+                checked = state.settings?.nfcDirectLoginEnabled ?: false,
+                onCheckedChange = onNfcDirectLoginChanged,
             )
         }
         Button(onClick = onSaveSettings) {

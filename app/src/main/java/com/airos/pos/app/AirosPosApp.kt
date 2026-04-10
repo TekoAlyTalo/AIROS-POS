@@ -64,8 +64,9 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.model.ManagerOverrideReason
-import com.airos.pos.domain.MenuSyncResult
 import com.airos.pos.core.model.ScanEvent
+import com.airos.pos.core.model.TerminalSettings
+import com.airos.pos.domain.MenuSyncResult
 import com.airos.pos.feature.auth.AuthScreen
 import com.airos.pos.feature.auth.AuthViewModel
 import com.airos.pos.feature.kitchen.KitchenScreen
@@ -102,6 +103,7 @@ private val AppShellTextSecondary = Color(0xFFE1EBF2)
 private val AppShellTextMuted = Color(0xFFB0C0CD)
 private val AppShellAccentText = Color(0xFF85F5E0)
 private const val CustomerDisplayLogTag = "SunmiCustomerDisplay"
+private const val NfcLogTag = "AIROS_NFC"
 private const val SunmiUiResultLogTag = "AIROS_SUNMI_UI_RESULT"
 
 private object Routes {
@@ -256,20 +258,47 @@ fun AirosPosApp(
     if (session == null) {
         val authViewModel: AuthViewModel = viewModel(factory = AuthViewModel.factory(appContainer.authRepository))
         val authState by authViewModel.uiState.collectAsState()
+        val terminalSettings by appContainer.settingsRepository.observeSettings().collectAsState(
+            initial = TerminalSettings(
+                terminalName = "",
+                edgeBaseUrl = "",
+                offlineModeEnabled = true,
+            ),
+        )
+        val nfcDirectLoginEnabled = terminalSettings.nfcDirectLoginEnabled
 
-        // NFC preselect: react to new tag resolutions that happen while auth screen is open.
-        // drop(1) skips the current StateFlow value so a stale resolution from a previous
-        // session does not auto-select staff on screen entry.
-        LaunchedEffect(Unit) {
+        // Signed-out auth screen NFC handling.
+        // When direct-login is OFF: keep preselect + notice behavior.
+        // When direct-login is ON: known tags sign in directly via AuthRepository.
+        // drop(1) skips a stale StateFlow value from an earlier screen/session.
+        LaunchedEffect(authViewModel, nfcDirectLoginEnabled) {
+            Log.d(NfcLogTag, "Auth screen NFC handler active | directLoginEnabled=$nfcDirectLoginEnabled")
             NfcProbe.status.drop(1).collect { status ->
                 when (val r = status.lastStaffResolution) {
-                    is NfcStaffResolution.Matched ->
-                        authViewModel.selectStaffByNfc(
-                            staffId = r.match.staffId,
-                            noticeMessage = "NFC: ${r.match.displayName}",
+                    is NfcStaffResolution.Matched -> {
+                        Log.i(
+                            NfcLogTag,
+                            "Matched NFC tag on auth screen | uid=${r.match.uid} staffId=${r.match.staffId} directLoginEnabled=$nfcDirectLoginEnabled",
                         )
-                    is NfcStaffResolution.Unknown ->
+                        if (nfcDirectLoginEnabled) {
+                            authViewModel.signInWithNfc(
+                                staffId = r.match.staffId,
+                                noticeMessage = "NFC: ${r.match.displayName}",
+                            )
+                        } else {
+                            authViewModel.selectStaffByNfc(
+                                staffId = r.match.staffId,
+                                noticeMessage = "NFC: ${r.match.displayName}",
+                            )
+                        }
+                    }
+                    is NfcStaffResolution.Unknown -> {
+                        Log.w(
+                            NfcLogTag,
+                            "Unknown NFC tag on auth screen | uid=${r.uid} directLoginEnabled=$nfcDirectLoginEnabled",
+                        )
                         authViewModel.showNfcUnknownTagNotice("Unknown NFC tag — not enrolled")
+                    }
                     null -> { /* initial state, no tag tapped yet */ }
                 }
             }
@@ -972,6 +1001,7 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                         onEdgeBaseUrlChanged = viewModel::updateEdgeBaseUrlInput,
                         onSaveSettings = viewModel::saveSettings,
                         onOfflineModeChanged = viewModel::setOfflineMode,
+                        onNfcDirectLoginChanged = viewModel::setNfcDirectLoginEnabled,
                     )
                 }
 

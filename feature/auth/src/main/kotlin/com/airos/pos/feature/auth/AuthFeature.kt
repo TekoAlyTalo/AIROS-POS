@@ -1,5 +1,6 @@
 package com.airos.pos.feature.auth
 
+import android.util.Log
 import android.graphics.Color.parseColor
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
@@ -49,6 +50,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 private const val PosPinLength = 4
+private const val NfcAuthLogTag = "AIROS_NFC"
 
 data class ManagerOverrideUiState(
     val isVisible: Boolean = false,
@@ -152,6 +154,52 @@ class AuthViewModel(
                 errorMessage = null,
                 noticeMessage = noticeMessage,
             )
+        }
+    }
+
+    /**
+     * Direct NFC login path used only when terminal settings explicitly allow it.
+     *
+     * This stays inside the existing auth repository flow instead of creating a
+     * UI-only session shortcut. Caller passes only resolved staff primitives.
+     */
+    fun signInWithNfc(staffId: String, noticeMessage: String) {
+        viewModelScope.launch {
+            mutableState.update { current ->
+                current.copy(
+                    selectedStaffId = staffId,
+                    pin = "",
+                    isAuthenticating = true,
+                    errorMessage = null,
+                    noticeMessage = noticeMessage,
+                )
+            }
+            Log.i(NfcAuthLogTag, "Direct NFC login requested | staffId=$staffId")
+            when (val result = authRepository.signInWithNfc(staffId)) {
+                is PosResult.Success -> {
+                    Log.i(NfcAuthLogTag, "Direct NFC login success | staffId=$staffId")
+                    mutableState.update {
+                        it.copy(
+                            authenticatedSession = result.value,
+                            pin = "",
+                            isAuthenticating = false,
+                            errorMessage = null,
+                            noticeMessage = noticeMessage,
+                        )
+                    }
+                }
+
+                is PosResult.Failure -> {
+                    Log.w(NfcAuthLogTag, "Direct NFC login failure | staffId=$staffId reason=${result.message}")
+                    mutableState.update {
+                        it.copy(
+                            pin = "",
+                            isAuthenticating = false,
+                            errorMessage = result.message,
+                        )
+                    }
+                }
+            }
         }
     }
 

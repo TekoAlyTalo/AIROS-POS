@@ -428,5 +428,6 @@ data class TerminalSettings(
     val terminalName: String,
     val edgeBaseUrl: String,
     val offlineModeEnabled: Boolean,
+    val nfcDirectLoginEnabled: Boolean = false,
     val preferredPrinterId: String? = null,
 )

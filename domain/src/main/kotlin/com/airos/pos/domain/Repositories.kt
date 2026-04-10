@@ -27,6 +27,7 @@ interface AuthRepository {
     fun observeQuickSelectStaff(): Flow<List<StaffMember>>
     fun observeManagerQuickSelectStaff(): Flow<List<StaffMember>>
     suspend fun signInWithPin(staffId: String, pin: String): PosResult<AuthSession>
+    suspend fun signInWithNfc(staffId: String): PosResult<AuthSession>
     suspend fun verifyManagerOverride(
         managerStaffId: String,
         pin: String,
@@ -87,6 +88,7 @@ interface SettingsRepository {
     suspend fun updateTerminalName(value: String)
     suspend fun updateEdgeBaseUrl(value: String)
     suspend fun setOfflineMode(enabled: Boolean)
+    suspend fun setNfcDirectLoginEnabled(enabled: Boolean)
 }
 
 interface SyncQueueRepository {

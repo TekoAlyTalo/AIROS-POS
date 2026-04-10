@@ -28,6 +28,7 @@ class TerminalPreferencesStore(
         val terminalName = stringPreferencesKey("terminal_name")
         val edgeBaseUrl = stringPreferencesKey("edge_base_url")
         val offlineMode = booleanPreferencesKey("offline_mode")
+        val nfcDirectLogin = booleanPreferencesKey("nfc_direct_login")
         val preferredPrinterId = stringPreferencesKey("preferred_printer_id")
     }
 
@@ -44,6 +45,7 @@ class TerminalPreferencesStore(
                 terminalName = preferences[Keys.terminalName] ?: "AIROS POS Tablet",
                 edgeBaseUrl = normalizeEdgeBaseUrl(preferences[Keys.edgeBaseUrl] ?: DEFAULT_EDGE_BASE_URL),
                 offlineModeEnabled = preferences[Keys.offlineMode] ?: true,
+                nfcDirectLoginEnabled = preferences[Keys.nfcDirectLogin] ?: false,
                 preferredPrinterId = preferences[Keys.preferredPrinterId],
             )
         }
@@ -58,6 +60,10 @@ class TerminalPreferencesStore(
 
     suspend fun setOfflineMode(enabled: Boolean) {
         context.terminalPreferencesDataStore.edit { it[Keys.offlineMode] = enabled }
+    }
+
+    suspend fun setNfcDirectLoginEnabled(enabled: Boolean) {
+        context.terminalPreferencesDataStore.edit { it[Keys.nfcDirectLogin] = enabled }
     }
 
     suspend fun updatePreferredPrinter(id: String?) {
