@@ -6,10 +6,13 @@ import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.database.AirosPosDatabase
 import com.airos.pos.core.database.entity.NfcIdentityEnrollmentEntity
 import com.airos.pos.core.database.entity.NfcIdentityEventEntity
+import com.airos.pos.core.database.entity.NfcReceiptHandoffEntity
 import com.airos.pos.core.model.NfcIdentityEvent
 import com.airos.pos.core.model.NfcIdentityEventType
 import com.airos.pos.core.model.NfcIdentityRecord
 import com.airos.pos.core.model.NfcLinkedEntityType
+import com.airos.pos.core.model.NfcReceiptHandoffRecord
+import com.airos.pos.core.model.ReceiptHandoffPayload
 import com.airos.pos.core.model.StaffAuthRecord
 import com.airos.pos.core.model.StaffMember
 import com.airos.pos.domain.NfcIdentityRepository
@@ -40,9 +43,21 @@ class RoomNfcIdentityRepository(
         }
     }
 
+    override fun observeCustomerEnrollments(): Flow<List<NfcIdentityRecord>> {
+        return dao.observeEnrollmentsByEntityType(NfcLinkedEntityType.LOYALTY_MEMBER.name).map { items ->
+            items.map { it.toModel() }
+        }
+    }
+
     override fun observeRecentEvents(limit: Int): Flow<List<NfcIdentityEvent>> {
         return dao.observeRecentEvents(limit).map { items ->
             items.mapNotNull { it.toModelOrNull() }
+        }
+    }
+
+    override fun observeRecentReceiptHandoffs(limit: Int): Flow<List<NfcReceiptHandoffRecord>> {
+        return dao.observeRecentReceiptHandoffs(limit).map { items ->
+            items.map { it.toModel() }
         }
     }
 
@@ -64,6 +79,30 @@ class RoomNfcIdentityRepository(
         Log.i(
             NfcIdentityLogTag,
             "NFC identity matched | uid=$canonical entityType=${record.entityType} entityId=${record.entityId}",
+        )
+        return record
+    }
+
+    override suspend fun resolveCustomerIdentity(canonicalUid: String): NfcIdentityRecord? {
+        val canonical = canonicalizeNfcUid(canonicalUid)
+        val entity = dao.findEnabledEnrollmentByUid(canonical)
+            ?.takeIf { it.entityType == NfcLinkedEntityType.LOYALTY_MEMBER.name }
+            ?: return null
+        val record = entity.toModel()
+        dao.insertEvent(
+            NfcIdentityEventEntity(
+                eventType = NfcIdentityEventType.CUSTOMER_MATCHED.name,
+                canonicalUid = canonical,
+                entityType = record.entityType.name,
+                entityId = record.entityId,
+                entityDisplayLabel = record.entityDisplayLabel,
+                message = "Matched customer NFC tag $canonical to ${record.entityDisplayLabel}.",
+                occurredAtEpochMillis = System.currentTimeMillis(),
+            ),
+        )
+        Log.i(
+            NfcIdentityLogTag,
+            "NFC customer identity matched | uid=$canonical entityId=${record.entityId}",
         )
         return record
     }
@@ -185,6 +224,214 @@ class RoomNfcIdentityRepository(
         }
     }
 
+    override suspend fun enrollCustomerTag(canonicalUid: String, displayLabel: String): PosResult<NfcIdentityRecord> {
+        return try {
+            val record = database.withTransaction {
+                val canonical = canonicalizeNfcUid(canonicalUid)
+                val now = System.currentTimeMillis()
+                val existingByUid = dao.findEnrollmentByUid(canonical)
+                if (existingByUid != null && existingByUid.entityType != NfcLinkedEntityType.LOYALTY_MEMBER.name) {
+                    throw IllegalStateException("This NFC tag is already enrolled as ${existingByUid.entityType}.")
+                }
+
+                val label = displayLabel.trim().ifBlank { defaultCustomerLabel(canonical) }
+                val entity = NfcIdentityEnrollmentEntity(
+                    canonicalUid = canonical,
+                    entityType = NfcLinkedEntityType.LOYALTY_MEMBER.name,
+                    entityId = customerEntityIdForUid(canonical),
+                    entityDisplayLabel = label,
+                    entityRoleLabel = "CUSTOMER",
+                    nickname = label,
+                    enabled = true,
+                    createdAtEpochMillis = existingByUid?.createdAtEpochMillis ?: now,
+                    updatedAtEpochMillis = now,
+                )
+                dao.upsertEnrollment(entity)
+                dao.insertEvent(
+                    NfcIdentityEventEntity(
+                        eventType = if (existingByUid == null) {
+                            NfcIdentityEventType.ENROLLED.name
+                        } else {
+                            NfcIdentityEventType.REPLACED.name
+                        },
+                        canonicalUid = canonical,
+                        entityType = NfcLinkedEntityType.LOYALTY_MEMBER.name,
+                        entityId = entity.entityId,
+                        entityDisplayLabel = label,
+                        message = if (existingByUid == null) {
+                            "Enrolled customer NFC tag $canonical for $label."
+                        } else {
+                            "Updated customer NFC tag $canonical for $label."
+                        },
+                        occurredAtEpochMillis = now,
+                    ),
+                )
+                entity.toModel()
+            }
+            Log.i(
+                NfcIdentityLogTag,
+                "NFC customer tag enrolled | uid=${record.canonicalUid} entityId=${record.entityId}",
+            )
+            PosResult.Success(record)
+        } catch (error: IllegalArgumentException) {
+            Log.w(NfcIdentityLogTag, "NFC customer enroll rejected | reason=${error.message}")
+            PosResult.Failure(error.message ?: "NFC UID is invalid.")
+        } catch (error: IllegalStateException) {
+            Log.w(NfcIdentityLogTag, "NFC customer enroll rejected | reason=${error.message}")
+            PosResult.Failure(error.message ?: "NFC tag is already linked to another identity.")
+        } catch (error: Throwable) {
+            Log.e(NfcIdentityLogTag, "NFC customer enroll failed", error)
+            PosResult.Failure("Failed to store the customer NFC enrollment locally.")
+        }
+    }
+
+    override suspend fun removeCustomerTag(canonicalUid: String): PosResult<Unit> {
+        return try {
+            database.withTransaction {
+                val canonical = canonicalizeNfcUid(canonicalUid)
+                val existing = dao.findEnrollmentByUid(canonical)
+                    ?: return@withTransaction
+                if (existing.entityType != NfcLinkedEntityType.LOYALTY_MEMBER.name) {
+                    throw IllegalStateException("This NFC tag is not a customer identity.")
+                }
+                dao.deleteEnrollmentByUid(canonical)
+                dao.insertEvent(
+                    NfcIdentityEventEntity(
+                        eventType = NfcIdentityEventType.REMOVED.name,
+                        canonicalUid = canonical,
+                        entityType = existing.entityType,
+                        entityId = existing.entityId,
+                        entityDisplayLabel = existing.entityDisplayLabel,
+                        message = "Removed customer NFC tag $canonical from ${existing.entityDisplayLabel}.",
+                        occurredAtEpochMillis = System.currentTimeMillis(),
+                    ),
+                )
+            }
+            Log.i(NfcIdentityLogTag, "NFC customer tag removed | uid=${canonicalizeNfcUid(canonicalUid)}")
+            PosResult.Success(Unit)
+        } catch (error: IllegalArgumentException) {
+            Log.w(NfcIdentityLogTag, "NFC customer remove rejected | reason=${error.message}")
+            PosResult.Failure(error.message ?: "NFC UID is invalid.")
+        } catch (error: IllegalStateException) {
+            Log.w(NfcIdentityLogTag, "NFC customer remove rejected | reason=${error.message}")
+            PosResult.Failure(error.message ?: "NFC tag is not a customer identity.")
+        } catch (error: Throwable) {
+            Log.e(NfcIdentityLogTag, "NFC customer remove failed", error)
+            PosResult.Failure("Failed to remove the customer NFC enrollment.")
+        }
+    }
+
+    override suspend fun recordReceiptHandoffStarted(payload: ReceiptHandoffPayload) {
+        dao.insertEvent(
+            NfcIdentityEventEntity(
+                eventType = NfcIdentityEventType.RECEIPT_HANDOFF_STARTED.name,
+                canonicalUid = null,
+                entityType = NfcLinkedEntityType.RECEIPT_HANDOFF.name,
+                entityId = payload.ticketId,
+                entityDisplayLabel = payload.receiptNumber,
+                message = "Receipt NFC handoff started for ${payload.receiptNumber}.",
+                occurredAtEpochMillis = System.currentTimeMillis(),
+            ),
+        )
+        Log.i(NfcIdentityLogTag, "NFC receipt handoff started | receipt=${payload.receiptNumber} ticket=${payload.ticketId}")
+    }
+
+    override suspend fun recordReceiptHandoffFailed(payload: ReceiptHandoffPayload, reason: String) {
+        dao.insertEvent(
+            NfcIdentityEventEntity(
+                eventType = NfcIdentityEventType.RECEIPT_HANDOFF_FAILED.name,
+                canonicalUid = null,
+                entityType = NfcLinkedEntityType.RECEIPT_HANDOFF.name,
+                entityId = payload.ticketId,
+                entityDisplayLabel = payload.receiptNumber,
+                message = "Receipt NFC handoff failed for ${payload.receiptNumber}: $reason",
+                occurredAtEpochMillis = System.currentTimeMillis(),
+            ),
+        )
+        Log.w(NfcIdentityLogTag, "NFC receipt handoff failed | receipt=${payload.receiptNumber} reason=$reason")
+    }
+
+    override suspend fun recordReceiptHandoff(
+        canonicalUid: String,
+        payload: ReceiptHandoffPayload,
+    ): PosResult<NfcReceiptHandoffRecord> {
+        return try {
+            val record = database.withTransaction {
+                val canonical = canonicalizeNfcUid(canonicalUid)
+                val now = System.currentTimeMillis()
+                val customer = dao.findEnabledEnrollmentByUid(canonical)
+                    ?.takeIf { it.entityType == NfcLinkedEntityType.LOYALTY_MEMBER.name }
+
+                if (customer == null) {
+                    dao.insertEvent(
+                        NfcIdentityEventEntity(
+                            eventType = NfcIdentityEventType.UNKNOWN_CUSTOMER_TAG.name,
+                            canonicalUid = canonical,
+                            entityType = NfcLinkedEntityType.LOYALTY_MEMBER.name,
+                            entityId = null,
+                            entityDisplayLabel = null,
+                            message = "Receipt NFC handoff used an unenrolled customer tag $canonical.",
+                            occurredAtEpochMillis = now,
+                        ),
+                    )
+                } else {
+                    dao.insertEvent(
+                        NfcIdentityEventEntity(
+                            eventType = NfcIdentityEventType.CUSTOMER_MATCHED.name,
+                            canonicalUid = canonical,
+                            entityType = customer.entityType,
+                            entityId = customer.entityId,
+                            entityDisplayLabel = customer.entityDisplayLabel,
+                            message = "Matched customer NFC tag $canonical to ${customer.entityDisplayLabel} for receipt handoff.",
+                            occurredAtEpochMillis = now,
+                        ),
+                    )
+                }
+
+                val handoffEntity = NfcReceiptHandoffEntity(
+                    canonicalUid = canonical,
+                    receiptNumber = payload.receiptNumber,
+                    ticketId = payload.ticketId,
+                    saleId = payload.saleId,
+                    receiptSnapshotId = payload.receiptSnapshotId,
+                    publicReceiptUrl = payload.publicReceiptUrl,
+                    publicUrlPath = payload.publicUrlPath,
+                    rawPublicToken = payload.rawPublicToken,
+                    deliveryTokenIdsCsv = payload.deliveryTokenIds.joinToString("|"),
+                    linkedCustomerEntityId = customer?.entityId,
+                    linkedCustomerDisplayLabel = customer?.entityDisplayLabel,
+                    createdAtEpochMillis = now,
+                )
+                val id = dao.insertReceiptHandoff(handoffEntity)
+                dao.insertEvent(
+                    NfcIdentityEventEntity(
+                        eventType = NfcIdentityEventType.RECEIPT_HANDOFF_LINKED.name,
+                        canonicalUid = canonical,
+                        entityType = NfcLinkedEntityType.RECEIPT_HANDOFF.name,
+                        entityId = payload.ticketId,
+                        entityDisplayLabel = payload.receiptNumber,
+                        message = "Linked receipt ${payload.receiptNumber} to NFC tag $canonical.",
+                        occurredAtEpochMillis = now,
+                    ),
+                )
+                handoffEntity.copy(id = id).toModel()
+            }
+            Log.i(
+                NfcIdentityLogTag,
+                "NFC receipt handoff linked | uid=${record.canonicalUid} receipt=${record.receiptNumber} customer=${record.linkedCustomerDisplayLabel}",
+            )
+            PosResult.Success(record)
+        } catch (error: IllegalArgumentException) {
+            Log.w(NfcIdentityLogTag, "NFC receipt handoff rejected | reason=${error.message}")
+            runCatching { recordReceiptHandoffFailed(payload, error.message ?: "NFC UID is invalid.") }
+            PosResult.Failure(error.message ?: "NFC UID is invalid.")
+        } catch (error: Throwable) {
+            Log.e(NfcIdentityLogTag, "NFC receipt handoff failed", error)
+            runCatching { recordReceiptHandoffFailed(payload, "Failed to store the receipt handoff.") }
+            PosResult.Failure("Failed to store the receipt NFC handoff.")
+        }
+    }
+
     override suspend fun recordUnknownTag(canonicalUid: String) {
         val canonical = try {
             canonicalizeNfcUid(canonicalUid)
@@ -293,6 +540,39 @@ private fun NfcIdentityEventEntity.toModelOrNull(): NfcIdentityEvent? {
         message = message,
         occurredAtEpochMillis = occurredAtEpochMillis,
     )
+}
+
+private fun NfcReceiptHandoffEntity.toModel(): NfcReceiptHandoffRecord {
+    return NfcReceiptHandoffRecord(
+        id = id,
+        canonicalUid = canonicalUid,
+        receiptNumber = receiptNumber,
+        ticketId = ticketId,
+        saleId = saleId,
+        receiptSnapshotId = receiptSnapshotId,
+        publicReceiptUrl = publicReceiptUrl,
+        publicUrlPath = publicUrlPath,
+        rawPublicToken = rawPublicToken,
+        deliveryTokenIds = deliveryTokenIdsCsv
+            .split("|")
+            .filter { it.isNotBlank() },
+        linkedCustomerEntityId = linkedCustomerEntityId,
+        linkedCustomerDisplayLabel = linkedCustomerDisplayLabel,
+        createdAtEpochMillis = createdAtEpochMillis,
+    )
+}
+
+private fun customerEntityIdForUid(canonicalUid: String): String {
+    return "customer-${canonicalUid.replace(":", "").lowercase()}"
+}
+
+private fun defaultCustomerLabel(canonicalUid: String): String {
+    val suffix = canonicalUid
+        .split(":")
+        .takeLast(2)
+        .joinToString("")
+        .ifBlank { canonicalUid.replace(":", "").takeLast(4) }
+    return "Customer $suffix"
 }
 
 private inline fun <reified T : Enum<T>> enumValueOrNull(value: String?): T? {

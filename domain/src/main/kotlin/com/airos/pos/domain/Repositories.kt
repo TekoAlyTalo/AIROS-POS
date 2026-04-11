@@ -9,9 +9,11 @@ import com.airos.pos.core.model.ManagerOverrideReason
 import com.airos.pos.core.model.MenuItem
 import com.airos.pos.core.model.NfcIdentityEvent
 import com.airos.pos.core.model.NfcIdentityRecord
+import com.airos.pos.core.model.NfcReceiptHandoffRecord
 import com.airos.pos.core.model.PaymentMethod
 import com.airos.pos.core.model.PaymentSummary
 import com.airos.pos.core.model.PosShift
+import com.airos.pos.core.model.ReceiptHandoffPayload
 import com.airos.pos.core.model.TablePaymentRequest
 import com.airos.pos.core.model.TablePaymentResult
 import com.airos.pos.core.model.RefundRequest
@@ -95,10 +97,18 @@ interface SettingsRepository {
 
 interface NfcIdentityRepository {
     fun observeStaffEnrollments(): Flow<List<NfcIdentityRecord>>
+    fun observeCustomerEnrollments(): Flow<List<NfcIdentityRecord>>
     fun observeRecentEvents(limit: Int = 20): Flow<List<NfcIdentityEvent>>
+    fun observeRecentReceiptHandoffs(limit: Int = 20): Flow<List<NfcReceiptHandoffRecord>>
     suspend fun resolveEnabledIdentity(canonicalUid: String): NfcIdentityRecord?
+    suspend fun resolveCustomerIdentity(canonicalUid: String): NfcIdentityRecord?
     suspend fun enrollStaffTag(staff: StaffMember, canonicalUid: String): PosResult<NfcIdentityRecord>
     suspend fun removeStaffTag(staffId: String): PosResult<Unit>
+    suspend fun enrollCustomerTag(canonicalUid: String, displayLabel: String): PosResult<NfcIdentityRecord>
+    suspend fun removeCustomerTag(canonicalUid: String): PosResult<Unit>
+    suspend fun recordReceiptHandoffStarted(payload: ReceiptHandoffPayload)
+    suspend fun recordReceiptHandoffFailed(payload: ReceiptHandoffPayload, reason: String)
+    suspend fun recordReceiptHandoff(canonicalUid: String, payload: ReceiptHandoffPayload): PosResult<NfcReceiptHandoffRecord>
     suspend fun recordUnknownTag(canonicalUid: String)
 }
 

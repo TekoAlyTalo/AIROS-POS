@@ -41,3 +41,27 @@ data class NfcIdentityEventEntity(
     val message: String,
     val occurredAtEpochMillis: Long,
 )
+
+@Entity(
+    tableName = "nfc_receipt_handoffs",
+    indices = [
+        Index(value = ["canonicalUid"]),
+        Index(value = ["receiptNumber"]),
+        Index(value = ["createdAtEpochMillis"]),
+    ],
+)
+data class NfcReceiptHandoffEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val canonicalUid: String,
+    val receiptNumber: String,
+    val ticketId: String,
+    val saleId: String?,
+    val receiptSnapshotId: String?,
+    val publicReceiptUrl: String?,
+    val publicUrlPath: String?,
+    val rawPublicToken: String?,
+    val deliveryTokenIdsCsv: String,
+    val linkedCustomerEntityId: String?,
+    val linkedCustomerDisplayLabel: String?,
+    val createdAtEpochMillis: Long,
+)

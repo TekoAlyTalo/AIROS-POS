@@ -65,6 +65,11 @@ enum class NfcIdentityEventType {
     REMOVED,
     MATCHED,
     UNKNOWN_TAG,
+    RECEIPT_HANDOFF_STARTED,
+    RECEIPT_HANDOFF_LINKED,
+    RECEIPT_HANDOFF_FAILED,
+    CUSTOMER_MATCHED,
+    UNKNOWN_CUSTOMER_TAG,
 }
 
 data class NfcIdentityRecord(
@@ -88,6 +93,34 @@ data class NfcIdentityEvent(
     val entityDisplayLabel: String? = null,
     val message: String,
     val occurredAtEpochMillis: Long,
+)
+
+data class ReceiptHandoffPayload(
+    val receiptNumber: String,
+    val ticketId: String,
+    val saleId: String? = null,
+    val receiptSnapshotId: String? = null,
+    val publicReceiptUrl: String? = null,
+    val publicUrlPath: String? = null,
+    val rawPublicToken: String? = null,
+    val deliveryTokenIds: List<String> = emptyList(),
+    val createdAtEpochMillis: Long,
+)
+
+data class NfcReceiptHandoffRecord(
+    val id: Long = 0,
+    val canonicalUid: String,
+    val receiptNumber: String,
+    val ticketId: String,
+    val saleId: String? = null,
+    val receiptSnapshotId: String? = null,
+    val publicReceiptUrl: String? = null,
+    val publicUrlPath: String? = null,
+    val rawPublicToken: String? = null,
+    val deliveryTokenIds: List<String> = emptyList(),
+    val linkedCustomerEntityId: String? = null,
+    val linkedCustomerDisplayLabel: String? = null,
+    val createdAtEpochMillis: Long,
 )
 
 enum class ManagerOverrideReason {
@@ -259,6 +292,7 @@ data class TablePaymentResult(
     val changeCents: Int,
     val payments: List<ReceiptPaymentRecord>,
     val receiptDocument: ReceiptDocument,
+    val receiptHandoff: ReceiptHandoffPayload? = null,
 )
 
 data class RefundRequest(

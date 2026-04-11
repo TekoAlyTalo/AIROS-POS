@@ -139,7 +139,7 @@ class MainActivity : ComponentActivity() {
      * This form is used consistently in [NfcStaffResolver] mappings.
      */
     private fun onNfcTagDiscovered(tag: Tag) {
-        val uid = tag.id.joinToString(":") { "%02X".format(it) }
+        val uid = tag.id.joinToString(":") { "%02X".format(it.toInt() and 0xFF) }
         val techs = tag.techList.map { it.substringAfterLast('.') }
         val detectedAt = System.currentTimeMillis()
         Log.d(NfcLogTag, "Tag detected | uid=$uid | techs=${techs.joinToString()}")

@@ -57,6 +57,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -70,9 +71,11 @@ import com.airos.pos.core.model.PaymentMethod
 import com.airos.pos.core.model.TablePaymentRequest
 import com.airos.pos.core.model.TablePaymentResult
 import com.airos.pos.core.model.ReceiptDocument
+import com.airos.pos.core.model.ReceiptHandoffPayload
 import com.airos.pos.core.model.TicketLine
 import com.airos.pos.device.platform.CustomerDisplayService
 import com.airos.pos.domain.MenuRepository
+import com.airos.pos.domain.NfcIdentityRepository
 import com.airos.pos.domain.PaymentRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -93,6 +96,7 @@ private val MenuTextMuted = Color(0xFFC0CCD6)
 private val MenuAccentTextColor = Color(0xFF85F5E0)
 private val MenuPageTabActiveColor = Color(0xFF235D73)
 private val PageTabShape = RoundedCornerShape(topStart = 18.dp, bottomStart = 18.dp, topEnd = 8.dp, bottomEnd = 8.dp)
+private const val MenuNfcLogTag = "AIROS_NFC"
 
 data class ProductGridConfig(
     val rows: Int = 3,
@@ -109,6 +113,9 @@ data class MenuUiState(
     val activeTableLabel: String? = null,
     val paymentInProgress: Boolean = false,
     val paymentMessage: String? = null,
+    val receiptHandoffPayload: ReceiptHandoffPayload? = null,
+    val receiptHandoffWaiting: Boolean = false,
+    val receiptHandoffMessage: String? = null,
     val manualDrawerInProgress: Boolean = false,
 )
 
@@ -139,6 +146,7 @@ private object MenuTicketDraftStore {
 class MenuViewModel(
     private val menuRepository: MenuRepository,
     private val paymentRepository: PaymentRepository,
+    private val nfcIdentityRepository: NfcIdentityRepository? = null,
     private val printReceipt: suspend (ReceiptDocument) -> PosResult<Unit>,
     private val openCashDrawer: suspend (String) -> PosResult<Unit>,
     private val verifyDrawerPin: suspend (String) -> PosResult<Unit>,
@@ -146,6 +154,7 @@ class MenuViewModel(
     private val activeTableId: String? = null,
     private val activeTableLabel: String? = null,
 ) : ViewModel() {
+    private var lastHandledReceiptHandoffKey: String? = null
     private val mutableState = MutableStateFlow(
         MenuUiState(
             activeTableId = activeTableId,
@@ -270,10 +279,13 @@ class MenuViewModel(
             return
         }
 
+        lastHandledReceiptHandoffKey = null
         mutableState.update {
             it.copy(
                 paymentInProgress = true,
                 paymentMessage = null,
+                receiptHandoffWaiting = false,
+                receiptHandoffMessage = null,
             )
         }
 
@@ -316,6 +328,11 @@ class MenuViewModel(
                         it.copy(
                             paymentInProgress = false,
                             paymentMessage = messageParts.joinToString(" "),
+                            receiptHandoffPayload = tableResult.receiptHandoff,
+                            receiptHandoffWaiting = false,
+                            receiptHandoffMessage = tableResult.receiptHandoff?.let {
+                                "Electronic receipt ready. Tap phone for receipt."
+                            },
                         )
                     }
                 }
@@ -332,6 +349,94 @@ class MenuViewModel(
 
     fun clearPaymentMessage() {
         mutableState.update { it.copy(paymentMessage = null) }
+    }
+
+    fun startReceiptHandoff() {
+        val payload = mutableState.value.receiptHandoffPayload
+        if (payload == null) {
+            mutableState.update {
+                it.copy(
+                    receiptHandoffWaiting = false,
+                    receiptHandoffMessage = "Electronic receipt link is not available for the last sale.",
+                )
+            }
+            return
+        }
+
+        mutableState.update {
+            it.copy(
+                receiptHandoffWaiting = true,
+                receiptHandoffMessage = "Waiting for customer NFC tap for receipt ${payload.receiptNumber}.",
+            )
+        }
+        viewModelScope.launch {
+            nfcIdentityRepository?.recordReceiptHandoffStarted(payload)
+        }
+        Log.i(MenuNfcLogTag, "Receipt handoff waiting | receipt=${payload.receiptNumber} ticket=${payload.ticketId}")
+    }
+
+    fun cancelReceiptHandoff() {
+        mutableState.update {
+            it.copy(
+                receiptHandoffWaiting = false,
+                receiptHandoffMessage = "Receipt NFC handoff cancelled.",
+            )
+        }
+    }
+
+    fun handleReceiptHandoffTap(canonicalUid: String, detectedAtEpochMillis: Long) {
+        val state = mutableState.value
+        val payload = state.receiptHandoffPayload ?: return
+        if (!state.receiptHandoffWaiting) {
+            return
+        }
+        val eventKey = "${payload.receiptNumber}|$canonicalUid|$detectedAtEpochMillis"
+        if (lastHandledReceiptHandoffKey == eventKey) {
+            return
+        }
+        lastHandledReceiptHandoffKey = eventKey
+        val repository = nfcIdentityRepository
+        if (repository == null) {
+            mutableState.update {
+                it.copy(
+                    receiptHandoffWaiting = false,
+                    receiptHandoffMessage = "Receipt NFC handoff is not available on this terminal.",
+                )
+            }
+            return
+        }
+
+        mutableState.update {
+            it.copy(receiptHandoffMessage = "Customer tap received. Linking receipt...")
+        }
+        viewModelScope.launch {
+            when (val result = repository.recordReceiptHandoff(canonicalUid, payload)) {
+                is PosResult.Success -> {
+                    mutableState.update {
+                        it.copy(
+                            receiptHandoffWaiting = false,
+                            receiptHandoffMessage = result.value.linkedCustomerDisplayLabel?.let { customer ->
+                                "Receipt ${payload.receiptNumber} linked to $customer."
+                            } ?: "Receipt ${payload.receiptNumber} linked to NFC tag ${result.value.canonicalUid}.",
+                        )
+                    }
+                    Log.i(
+                        MenuNfcLogTag,
+                        "Receipt handoff success | uid=${result.value.canonicalUid} receipt=${payload.receiptNumber} detectedAt=$detectedAtEpochMillis",
+                    )
+                }
+
+                is PosResult.Failure -> {
+                    mutableState.update {
+                        it.copy(
+                            receiptHandoffWaiting = false,
+                            receiptHandoffMessage = result.message,
+                        )
+                    }
+                    Log.w(MenuNfcLogTag, "Receipt handoff failed | receipt=${payload.receiptNumber} reason=${result.message}")
+                }
+            }
+        }
     }
 
     fun openCashDrawerManually(pin: String) {
@@ -494,6 +599,7 @@ class MenuViewModel(
         fun factory(
             menuRepository: MenuRepository,
             paymentRepository: PaymentRepository,
+            nfcIdentityRepository: NfcIdentityRepository? = null,
             printReceipt: suspend (ReceiptDocument) -> PosResult<Unit>,
             openCashDrawer: suspend (String) -> PosResult<Unit>,
             verifyDrawerPin: suspend (String) -> PosResult<Unit>,
@@ -505,6 +611,7 @@ class MenuViewModel(
                 MenuViewModel(
                     menuRepository = menuRepository,
                     paymentRepository = paymentRepository,
+                    nfcIdentityRepository = nfcIdentityRepository,
                     printReceipt = printReceipt,
                     openCashDrawer = openCashDrawer,
                     verifyDrawerPin = verifyDrawerPin,
@@ -527,6 +634,8 @@ fun MenuScreen(
     onApplyLineAmountDiscount: (String, Int) -> Unit,
     onConfirmPayment: (MenuPaymentDialogResult) -> Unit,
     onDismissPaymentMessage: () -> Unit,
+    onStartReceiptHandoff: () -> Unit,
+    onCancelReceiptHandoff: () -> Unit,
     onOpenCashDrawer: (String) -> Unit,
     onScreenShown: () -> Unit = {},
     onScreenDisposed: () -> Unit = {},
@@ -666,6 +775,9 @@ fun MenuScreen(
             ticketSubtotalCents = ticketSubtotalCents,
             paymentInProgress = state.paymentInProgress,
             paymentMessage = state.paymentMessage,
+            receiptHandoffAvailable = state.receiptHandoffPayload != null,
+            receiptHandoffWaiting = state.receiptHandoffWaiting,
+            receiptHandoffMessage = state.receiptHandoffMessage,
             manualDrawerInProgress = state.manualDrawerInProgress,
             onDecrementTicketLine = onDecrementTicketLine,
             onRemoveTicketLine = onRemoveTicketLine,
@@ -673,6 +785,8 @@ fun MenuScreen(
             onApplyLineAmountDiscount = onApplyLineAmountDiscount,
             onConfirmPayment = onConfirmPayment,
             onDismissPaymentMessage = onDismissPaymentMessage,
+            onStartReceiptHandoff = onStartReceiptHandoff,
+            onCancelReceiptHandoff = onCancelReceiptHandoff,
             onOpenCashDrawer = onOpenCashDrawer,
         )
     }
@@ -1044,6 +1158,9 @@ private fun RowScope.TicketPane(
     ticketSubtotalCents: Int,
     paymentInProgress: Boolean,
     paymentMessage: String?,
+    receiptHandoffAvailable: Boolean,
+    receiptHandoffWaiting: Boolean,
+    receiptHandoffMessage: String?,
     manualDrawerInProgress: Boolean,
     onDecrementTicketLine: (String) -> Unit,
     onRemoveTicketLine: (String) -> Unit,
@@ -1051,6 +1168,8 @@ private fun RowScope.TicketPane(
     onApplyLineAmountDiscount: (String, Int) -> Unit,
     onConfirmPayment: (MenuPaymentDialogResult) -> Unit,
     onDismissPaymentMessage: () -> Unit,
+    onStartReceiptHandoff: () -> Unit,
+    onCancelReceiptHandoff: () -> Unit,
     onOpenCashDrawer: (String) -> Unit,
 ) {
     var isPaymentDialogOpen by rememberSaveable { mutableStateOf(false) }
@@ -1209,6 +1328,27 @@ private fun RowScope.TicketPane(
                             .clickable(onClick = onDismissPaymentMessage),
                     )
                 }
+                receiptHandoffMessage?.let { message ->
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (receiptHandoffWaiting) MenuTextSecondary else MenuAccentTextColor,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                if (receiptHandoffAvailable) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        OutlinedReceiptActionButton(
+                            label = if (receiptHandoffWaiting) "Cancel NFC receipt" else "Tap phone for receipt",
+                            onClick = if (receiptHandoffWaiting) onCancelReceiptHandoff else onStartReceiptHandoff,
+                            modifier = Modifier.weight(1f),
+                            enabled = !paymentInProgress,
+                        )
+                    }
+                }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1324,6 +1464,33 @@ private fun RowScope.TicketPane(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun OutlinedReceiptActionButton(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    Button(
+        onClick = onClick,
+        modifier = modifier.fillMaxWidth(),
+        enabled = enabled,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = MenuPanelAltColor,
+            contentColor = MenuTextPrimary,
+            disabledContainerColor = MenuPanelAltColor.copy(alpha = 0.38f),
+            disabledContentColor = MenuTextMuted,
+        ),
+        border = BorderStroke(1.dp, MenuAccentTextColor.copy(alpha = 0.42f)),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
 

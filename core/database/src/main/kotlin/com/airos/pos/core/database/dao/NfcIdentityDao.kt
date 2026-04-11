@@ -6,6 +6,7 @@ import androidx.room.Query
 import androidx.room.Upsert
 import com.airos.pos.core.database.entity.NfcIdentityEnrollmentEntity
 import com.airos.pos.core.database.entity.NfcIdentityEventEntity
+import com.airos.pos.core.database.entity.NfcReceiptHandoffEntity
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -63,4 +64,16 @@ interface NfcIdentityDao {
 
     @Insert
     suspend fun insertEvent(item: NfcIdentityEventEntity): Long
+
+    @Query(
+        """
+        SELECT * FROM nfc_receipt_handoffs
+        ORDER BY createdAtEpochMillis DESC, id DESC
+        LIMIT :limit
+        """
+    )
+    fun observeRecentReceiptHandoffs(limit: Int): Flow<List<NfcReceiptHandoffEntity>>
+
+    @Insert
+    suspend fun insertReceiptHandoff(item: NfcReceiptHandoffEntity): Long
 }
