@@ -906,6 +906,7 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                         factory = MenuViewModel.factory(
                             menuRepository = appContainer.menuRepository,
                             paymentRepository = appContainer.paymentRepository,
+                            nfcIdentityRepository = appContainer.nfcIdentityRepository,
                             printReceipt = appContainer.printerService::printReceipt,
                             openCashDrawer = appContainer.cashDrawerService::openDrawer,
                             verifyDrawerPin = { pin ->
@@ -938,6 +939,19 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                         ),
                     )
                     val state by viewModel.uiState.collectAsState()
+                    LaunchedEffect(viewModel, state.receiptHandoffWaiting) {
+                        if (!state.receiptHandoffWaiting) {
+                            return@LaunchedEffect
+                        }
+                        NfcProbe.status.drop(1).collect { status ->
+                            status.lastTagEvent?.let { event ->
+                                viewModel.handleReceiptHandoffTap(
+                                    canonicalUid = event.uid,
+                                    detectedAtEpochMillis = event.timestamp,
+                                )
+                            }
+                        }
+                    }
                     MenuScreen(
                         state = state,
                         onAddItemToTicket = viewModel::addToTicket,
@@ -947,6 +961,8 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                         onApplyLineAmountDiscount = viewModel::applyLineAmountDiscount,
                         onConfirmPayment = viewModel::submitPayment,
                         onDismissPaymentMessage = viewModel::clearPaymentMessage,
+                        onStartReceiptHandoff = viewModel::startReceiptHandoff,
+                        onCancelReceiptHandoff = viewModel::cancelReceiptHandoff,
                         onOpenCashDrawer = viewModel::openCashDrawerManually,
                     )
                 }
@@ -998,8 +1014,8 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                     )
                     val state by viewModel.uiState.collectAsState()
                     val nfcStatus by NfcProbe.status.collectAsState()
-                    LaunchedEffect(viewModel, state.pendingNfcEnrollmentStaffId) {
-                        if (state.pendingNfcEnrollmentStaffId == null) {
+                    LaunchedEffect(viewModel, state.hasPendingNfcEnrollment) {
+                        if (!state.hasPendingNfcEnrollment) {
                             return@LaunchedEffect
                         }
                         NfcProbe.status.drop(1).collect { status ->
@@ -1024,6 +1040,9 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                             nfcStatus.lastTagEvent?.uid?.let(viewModel::useLastSeenNfcTag)
                         },
                         onRemoveNfcEnrollment = viewModel::removeNfcEnrollment,
+                        onCustomerEnrollmentLabelChanged = viewModel::updateCustomerEnrollmentLabelInput,
+                        onBeginCustomerEnrollment = viewModel::beginCustomerEnrollment,
+                        onRemoveCustomerEnrollment = viewModel::removeCustomerEnrollment,
                         lastNfcTagSummary = nfcStatus.lastTagEvent?.let { event ->
                             "uid=${event.uid} techs=${event.techList.joinToString()}"
                         },

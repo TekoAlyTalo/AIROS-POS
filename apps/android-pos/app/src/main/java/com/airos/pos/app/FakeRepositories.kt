@@ -15,6 +15,7 @@ import com.airos.pos.core.model.PaymentMethod
 import com.airos.pos.core.model.PaymentSummary
 import com.airos.pos.core.model.PosShift
 import com.airos.pos.core.model.ReceiptDocument
+import com.airos.pos.core.model.ReceiptHandoffPayload
 import com.airos.pos.core.model.ReceiptLine
 import com.airos.pos.core.model.ReceiptPaymentRecord
 import com.airos.pos.core.model.ReceiptTotals
@@ -410,6 +411,12 @@ class FakePaymentRepository(
             return PosResult.Failure("Payment total is smaller than the bill total.")
         }
 
+        val cashierStaffId = cashierStaffIdProvider?.invoke()?.trim().orEmpty()
+        val cashierName = cashierNameProvider?.invoke()?.trim().orEmpty()
+        if (cashierStaffId.isBlank() || cashierName.isBlank()) {
+            return PosResult.Failure("Cannot finalize payment without signed-in staff attribution.")
+        }
+
         val resolvedTableId = request.tableId
         val resolvedTableLabel = request.tableLabel?.ifBlank { null }
             ?: resolvedTableId?.let { tableId ->
@@ -461,7 +468,7 @@ class FakePaymentRepository(
             receiptNumber = receiptNumber,
             orderNumber = ticketId,
             printedAtEpochMillis = store.now(),
-            cashierName = cashierNameProvider?.invoke(),
+            cashierName = cashierName,
         )
 
         val settingsAppliedReceiptDocument = when (val client = restaurantReceiptSettingsClient) {
@@ -483,6 +490,7 @@ class FakePaymentRepository(
             }
         }
 
+        var receiptHandoffPayload: ReceiptHandoffPayload? = null
         val receiptDocument = when {
             ledgerHttpClient != null && !ledgerBackendBaseUrlProvider?.invoke().isNullOrBlank() -> {
                 val ledgerBaseUrl = ledgerBackendBaseUrlProvider?.invoke().orEmpty()
@@ -505,8 +513,8 @@ class FakePaymentRepository(
                         terminalId = terminalIdProvider?.invoke(),
                         terminalName = terminalNameProvider?.invoke(),
                         restaurantId = restaurantIdProvider?.invoke(),
-                        cashierStaffId = cashierStaffIdProvider?.invoke(),
-                        cashierName = cashierNameProvider?.invoke(),
+                        cashierStaffId = cashierStaffId,
+                        cashierName = cashierName,
                         countryProfile = "FI",
                         languageCode = "fi",
                         currencyCode = settingsAppliedReceiptDocument.currencyCode,
@@ -514,7 +522,19 @@ class FakePaymentRepository(
                     )
                 ) {
                     is PosResult.Success -> {
-                        Log.i(TAG, "finalizeTablePayment: ledger finalize success receipt=$receiptNumber publicUrl=${ledgerFinalize.value.ledgerResponse.public_url_path} token=${ledgerFinalize.value.ledgerResponse.raw_public_token != null}")
+                        val ledgerResponse = ledgerFinalize.value.ledgerResponse
+                        receiptHandoffPayload = ReceiptHandoffPayload(
+                            receiptNumber = receiptNumber,
+                            ticketId = ticketId,
+                            saleId = ledgerResponse.sale_id,
+                            receiptSnapshotId = ledgerResponse.receipt_snapshot_id,
+                            publicReceiptUrl = ledgerResponse.absolutePublicReceiptUrl(ledgerBaseUrl),
+                            publicUrlPath = ledgerResponse.public_url_path,
+                            rawPublicToken = ledgerResponse.raw_public_token,
+                            deliveryTokenIds = ledgerResponse.delivery_token_ids,
+                            createdAtEpochMillis = store.now(),
+                        )
+                        Log.i(TAG, "finalizeTablePayment: ledger finalize success receipt=$receiptNumber publicUrl=${ledgerResponse.public_url_path} token=${ledgerResponse.raw_public_token != null}")
                         ledgerFinalize.value.receiptDocumentWithQr
                     }
                     is PosResult.Failure -> {
@@ -576,6 +596,7 @@ class FakePaymentRepository(
                 changeCents = changeCents,
                 payments = paymentRecords,
                 receiptDocument = receiptDocument,
+                receiptHandoff = receiptHandoffPayload,
             ),
         )
     }

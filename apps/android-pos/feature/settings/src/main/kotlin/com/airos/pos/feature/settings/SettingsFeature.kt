@@ -26,6 +26,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.airos.pos.core.model.DeviceProfile
 import com.airos.pos.core.model.NfcIdentityEvent
 import com.airos.pos.core.model.NfcIdentityRecord
+import com.airos.pos.core.model.NfcReceiptHandoffRecord
 import com.airos.pos.core.model.StaffMember
 import com.airos.pos.core.model.TerminalSettings
 import com.airos.pos.core.ui.KeyValueRow
@@ -54,12 +55,19 @@ data class SettingsUiState(
     val queueDepth: Int = 0,
     val deviceProfile: DeviceProfile? = null,
     val nfcStaffRows: List<SettingsNfcStaffRow> = emptyList(),
+    val nfcCustomerEnrollments: List<NfcIdentityRecord> = emptyList(),
     val recentNfcEvents: List<NfcIdentityEvent> = emptyList(),
+    val recentReceiptHandoffs: List<NfcReceiptHandoffRecord> = emptyList(),
     val pendingNfcEnrollmentStaffId: String? = null,
     val pendingNfcEnrollmentStaffName: String? = null,
+    val pendingNfcCustomerEnrollmentLabel: String? = null,
+    val customerEnrollmentLabelInput: String = "Guest customer",
     val message: String? = null,
     val messageIsError: Boolean = false,
-)
+) {
+    val hasPendingNfcEnrollment: Boolean
+        get() = pendingNfcEnrollmentStaffId != null || pendingNfcCustomerEnrollmentLabel != null
+}
 
 class SettingsViewModel(
     private val settingsRepository: SettingsRepository,
@@ -109,8 +117,18 @@ class SettingsViewModel(
             }
         }
         viewModelScope.launch {
+            nfcIdentityRepository.observeCustomerEnrollments().collect { enrollments ->
+                mutableState.update { it.copy(nfcCustomerEnrollments = enrollments) }
+            }
+        }
+        viewModelScope.launch {
             nfcIdentityRepository.observeRecentEvents(limit = 8).collect { events ->
                 mutableState.update { it.copy(recentNfcEvents = events) }
+            }
+        }
+        viewModelScope.launch {
+            nfcIdentityRepository.observeRecentReceiptHandoffs(limit = 5).collect { handoffs ->
+                mutableState.update { it.copy(recentReceiptHandoffs = handoffs) }
             }
         }
     }
@@ -170,6 +188,7 @@ class SettingsViewModel(
             it.copy(
                 pendingNfcEnrollmentStaffId = row.staff.id,
                 pendingNfcEnrollmentStaffName = row.staff.displayName,
+                pendingNfcCustomerEnrollmentLabel = null,
                 message = "Waiting for next NFC tag for ${row.staff.displayName}.",
                 messageIsError = false,
             )
@@ -181,6 +200,7 @@ class SettingsViewModel(
             it.copy(
                 pendingNfcEnrollmentStaffId = null,
                 pendingNfcEnrollmentStaffName = null,
+                pendingNfcCustomerEnrollmentLabel = null,
                 message = "NFC enrollment cancelled.",
                 messageIsError = false,
             )
@@ -188,18 +208,32 @@ class SettingsViewModel(
     }
 
     fun handlePendingNfcTag(canonicalUid: String, detectedAtEpochMillis: Long) {
-        val pendingStaff = currentPendingStaff() ?: return
-        val eventKey = "${pendingStaff.id}|$canonicalUid|$detectedAtEpochMillis"
+        val state = mutableState.value
+        val pendingKey = state.pendingNfcEnrollmentStaffId
+            ?: state.pendingNfcCustomerEnrollmentLabel
+            ?: return
+        val eventKey = "$pendingKey|$canonicalUid|$detectedAtEpochMillis"
         if (lastHandledEnrollmentKey == eventKey) {
             return
         }
         lastHandledEnrollmentKey = eventKey
-        completeEnrollment(staff = pendingStaff, canonicalUid = canonicalUid)
+        currentPendingStaff()?.let { staff ->
+            completeEnrollment(staff = staff, canonicalUid = canonicalUid)
+            return
+        }
+        state.pendingNfcCustomerEnrollmentLabel?.let { label ->
+            completeCustomerEnrollment(displayLabel = label, canonicalUid = canonicalUid)
+        }
     }
 
     fun useLastSeenNfcTag(canonicalUid: String) {
-        val pendingStaff = currentPendingStaff() ?: return
-        completeEnrollment(staff = pendingStaff, canonicalUid = canonicalUid)
+        currentPendingStaff()?.let { staff ->
+            completeEnrollment(staff = staff, canonicalUid = canonicalUid)
+            return
+        }
+        mutableState.value.pendingNfcCustomerEnrollmentLabel?.let { label ->
+            completeCustomerEnrollment(displayLabel = label, canonicalUid = canonicalUid)
+        }
     }
 
     fun removeNfcEnrollment(staffId: String) {
@@ -209,6 +243,48 @@ class SettingsViewModel(
                     mutableState.update {
                         it.copy(
                             message = "NFC tag removed from the staff profile.",
+                            messageIsError = false,
+                        )
+                    }
+                }
+
+                is com.airos.pos.core.common.PosResult.Failure -> {
+                    mutableState.update {
+                        it.copy(
+                            message = result.message,
+                            messageIsError = true,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun updateCustomerEnrollmentLabelInput(value: String) {
+        mutableState.update { it.copy(customerEnrollmentLabelInput = value) }
+    }
+
+    fun beginCustomerEnrollment() {
+        val label = mutableState.value.customerEnrollmentLabelInput.trim().ifBlank { "Guest customer" }
+        mutableState.update {
+            it.copy(
+                pendingNfcEnrollmentStaffId = null,
+                pendingNfcEnrollmentStaffName = null,
+                pendingNfcCustomerEnrollmentLabel = label,
+                customerEnrollmentLabelInput = label,
+                message = "Waiting for next NFC tag for customer identity $label.",
+                messageIsError = false,
+            )
+        }
+    }
+
+    fun removeCustomerEnrollment(canonicalUid: String) {
+        viewModelScope.launch {
+            when (val result = nfcIdentityRepository.removeCustomerTag(canonicalUid)) {
+                is com.airos.pos.core.common.PosResult.Success -> {
+                    mutableState.update {
+                        it.copy(
+                            message = "Customer NFC tag removed.",
                             messageIsError = false,
                         )
                     }
@@ -239,7 +315,33 @@ class SettingsViewModel(
                         it.copy(
                             pendingNfcEnrollmentStaffId = null,
                             pendingNfcEnrollmentStaffName = null,
+                            pendingNfcCustomerEnrollmentLabel = null,
                             message = "NFC tag ${result.value.canonicalUid} is now linked to ${staff.displayName}.",
+                            messageIsError = false,
+                        )
+                    }
+                }
+
+                is com.airos.pos.core.common.PosResult.Failure -> {
+                    mutableState.update {
+                        it.copy(
+                            message = result.message,
+                            messageIsError = true,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun completeCustomerEnrollment(displayLabel: String, canonicalUid: String) {
+        viewModelScope.launch {
+            when (val result = nfcIdentityRepository.enrollCustomerTag(canonicalUid, displayLabel)) {
+                is com.airos.pos.core.common.PosResult.Success -> {
+                    mutableState.update {
+                        it.copy(
+                            pendingNfcCustomerEnrollmentLabel = null,
+                            message = "NFC tag ${result.value.canonicalUid} is now linked to ${result.value.entityDisplayLabel}.",
                             messageIsError = false,
                         )
                     }
@@ -311,6 +413,9 @@ fun SettingsScreen(
     onCancelNfcEnrollment: () -> Unit,
     onUseLastSeenNfcTag: () -> Unit,
     onRemoveNfcEnrollment: (String) -> Unit,
+    onCustomerEnrollmentLabelChanged: (String) -> Unit,
+    onBeginCustomerEnrollment: () -> Unit,
+    onRemoveCustomerEnrollment: (String) -> Unit,
     lastNfcTagSummary: String?,
     lastNfcTagUid: String?,
 ) {
@@ -386,9 +491,11 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.bodyMedium,
             )
 
-            if (state.pendingNfcEnrollmentStaffId != null) {
+            if (state.hasPendingNfcEnrollment) {
                 StatusBanner(
-                    text = "Waiting for next NFC tap for ${state.pendingNfcEnrollmentStaffName}.",
+                    text = state.pendingNfcEnrollmentStaffName?.let { staffName ->
+                        "Waiting for next NFC tap for $staffName."
+                    } ?: "Waiting for next NFC tap for customer identity ${state.pendingNfcCustomerEnrollmentLabel}.",
                     tint = MaterialTheme.colorScheme.primary,
                 )
                 Row(
@@ -420,6 +527,60 @@ fun SettingsScreen(
                     onBeginEnrollment = { onBeginNfcEnrollment(row.staff.id) },
                     onRemoveEnrollment = { onRemoveNfcEnrollment(row.staff.id) },
                 )
+            }
+
+            Text(
+                text = "Customer NFC touchpoints",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = "Customer tags use the same identity storage but are linked as loyalty/customer identities, not staff identities. Receipt NFC handoffs are recorded separately.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            OutlinedTextField(
+                value = state.customerEnrollmentLabelInput,
+                onValueChange = onCustomerEnrollmentLabelChanged,
+                label = { Text("Customer label") },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Button(
+                onClick = onBeginCustomerEnrollment,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    if (state.pendingNfcCustomerEnrollmentLabel != null) {
+                        "Waiting for customer tap..."
+                    } else {
+                        "Enroll customer tag"
+                    },
+                )
+            }
+
+            if (state.nfcCustomerEnrollments.isEmpty()) {
+                Text(
+                    text = "No customer NFC identities enrolled yet.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            } else {
+                state.nfcCustomerEnrollments.forEach { enrollment ->
+                    CustomerNfcEnrollmentCard(
+                        enrollment = enrollment,
+                        onRemoveEnrollment = { onRemoveCustomerEnrollment(enrollment.canonicalUid) },
+                    )
+                }
+            }
+
+            if (state.recentReceiptHandoffs.isNotEmpty()) {
+                Text(
+                    text = "Recent receipt NFC handoffs",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                state.recentReceiptHandoffs.forEach { handoff ->
+                    Text(
+                        text = "• ${handoff.receiptNumber} -> ${handoff.linkedCustomerDisplayLabel ?: handoff.canonicalUid}",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
             }
 
             Text(
@@ -499,6 +660,42 @@ private fun StaffNfcEnrollmentCard(
                 ) {
                     Text("Remove tag")
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CustomerNfcEnrollmentCard(
+    enrollment: NfcIdentityRecord,
+    onRemoveEnrollment: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                text = enrollment.entityDisplayLabel,
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = "Customer identity: ${enrollment.entityId}",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                text = "Enrolled tag: ${enrollment.canonicalUid}",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            OutlinedButton(
+                onClick = onRemoveEnrollment,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Remove customer tag")
             }
         }
     }
