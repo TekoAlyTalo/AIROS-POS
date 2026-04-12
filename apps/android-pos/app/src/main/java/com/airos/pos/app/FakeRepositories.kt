@@ -183,6 +183,56 @@ class FakeTableRepository(
         )
         return PosResult.Success(updatedTable)
     }
+
+    override suspend fun assignDraftToServiceSpot(
+        fromSpotId: String?,
+        toSpotId: String,
+        openedByStaffId: String,
+    ): PosResult<RestaurantTable> {
+        if (fromSpotId == toSpotId) {
+            return PosResult.Failure("Cannot assign to the same service spot.")
+        }
+
+        val tables = store.floorMap.value.tables
+        val toSpot = tables.firstOrNull { it.id == toSpotId }
+            ?: return PosResult.Failure("Service spot not found.")
+
+        // Guard: destination is OCCUPIED. Check whether it holds an open ticket or another draft.
+        if (toSpot.status == TableStatus.OCCUPIED) {
+            val activeTicket = toSpot.activeTicketId?.let { store.tickets.value[it] }
+            val hasOpenTicket = activeTicket != null &&
+                activeTicket.status !in setOf(TicketStatus.CLOSED, TicketStatus.PAID)
+            val hasDraftSession = toSpot.activeTicketId == null // occupied but no tracked ticket = draft
+            if (hasOpenTicket || hasDraftSession) {
+                val spotName = toSpot.label.ifBlank { toSpotId }
+                return PosResult.Failure("$spotName is already in use.")
+            }
+            // Stale OCCUPIED with a closed ticket — allow assignment and clean up below.
+        }
+
+        store.floorMap.value = store.floorMap.value.copy(
+            tables = tables.map { spot ->
+                when {
+                    fromSpotId != null && spot.id == fromSpotId ->
+                        spot.copy(status = TableStatus.AVAILABLE, activeTicketId = null, guestCount = 0)
+                    spot.id == toSpotId ->
+                        spot.copy(status = TableStatus.OCCUPIED, activeTicketId = null)
+                    else -> spot
+                }
+            },
+        )
+
+        val updated = store.floorMap.value.tables.first { it.id == toSpotId }
+        enqueueSyncItem(
+            store = store,
+            syncQueueRepository = syncQueueRepository,
+            aggregateType = "service_spot",
+            aggregateId = toSpotId,
+            action = "assign_draft_to_service_spot",
+            payloadJson = """{"fromSpotId":${fromSpotId?.let { "\"$it\"" } ?: "null"},"toSpotId":"$toSpotId","openedBy":"$openedByStaffId"}""",
+        )
+        return PosResult.Success(updated)
+    }
 }
 
 class FakeMenuRepository(

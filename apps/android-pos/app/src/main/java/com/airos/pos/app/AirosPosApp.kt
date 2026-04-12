@@ -936,6 +936,10 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                             },
                             activeTableId = tableId,
                             activeTableLabel = tableLabel,
+                            tableRepository = appContainer.tableRepository,
+                            activeStaffIdProvider = {
+                                appContainer.authRepository.activeSession.value?.staffId
+                            },
                         ),
                     )
                     val state by viewModel.uiState.collectAsState()
@@ -964,6 +968,7 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                         onStartReceiptHandoff = viewModel::startReceiptHandoff,
                         onCancelReceiptHandoff = viewModel::cancelReceiptHandoff,
                         onOpenCashDrawer = viewModel::openCashDrawerManually,
+                        onAssignToServiceSpot = viewModel::requestServiceSpotAssignment,
                     )
                 }
 
