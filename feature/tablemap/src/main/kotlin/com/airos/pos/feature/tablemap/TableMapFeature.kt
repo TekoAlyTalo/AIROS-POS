@@ -309,6 +309,13 @@ fun TableMapScreen(
             selectedAreaName = activeAreaName,
         )
     }
+    val openTotalLabelsBySpotId = remember(state.openChecksBySpotId) {
+        state.openChecksBySpotId.mapNotNull { (spotId, summary) ->
+            summary.totalCents
+                .takeIf { it > 0 }
+                ?.let { totalCents -> spotId to formatOpenTotal(totalCents) }
+        }.toMap()
+    }
     val selectedTable = visibleTables.firstOrNull { it.id == state.selectedTableId } ?: visibleTables.firstOrNull()
     val desiredPreviewTarget = selectedTable?.previewTarget()
     val selectedPreviewTarget = state.livePreviewTarget?.takeIf { it.tableId == selectedTable?.id }
@@ -496,6 +503,7 @@ fun TableMapScreen(
                                 },
                                 style = floorPlanStyle,
                                 viewpoint = floorPlanViewpoint,
+                                openTotalLabelsByTableId = openTotalLabelsBySpotId,
                                 modifier = Modifier.fillMaxSize(),
                             )
 
@@ -817,6 +825,9 @@ private fun TableGridCard(
     onClick: () -> Unit,
 ) {
     val mergedHint = mergedHintFor(table)
+    val openTotalLabel = openCheckSummary?.totalCents
+        ?.takeIf { it > 0 }
+        ?.let(::formatOpenTotal)
     val accent = when (table.status.name) {
         "OCCUPIED" -> MaterialTheme.colorScheme.primary
         "DIRTY" -> MaterialTheme.colorScheme.error
@@ -903,17 +914,11 @@ private fun TableGridCard(
                         )
                     }
                 }
-                if (openCheckSummary != null) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        MiniStatusChip(
-                            label = "${openCheckSummary.count} open",
-                            tint = MaterialTheme.colorScheme.tertiary,
-                        )
-                        MiniStatusChip(
-                            label = formatOpenTotal(openCheckSummary.totalCents),
-                            tint = MaterialTheme.colorScheme.tertiary,
-                        )
-                    }
+                if (openTotalLabel != null) {
+                    MiniStatusChip(
+                        label = openTotalLabel,
+                        tint = MaterialTheme.colorScheme.tertiary,
+                    )
                 }
             }
         }

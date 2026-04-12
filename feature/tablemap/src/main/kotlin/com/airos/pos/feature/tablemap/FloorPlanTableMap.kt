@@ -306,6 +306,7 @@ internal fun FloorPlanTableMap(
     onSelectTable: (String) -> Unit,
     style: FloorPlanVisualStyle,
     viewpoint: FloorPlanViewpoint = DefaultFloorPlanViewpoint,
+    openTotalLabelsByTableId: Map<String, String> = emptyMap(),
     onRotate90: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -319,6 +320,7 @@ internal fun FloorPlanTableMap(
                 selectedTableId = selectedTableId,
                 onSelectTable = onSelectTable,
                 viewpoint = viewpoint,
+                openTotalLabelsByTableId = openTotalLabelsByTableId,
                 onRotate90 = onRotate90,
                 modifier = modifier,
             )
@@ -330,6 +332,7 @@ internal fun FloorPlanTableMap(
                 selectedTableId = selectedTableId,
                 onSelectTable = onSelectTable,
                 viewpoint = viewpoint,
+                openTotalLabelsByTableId = openTotalLabelsByTableId,
                 onRotate90 = onRotate90,
                 modifier = modifier,
                 overlayNote = "Rich visual style scaffold is wired. Simple renderer is active for now.",
@@ -344,6 +347,7 @@ private fun SimpleFloorPlanTableMap(
     selectedTableId: String?,
     onSelectTable: (String) -> Unit,
     viewpoint: FloorPlanViewpoint,
+    openTotalLabelsByTableId: Map<String, String>,
     onRotate90: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     overlayNote: String? = null,
@@ -514,6 +518,7 @@ private fun SimpleFloorPlanTableMap(
                                 table = placement.table,
                                 rect = placement.rect,
                                 selected = placement.table.id == selectedTableId,
+                                openTotalLabel = openTotalLabelsByTableId[placement.table.id],
                                 sample = false,
                             )
                         }
@@ -727,6 +732,7 @@ private fun FloorPlanTableNode(
     table: RestaurantTable,
     rect: FloorPlanRect,
     selected: Boolean,
+    openTotalLabel: String?,
     sample: Boolean = false,
 ) {
     val density = LocalDensity.current
@@ -796,6 +802,21 @@ private fun FloorPlanTableNode(
                 }
 
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    if (openTotalLabel != null) {
+                        Surface(
+                            shape = RoundedCornerShape(999.dp),
+                            color = FloorPlanSelectionColor.copy(alpha = 0.13f),
+                        ) {
+                            Text(
+                                text = openTotalLabel,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = FloorPlanSelectionColor,
+                                fontWeight = FontWeight.SemiBold,
+                                textAlign = TextAlign.Center,
+                            )
+                        }
+                    }
                     if (isMerged) {
                         Text(
                             text = "Merged",
