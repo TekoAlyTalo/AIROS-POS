@@ -66,7 +66,9 @@ import com.airos.pos.core.ui.StatusBanner
 import com.airos.pos.device.camera.CameraPreviewService
 import com.airos.pos.domain.OpenSaleRepository
 import com.airos.pos.domain.SettingsRepository
+import com.airos.pos.domain.StaffUiPreferencesRepository
 import com.airos.pos.domain.TableRepository
+import com.airos.pos.core.model.StaffTableMapViewPreference
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -98,6 +100,7 @@ data class TableLivePreviewTarget(
 data class TableMapUiState(
     val floorMap: FloorMap? = null,
     val selectedTableId: String? = null,
+    val viewMode: StaffTableMapViewPreference = StaffTableMapViewPreference.FLOOR_PLAN,
     val busy: Boolean = false,
     val message: String? = null,
     val edgeBaseUrl: String? = null,
@@ -109,10 +112,12 @@ data class TableMapUiState(
 )
 
 class TableMapViewModel(
+    private val currentStaffId: String,
     private val tableRepository: TableRepository,
     private val settingsRepository: SettingsRepository,
     private val cameraPreviewService: CameraPreviewService,
     private val openSaleRepository: OpenSaleRepository,
+    private val staffUiPreferencesRepository: StaffUiPreferencesRepository,
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(TableMapUiState())
     val uiState: StateFlow<TableMapUiState> = mutableState.asStateFlow()
@@ -146,6 +151,12 @@ class TableMapViewModel(
             }
         }
         viewModelScope.launch {
+            staffUiPreferencesRepository.observeTableMapViewMode(currentStaffId).collect { savedViewMode ->
+                mutableState.update { it.copy(viewMode = savedViewMode) }
+            }
+        }
+
+        viewModelScope.launch {
             openSaleRepository.observeOpenSales().collect { sales ->
                 val bySpotId = sales
                     .filter { it.serviceSpotId != null }
@@ -175,6 +186,16 @@ class TableMapViewModel(
                 is PosResult.Success -> mutableState.update { it.copy(busy = false, message = "${result.value.label} opened.") }
                 is PosResult.Failure -> mutableState.update { it.copy(busy = false, message = result.message) }
             }
+        }
+    }
+
+    fun setViewMode(viewMode: StaffTableMapViewPreference) {
+        mutableState.update { it.copy(viewMode = viewMode) }
+        viewModelScope.launch {
+            staffUiPreferencesRepository.setTableMapViewMode(
+                staffId = currentStaffId,
+                mode = viewMode,
+            )
         }
     }
 
@@ -269,13 +290,38 @@ class TableMapViewModel(
 
     companion object {
         fun factory(
+            currentStaffId: String,
             tableRepository: TableRepository,
             settingsRepository: SettingsRepository,
             cameraPreviewService: CameraPreviewService,
             openSaleRepository: OpenSaleRepository,
+            staffUiPreferencesRepository: StaffUiPreferencesRepository,
         ): ViewModelProvider.Factory = viewModelFactory {
-            initializer { TableMapViewModel(tableRepository, settingsRepository, cameraPreviewService, openSaleRepository) }
+            initializer {
+                TableMapViewModel(
+                    currentStaffId = currentStaffId,
+                    tableRepository = tableRepository,
+                    settingsRepository = settingsRepository,
+                    cameraPreviewService = cameraPreviewService,
+                    openSaleRepository = openSaleRepository,
+                    staffUiPreferencesRepository = staffUiPreferencesRepository,
+                )
+            }
         }
+    }
+}
+
+private fun StaffTableMapViewPreference.toTableMapViewMode(): TableMapViewMode {
+    return when (this) {
+        StaffTableMapViewPreference.FLOOR_PLAN -> TableMapViewMode.FLOOR_PLAN
+        StaffTableMapViewPreference.GRID -> TableMapViewMode.GRID
+    }
+}
+
+private fun TableMapViewMode.toStaffPreference(): StaffTableMapViewPreference {
+    return when (this) {
+        TableMapViewMode.FLOOR_PLAN -> StaffTableMapViewPreference.FLOOR_PLAN
+        TableMapViewMode.GRID -> StaffTableMapViewPreference.GRID
     }
 }
 
@@ -286,14 +332,14 @@ fun TableMapScreen(
     preferRichFloorPlanStyle: Boolean = false,
     cameraPreviewService: CameraPreviewService,
     onSelectTable: (String) -> Unit,
+    onViewModeChange: (StaffTableMapViewPreference) -> Unit,
     onOpenSelectedTable: (String) -> Unit,
     onJoinTables: (String) -> Unit,
     onOpenLivePreview: () -> Unit,
     onRetryLivePreview: () -> Unit,
     onCloseLivePreview: () -> Unit,
 ) {
-    var viewModeName by rememberSaveable { mutableStateOf(TableMapViewMode.GRID.name) }
-    val viewMode = TableMapViewMode.valueOf(viewModeName)
+    val viewMode = state.viewMode.toTableMapViewMode()
     val floorPlanStyle = if (preferRichFloorPlanStyle) FloorPlanVisualStyle.RICH else FloorPlanVisualStyle.SIMPLE
     var floorPlanRotationDeg by rememberSaveable { mutableStateOf(DefaultFloorPlanViewpoint.defaultRotationDeg) }
     val floorPlanViewpoint = remember(floorPlanRotationDeg) {
@@ -424,7 +470,7 @@ fun TableMapScreen(
                     )
                     TableMapViewModeToggle(
                         viewMode = viewMode,
-                        onViewModeChange = { viewModeName = it.name },
+                        onViewModeChange = { onViewModeChange(it.toStaffPreference()) },
                     )
                 }
 
@@ -845,7 +891,7 @@ private fun TableGridCard(
 
     Surface(
         modifier = Modifier
-            .height(164.dp)
+            .height(172.dp)
             .alpha(if (joinMode && !joinSource && !joinSelected && !joinSelectable) 0.42f else 1f)
             .border(
                 width = if (joinSource || joinSelected) 2.dp else 0.dp,
@@ -871,16 +917,22 @@ private fun TableGridCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.Top,
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Text(
                         text = table.label,
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
+                        maxLines = 1,
                     )
                     Text(
                         text = table.areaName,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
                     )
                 }
                 if (mergedHint != null) {

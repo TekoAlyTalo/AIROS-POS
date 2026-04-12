@@ -56,6 +56,17 @@ data class AuthSession(
 val AuthSession.staffName: String
     get() = displayName
 
+
+enum class StaffTableMapViewPreference {
+    FLOOR_PLAN,
+    GRID,
+}
+
+data class StaffUiPreferences(
+    val tableMapViewMode: StaffTableMapViewPreference = StaffTableMapViewPreference.FLOOR_PLAN,
+)
+
+
 enum class NfcLinkedEntityType {
     STAFF,
     LOYALTY_MEMBER,

@@ -27,6 +27,16 @@ class RoomOpenSaleRepository(
         return entity.toModel(lines)
     }
 
+    override suspend fun loadOpenSaleForSpot(serviceSpotId: String?): PersistedOpenSale? {
+        val entity = if (serviceSpotId == null) {
+            openSaleDao.loadOpenSaleForWalkIn()
+        } else {
+            openSaleDao.loadOpenSaleForSpot(serviceSpotId)
+        } ?: return null
+        val lines = openSaleDao.loadLines(entity.saleId).map(OpenSaleLineEntity::toModel)
+        return entity.toModel(lines)
+    }
+
     override suspend fun createOpenSale(serviceSpotId: String?, serviceSpotLabel: String?): PersistedOpenSale {
         val now = System.currentTimeMillis()
         val saleId = UUID.randomUUID().toString()
