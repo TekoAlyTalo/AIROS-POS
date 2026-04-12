@@ -855,11 +855,14 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
 
                 composable(Routes.TableMap) {
                     val viewModel: TableMapViewModel = viewModel(
+                        key = "tablemap-$currentStaffId",
                         factory = TableMapViewModel.factory(
-                            appContainer.tableRepository,
-                            appContainer.settingsRepository,
-                            appContainer.cameraPreviewService,
-                            appContainer.openSaleRepository,
+                            currentStaffId = currentStaffId,
+                            tableRepository = appContainer.tableRepository,
+                            settingsRepository = appContainer.settingsRepository,
+                            cameraPreviewService = appContainer.cameraPreviewService,
+                            openSaleRepository = appContainer.openSaleRepository,
+                            staffUiPreferencesRepository = appContainer.staffUiPreferencesRepository,
                         ),
                     )
                     val state by viewModel.uiState.collectAsState()
@@ -871,6 +874,7 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                         preferRichFloorPlanStyle = useRichFloorPlanStyle,
                         cameraPreviewService = appContainer.cameraPreviewService,
                         onSelectTable = viewModel::selectTable,
+                        onViewModeChange = viewModel::setViewMode,
                         onOpenSelectedTable = { staffId ->
                             viewModel.openSelectedTable(staffId)
                             navController.navigate(
@@ -941,6 +945,7 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                             activeStaffIdProvider = {
                                 appContainer.authRepository.activeSession.value?.staffId
                             },
+                            openSaleRepository = appContainer.openSaleRepository,
                         ),
                     )
                     val state by viewModel.uiState.collectAsState()

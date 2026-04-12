@@ -3,6 +3,7 @@ package com.airos.pos.app
 import android.content.Context
 import com.airos.pos.core.database.AirosPosDatabase
 import com.airos.pos.core.datastore.TerminalPreferencesStore
+import com.airos.pos.core.datastore.StaffUiPreferencesStore
 import com.airos.pos.core.model.TerminalSettings
 import com.airos.pos.device.camera.AndroidTorchService
 import com.airos.pos.device.camera.CameraPreviewService
@@ -30,6 +31,7 @@ import com.airos.pos.domain.DefaultNfcIdentitySyncClient
 import com.airos.pos.domain.OpenSaleRepository
 import com.airos.pos.domain.PaymentRepository
 import com.airos.pos.domain.SettingsRepository
+import com.airos.pos.domain.StaffUiPreferencesRepository
 import com.airos.pos.domain.ShiftRepository
 import com.airos.pos.domain.SyncQueueRepository
 import com.airos.pos.domain.TableRepository
@@ -51,6 +53,7 @@ interface AppContainer {
     val kitchenRepository: KitchenRepository
     val paymentRepository: PaymentRepository
     val settingsRepository: SettingsRepository
+    val staffUiPreferencesRepository: StaffUiPreferencesRepository
     val nfcIdentityRepository: NfcIdentityRepository
     val nfcStaffResolver: NfcStaffResolver
     val syncQueueRepository: SyncQueueRepository
@@ -76,6 +79,7 @@ class DefaultAppContainer(
 
     override val database: AirosPosDatabase = AirosPosDatabase.build(appContext)
     override val terminalPreferencesStore: TerminalPreferencesStore = TerminalPreferencesStore(appContext)
+    private val staffUiPreferencesStore: StaffUiPreferencesStore = StaffUiPreferencesStore(appContext)
     override val syncQueueRepository: SyncQueueRepository = InMemorySyncQueueRepository()
     override val syncCoordinator: SyncCoordinator = SyncCoordinator(syncQueueRepository)
     override val authRepository: AuthRepository = FakeAuthRepository(SampleData.localAuthStaffRecords())
@@ -92,6 +96,8 @@ class DefaultAppContainer(
     override val ticketRepository: TicketRepository = FakeTicketRepository(store, authRepository, syncQueueRepository)
     override val kitchenRepository: KitchenRepository = FakeKitchenRepository(store)
     override val settingsRepository: SettingsRepository = DataStoreSettingsRepository(terminalPreferencesStore)
+    override val staffUiPreferencesRepository: StaffUiPreferencesRepository =
+        DataStoreStaffUiPreferencesRepository(staffUiPreferencesStore)
     override val printerService: PrinterService = SunmiPrinterService(appContext)
     override val scannerService: ScannerService = SunmiScannerService(appContext)
     override val cameraPreviewService: CameraPreviewService = SunmiCameraPreviewService(appContext)

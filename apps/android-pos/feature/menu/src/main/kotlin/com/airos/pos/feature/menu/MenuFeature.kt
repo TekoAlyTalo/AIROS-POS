@@ -79,8 +79,10 @@ import com.airos.pos.core.model.ReceiptDocument
 import com.airos.pos.core.model.ReceiptHandoffPayload
 import com.airos.pos.core.model.TicketLine
 import com.airos.pos.device.platform.CustomerDisplayService
+import com.airos.pos.core.model.PersistedOpenSaleLine
 import com.airos.pos.domain.MenuRepository
 import com.airos.pos.domain.NfcIdentityRepository
+import com.airos.pos.domain.OpenSaleRepository
 import com.airos.pos.domain.PaymentRepository
 import com.airos.pos.domain.TableRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -163,11 +165,14 @@ class MenuViewModel(
     private val activeTableLabel: String? = null,
     private val tableRepository: TableRepository? = null,
     private val activeStaffIdProvider: (() -> String?)? = null,
+    private val openSaleRepository: OpenSaleRepository? = null,
 ) : ViewModel() {
     // Mutable table assignment — changes when the cashier assigns or moves the draft.
     // The original constructor params are the initial values only.
     private var currentTableId: String? = activeTableId
     private var currentTableLabel: String? = activeTableLabel
+    /** Tracks the saleId of the active persisted open sale. Null until the first item is added. */
+    @Volatile private var currentSaleId: String? = null
 
     private var lastHandledReceiptHandoffKey: String? = null
     private val mutableState = MutableStateFlow(
@@ -190,6 +195,20 @@ class MenuViewModel(
             viewModelScope.launch {
                 repo.observeFloorMap().collect { floorMap ->
                     mutableState.update { it.copy(availableServiceSpots = floorMap.tables) }
+                }
+            }
+        }
+        // Restore persisted open sale lines for this spot so that Menu reflects TableMap truth.
+        // A non-null activeTableId means we were launched for a specific service spot; null = walk-in.
+        openSaleRepository?.let { repo ->
+            viewModelScope.launch {
+                val existingSale = repo.loadOpenSaleForSpot(activeTableId)
+                if (existingSale != null && existingSale.lines.isNotEmpty()) {
+                    currentSaleId = existingSale.saleId
+                    val restored = existingSale.lines.map { it.toMenuTicketLine() }
+                    activeTableId?.let { MenuTicketDraftStore.save(it, restored) }
+                    mutableState.update { it.copy(ticketLines = restored) }
+                    syncCustomerDisplayToCurrentTicket()
                 }
             }
         }
@@ -488,6 +507,10 @@ class MenuViewModel(
                     if (currentLines.isNotEmpty()) {
                         MenuTicketDraftStore.save(toSpotId, currentLines)
                     }
+                    // Keep open sale spot in sync.
+                    currentSaleId?.let { saleId ->
+                        openSaleRepository?.assignServiceSpot(saleId, toSpotId, toSpotLabel)
+                    }
                     currentTableId = toSpotId
                     currentTableLabel = toSpotLabel
                     mutableState.update {
@@ -627,20 +650,24 @@ class MenuViewModel(
     }
 
     private fun clearTicketAfterSuccessfulCheckout() {
+        val saleId = currentSaleId
+        currentSaleId = null
         currentTableId?.let(MenuTicketDraftStore::clear)
         customerDisplayService?.updateCustomerTotalDisplay(null)
         mutableState.update { currentState ->
-            currentState.copy(
-                ticketLines = emptyList(),
-            )
+            currentState.copy(ticketLines = emptyList())
+        }
+        if (saleId != null) {
+            viewModelScope.launch { openSaleRepository?.closeOpenSale(saleId) }
         }
     }
 
     private fun updateTicketLines(
         transform: (List<MenuTicketLine>) -> List<MenuTicketLine>,
     ) {
+        var updatedLines: List<MenuTicketLine> = emptyList()
         mutableState.update { currentState ->
-            val updatedLines = transform(currentState.ticketLines)
+            updatedLines = transform(currentState.ticketLines)
             currentTableId?.let { tableId ->
                 if (updatedLines.isEmpty()) {
                     MenuTicketDraftStore.clear(tableId)
@@ -655,6 +682,25 @@ class MenuViewModel(
             )
             currentState.copy(ticketLines = updatedLines)
         }
+        // Persist to durable store after state is committed.
+        val toSave = updatedLines
+        viewModelScope.launch { persistLinesToOpenSale(toSave) }
+    }
+
+    private suspend fun persistLinesToOpenSale(lines: List<MenuTicketLine>) {
+        val repo = openSaleRepository ?: return
+        if (lines.isEmpty()) {
+            val saleId = currentSaleId ?: return
+            repo.saveLines(saleId, emptyList())
+            return
+        }
+        val saleId = currentSaleId ?: run {
+            // Lazily create the open sale on first item add.
+            val sale = repo.createOpenSale(currentTableId, currentTableLabel)
+            currentSaleId = sale.saleId
+            sale.saleId
+        }
+        repo.saveLines(saleId, lines.map { it.toPersistedLine(saleId) })
     }
 
     companion object {
@@ -670,6 +716,7 @@ class MenuViewModel(
             activeTableLabel: String? = null,
             tableRepository: TableRepository? = null,
             activeStaffIdProvider: (() -> String?)? = null,
+            openSaleRepository: OpenSaleRepository? = null,
         ): ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 MenuViewModel(
@@ -684,6 +731,7 @@ class MenuViewModel(
                     activeTableLabel = activeTableLabel,
                     tableRepository = tableRepository,
                     activeStaffIdProvider = activeStaffIdProvider,
+                    openSaleRepository = openSaleRepository,
                 )
             }
         }
@@ -2585,3 +2633,24 @@ private fun formatDiscountAmountInput(amountCents: Int): String {
 private fun isHiddenMenuItem(item: MenuItem): Boolean {
     return item.name.equals("Manual Discount", ignoreCase = true)
 }
+
+private fun PersistedOpenSaleLine.toMenuTicketLine() = MenuTicketLine(
+    itemId = itemId,
+    name = name,
+    quantity = quantity,
+    unitPriceCents = unitPriceCents,
+    taxRatePercent = taxRatePercent,
+    discountPercent = discountPercent,
+    discountAmountCents = discountAmountCents,
+)
+
+private fun MenuTicketLine.toPersistedLine(saleId: String) = PersistedOpenSaleLine(
+    saleId = saleId,
+    itemId = itemId,
+    name = name,
+    quantity = quantity,
+    unitPriceCents = unitPriceCents,
+    taxRatePercent = taxRatePercent,
+    discountPercent = discountPercent,
+    discountAmountCents = discountAmountCents,
+)

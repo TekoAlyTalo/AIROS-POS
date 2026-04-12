@@ -4,6 +4,7 @@ import android.util.Log
 import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.common.CentsFormatter
 import com.airos.pos.core.datastore.TerminalPreferencesStore
+import com.airos.pos.core.datastore.StaffUiPreferencesStore
 import com.airos.pos.core.model.AuthSession
 import com.airos.pos.core.model.FloorMap
 import com.airos.pos.core.model.KitchenOrder
@@ -31,6 +32,8 @@ import com.airos.pos.core.model.SyncItem
 import com.airos.pos.core.model.SyncState
 import com.airos.pos.core.model.TableStatus
 import com.airos.pos.core.model.TerminalSettings
+import com.airos.pos.core.model.StaffUiPreferences
+import com.airos.pos.core.model.StaffTableMapViewPreference
 import com.airos.pos.core.model.Ticket
 import com.airos.pos.core.model.TicketLine
 import com.airos.pos.core.model.TicketStatus
@@ -42,6 +45,7 @@ import com.airos.pos.domain.MenuRepository
 import com.airos.pos.domain.MenuSyncResult
 import com.airos.pos.domain.PaymentRepository
 import com.airos.pos.domain.SettingsRepository
+import com.airos.pos.domain.StaffUiPreferencesRepository
 import com.airos.pos.domain.ShiftRepository
 import com.airos.pos.domain.SyncQueueRepository
 import com.airos.pos.domain.TableRepository
@@ -795,6 +799,26 @@ class DataStoreSettingsRepository(
 
     override suspend fun setNfcDirectLoginEnabled(enabled: Boolean) {
         preferencesStore.setNfcDirectLoginEnabled(enabled)
+    }
+}
+
+
+class DataStoreStaffUiPreferencesRepository(
+    private val preferencesStore: StaffUiPreferencesStore,
+) : StaffUiPreferencesRepository {
+    override fun observeStaffUiPreferences(staffId: String): Flow<StaffUiPreferences> {
+        return preferencesStore.observeStaffUiPreferences(staffId)
+    }
+
+    override fun observeTableMapViewMode(staffId: String): Flow<StaffTableMapViewPreference> {
+        return preferencesStore.observeTableMapViewMode(staffId)
+    }
+
+    override suspend fun setTableMapViewMode(
+        staffId: String,
+        mode: StaffTableMapViewPreference,
+    ) {
+        preferencesStore.setTableMapViewMode(staffId, mode)
     }
 }
 

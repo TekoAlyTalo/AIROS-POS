@@ -24,6 +24,8 @@ import com.airos.pos.core.model.PersistedOpenSaleLine
 import com.airos.pos.core.model.SyncItem
 import com.airos.pos.core.model.SyncState
 import com.airos.pos.core.model.TerminalSettings
+import com.airos.pos.core.model.StaffUiPreferences
+import com.airos.pos.core.model.StaffTableMapViewPreference
 import com.airos.pos.core.model.Ticket
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
@@ -118,6 +120,16 @@ interface SettingsRepository {
     suspend fun setNfcDirectLoginEnabled(enabled: Boolean)
 }
 
+interface StaffUiPreferencesRepository {
+    fun observeStaffUiPreferences(staffId: String): Flow<StaffUiPreferences>
+    fun observeTableMapViewMode(staffId: String): Flow<StaffTableMapViewPreference>
+    suspend fun setTableMapViewMode(
+        staffId: String,
+        mode: StaffTableMapViewPreference,
+    )
+}
+
+
 interface NfcIdentityRepository {
     fun observeStaffEnrollments(): Flow<List<NfcIdentityRecord>>
     fun observeCustomerEnrollments(): Flow<List<NfcIdentityRecord>>
@@ -145,6 +157,8 @@ interface SyncQueueRepository {
 interface OpenSaleRepository {
     fun observeOpenSales(): Flow<List<PersistedOpenSale>>
     suspend fun loadOpenSale(): PersistedOpenSale?
+    /** Returns the first OPEN sale for the given spot, or null. Pass null for walk-in (no assigned spot). */
+    suspend fun loadOpenSaleForSpot(serviceSpotId: String?): PersistedOpenSale?
     suspend fun createOpenSale(serviceSpotId: String?, serviceSpotLabel: String?): PersistedOpenSale
     suspend fun saveLines(saleId: String, lines: List<PersistedOpenSaleLine>)
     suspend fun assignServiceSpot(saleId: String, serviceSpotId: String?, serviceSpotLabel: String?)
