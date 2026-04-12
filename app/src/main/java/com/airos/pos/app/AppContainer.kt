@@ -148,9 +148,16 @@ class DefaultAppContainer(
     private fun currentCashierAuthMethodSnapshot(): String? = authRepository.activeSession.value?.authMethodSnapshot
 
 
+    private val receiptSettingsDurableCache: ReceiptSettingsDurableCache by lazy {
+        ReceiptSettingsDurableCache(appContext)
+    }
+
     private val restaurantReceiptSettingsClient: RestaurantReceiptSettingsClient by lazy {
-        DefaultRestaurantReceiptSettingsClient(
-            backendBaseUrlProvider = { currentLedgerBackendBaseUrl().orEmpty() },
+        CachingRestaurantReceiptSettingsClient(
+            delegate = DefaultRestaurantReceiptSettingsClient(
+                backendBaseUrlProvider = { currentLedgerBackendBaseUrl().orEmpty() },
+            ),
+            cache = receiptSettingsDurableCache,
         )
     }
 

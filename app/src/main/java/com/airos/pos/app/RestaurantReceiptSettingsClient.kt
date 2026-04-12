@@ -36,6 +36,44 @@ interface RestaurantReceiptSettingsClient {
     suspend fun fetchCurrent(): PosResult<BackendReceiptSettings>
 }
 
+/**
+ * Wraps a [RestaurantReceiptSettingsClient] with a [ReceiptSettingsDurableCache].
+ *
+ * - On success: persists latest settings to durable cache and returns live result.
+ * - On failure: returns cached settings as Success if available, otherwise propagates original Failure.
+ *
+ * Source-of-truth remains the backend/Dashboard. The durable cache is a resilience-only fallback.
+ */
+class CachingRestaurantReceiptSettingsClient(
+    private val delegate: RestaurantReceiptSettingsClient,
+    private val cache: ReceiptSettingsDurableCache,
+) : RestaurantReceiptSettingsClient {
+    companion object {
+        private const val TAG = "AIROS_RECEIPT_SETTINGS"
+    }
+
+    override suspend fun fetchCurrent(): PosResult<BackendReceiptSettings> {
+        return when (val result = delegate.fetchCurrent()) {
+            is PosResult.Success -> {
+                Log.i(TAG, "fetchCurrent: live fetch ok logoEnabled=${result.value.logoEnabled}, persisting to durable cache")
+                cache.save(result.value)
+                result
+            }
+            is PosResult.Failure -> {
+                Log.w(TAG, "fetchCurrent: live fetch failed (${result.message}), trying durable cache")
+                val cached = cache.load()
+                if (cached != null) {
+                    Log.i(TAG, "fetchCurrent: durable cache hit logoEnabled=${cached.logoEnabled} business=${cached.business?.displayName}")
+                    PosResult.Success(cached)
+                } else {
+                    Log.e(TAG, "fetchCurrent: durable cache miss — no cached receipt settings available")
+                    result
+                }
+            }
+        }
+    }
+}
+
 class DefaultRestaurantReceiptSettingsClient(
     private val backendBaseUrlProvider: () -> String,
 ) : RestaurantReceiptSettingsClient {
