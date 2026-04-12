@@ -19,6 +19,8 @@ import com.airos.pos.core.model.TablePaymentResult
 import com.airos.pos.core.model.RefundRequest
 import com.airos.pos.core.model.RestaurantTable
 import com.airos.pos.core.model.StaffMember
+import com.airos.pos.core.model.PersistedOpenSale
+import com.airos.pos.core.model.PersistedOpenSaleLine
 import com.airos.pos.core.model.SyncItem
 import com.airos.pos.core.model.SyncState
 import com.airos.pos.core.model.TerminalSettings
@@ -138,4 +140,14 @@ interface SyncQueueRepository {
     suspend fun enqueue(item: SyncItem): PosResult<Unit>
     suspend fun updateState(itemId: String, state: SyncState, lastError: String? = null): PosResult<Unit>
     suspend fun nextPending(limit: Int = 20): List<SyncItem>
+}
+
+interface OpenSaleRepository {
+    fun observeOpenSales(): Flow<List<PersistedOpenSale>>
+    suspend fun loadOpenSale(): PersistedOpenSale?
+    suspend fun createOpenSale(serviceSpotId: String?, serviceSpotLabel: String?): PersistedOpenSale
+    suspend fun saveLines(saleId: String, lines: List<PersistedOpenSaleLine>)
+    suspend fun assignServiceSpot(saleId: String, serviceSpotId: String?, serviceSpotLabel: String?)
+    suspend fun clearOpenSale(saleId: String)
+    suspend fun closeOpenSale(saleId: String)
 }

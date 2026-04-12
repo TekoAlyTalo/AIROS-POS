@@ -9,6 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.airos.pos.core.database.dao.BackendMenuCacheDao
 import com.airos.pos.core.database.dao.MenuItemDao
 import com.airos.pos.core.database.dao.NfcIdentityDao
+import com.airos.pos.core.database.dao.OpenSaleDao
 import com.airos.pos.core.database.dao.ShiftDao
 import com.airos.pos.core.database.dao.StaffDao
 import com.airos.pos.core.database.dao.SyncQueueDao
@@ -20,6 +21,8 @@ import com.airos.pos.core.database.entity.MenuItemLocalEntity
 import com.airos.pos.core.database.entity.NfcIdentityEnrollmentEntity
 import com.airos.pos.core.database.entity.NfcIdentityEventEntity
 import com.airos.pos.core.database.entity.NfcReceiptHandoffEntity
+import com.airos.pos.core.database.entity.OpenSaleEntity
+import com.airos.pos.core.database.entity.OpenSaleLineEntity
 import com.airos.pos.core.database.entity.RestaurantTableLocalEntity
 import com.airos.pos.core.database.entity.ShiftLocalEntity
 import com.airos.pos.core.database.entity.StaffLocalEntity
@@ -41,8 +44,10 @@ import com.airos.pos.core.database.entity.TicketLocalEntity
         NfcIdentityEnrollmentEntity::class,
         NfcIdentityEventEntity::class,
         NfcReceiptHandoffEntity::class,
+        OpenSaleEntity::class,
+        OpenSaleLineEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = false,
 )
 abstract class AirosPosDatabase : RoomDatabase() {
@@ -54,6 +59,7 @@ abstract class AirosPosDatabase : RoomDatabase() {
     abstract fun syncQueueDao(): SyncQueueDao
     abstract fun backendMenuCacheDao(): BackendMenuCacheDao
     abstract fun nfcIdentityDao(): NfcIdentityDao
+    abstract fun openSaleDao(): OpenSaleDao
 
     companion object {
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -196,12 +202,51 @@ abstract class AirosPosDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `open_sales` (
+                        `saleId` TEXT PRIMARY KEY NOT NULL,
+                        `serviceSpotId` TEXT,
+                        `serviceSpotLabel` TEXT,
+                        `status` TEXT NOT NULL,
+                        `createdAtEpochMillis` INTEGER NOT NULL,
+                        `updatedAtEpochMillis` INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `open_sale_lines` (
+                        `saleId` TEXT NOT NULL,
+                        `itemId` TEXT NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `quantity` INTEGER NOT NULL,
+                        `unitPriceCents` INTEGER NOT NULL,
+                        `taxRatePercent` REAL NOT NULL,
+                        `discountPercent` INTEGER,
+                        `discountAmountCents` INTEGER,
+                        PRIMARY KEY(`saleId`, `itemId`),
+                        FOREIGN KEY(`saleId`) REFERENCES `open_sales`(`saleId`) ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `index_open_sale_lines_saleId`
+                    ON `open_sale_lines` (`saleId`)
+                    """.trimIndent(),
+                )
+            }
+        }
+
         fun build(context: Context): AirosPosDatabase {
             return Room.databaseBuilder(
                 context,
                 AirosPosDatabase::class.java,
                 "airos-pos.db",
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build()
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).build()
         }
     }
 }
