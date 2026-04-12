@@ -141,8 +141,12 @@ object AirosPosLedgerFinalizeBridge {
         deliveryMode: String = "QR",
         tokenTtlMs: Long? = null,
         publicRoutePrefix: String = "/api/pos/receipts/public",
-        qrLabel: String = "Electronic receipt",
+        qrLabel: String? = null,
     ): PosResult<LedgerFinalizeAndQrResult> {
+        val resolvedQrLabel = qrLabel ?: when (languageCode.trim().lowercase()) {
+            "fi" -> "Sähköinen kuitti"
+            else -> "Electronic receipt"
+        }
         val request = AirosPosLedgerMapper.buildFinalizeSaleRequest(
             paymentRequest = paymentRequest,
             paymentResult = paymentResult,
@@ -170,7 +174,7 @@ object AirosPosLedgerFinalizeBridge {
                     document = paymentResult.receiptDocument,
                     backendBaseUrl = backendBaseUrl,
                     ledgerResponse = finalize.value,
-                    label = qrLabel,
+                    label = resolvedQrLabel,
                 )
                 PosResult.Success(
                     LedgerFinalizeAndQrResult(

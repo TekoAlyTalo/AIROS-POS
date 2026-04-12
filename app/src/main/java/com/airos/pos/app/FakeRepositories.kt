@@ -19,6 +19,7 @@ import com.airos.pos.core.model.ReceiptHandoffPayload
 import com.airos.pos.core.model.ReceiptLine
 import com.airos.pos.core.model.ReceiptPaymentRecord
 import com.airos.pos.core.model.ReceiptTotals
+import com.airos.pos.core.model.ReceiptVatRow
 import com.airos.pos.core.model.TablePaymentRequest
 import com.airos.pos.core.model.TablePaymentResult
 import com.airos.pos.core.model.RefundRequest
@@ -520,10 +521,20 @@ class FakePaymentRepository(
             }
 
         val changeCents = ((request.cashTenderedCents ?: totalPaidCents) - totalDueCents).coerceAtLeast(0)
-        val taxCents = request.lines.sumOf { line ->
+        val vatBreakdownMap = mutableMapOf<Double, Pair<Int, Int>>()
+        request.lines.forEach { line ->
             val taxRate = line.taxRatePercent
-            if (taxRate <= 0.0) 0 else ((line.totalPriceCents * taxRate) / (100.0 + taxRate)).roundToInt()
+            if (taxRate > 0.0) {
+                val lineTaxCents = ((line.totalPriceCents * taxRate) / (100.0 + taxRate)).roundToInt()
+                val lineBaseCents = line.totalPriceCents - lineTaxCents
+                val current = vatBreakdownMap.getOrDefault(taxRate, 0 to 0)
+                vatBreakdownMap[taxRate] = (current.first + lineTaxCents) to (current.second + lineBaseCents)
+            }
         }
+        val vatBreakdown = vatBreakdownMap.entries
+            .sortedBy { it.key }
+            .map { (rate, amounts) -> ReceiptVatRow(ratePercent = rate, taxCents = amounts.first, baseCents = amounts.second) }
+        val taxCents = vatBreakdown.sumOf { it.taxCents }
         val receiptNumber = "receipt-${ticketId}-${store.now()}"
         val receiptLines = request.lines.map { line ->
             ReceiptLine(
@@ -535,7 +546,7 @@ class FakePaymentRepository(
         }
 
         val baseReceiptDocument = ReceiptDocument(
-            title = "AIROS Receipt",
+            title = "",
             lines = receiptLines,
             footer = "Thank you",
             payments = paymentRecords,
@@ -544,6 +555,7 @@ class FakePaymentRepository(
                 discountCents = discountCents,
                 taxCents = taxCents,
                 totalCents = totalDueCents,
+                vatBreakdown = vatBreakdown,
             ),
             receiptNumber = receiptNumber,
             orderNumber = ticketId,

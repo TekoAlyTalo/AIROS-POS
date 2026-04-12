@@ -563,7 +563,6 @@ class MenuViewModel(
                         PaymentEntry(
                             method = PaymentMethod.CASH,
                             amountCents = result.finalTotalCents,
-                            displayLabel = "Cash",
                         ),
                     )
                 }
@@ -573,7 +572,6 @@ class MenuViewModel(
                         PaymentEntry(
                             method = PaymentMethod.CARD,
                             amountCents = result.finalTotalCents,
-                            displayLabel = "Card",
                         ),
                     )
                 }
@@ -584,17 +582,16 @@ class MenuViewModel(
                             method = PaymentMethod.VOUCHER,
                             amountCents = result.finalTotalCents,
                             reference = result.voucherBarcodeValue,
-                            displayLabel = "Voucher",
                         ),
                     )
                 }
 
                 MenuPaymentMode.SPLIT_PAYMENT -> {
                     result.cashTenderedCents?.takeIf { it > 0 }?.let {
-                        add(PaymentEntry(method = PaymentMethod.CASH, amountCents = it, displayLabel = "Cash"))
+                        add(PaymentEntry(method = PaymentMethod.CASH, amountCents = it))
                     }
                     result.cardAmountCents?.takeIf { it > 0 }?.let {
-                        add(PaymentEntry(method = PaymentMethod.CARD, amountCents = it, displayLabel = "Card"))
+                        add(PaymentEntry(method = PaymentMethod.CARD, amountCents = it))
                     }
                     result.voucherAmountCents?.takeIf { it > 0 }?.let {
                         add(
@@ -602,7 +599,6 @@ class MenuViewModel(
                                 method = PaymentMethod.VOUCHER,
                                 amountCents = it,
                                 reference = result.voucherBarcodeValue,
-                                displayLabel = "Voucher",
                             ),
                         )
                     }

@@ -347,6 +347,7 @@ data class ReceiptLine(
     val quantity: String? = null,
     val unitPriceCents: Int? = null,
     val totalPriceCents: Int? = null,
+    val taxRatePercent: Double? = null,
     val note: String? = null,
     val alignment: ReceiptAlignment = ReceiptAlignment.LEFT,
 )
@@ -418,11 +419,18 @@ data class ReceiptBusiness(
     val website: String? = null,
 )
 
+data class ReceiptVatRow(
+    val ratePercent: Double,
+    val taxCents: Int,
+    val baseCents: Int,
+)
+
 data class ReceiptTotals(
     val subtotalCents: Int,
     val discountCents: Int = 0,
     val taxCents: Int = 0,
     val totalCents: Int,
+    val vatBreakdown: List<ReceiptVatRow> = emptyList(),
 )
 
 data class ReceiptPaymentRecord(
@@ -433,7 +441,7 @@ data class ReceiptPaymentRecord(
 )
 
 data class ReceiptDocument(
-    val title: String = "Receipt",
+    val title: String = "",
     val lines: List<ReceiptLine> = emptyList(),
     val footer: String = "",
     val currencyCode: String = "EUR",

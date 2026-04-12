@@ -80,11 +80,11 @@ class SunmiPrinterService(
             printBusinessBlock(service, document, callback, labels)
             printHeaderText(service, document, callback)
             printDivider(service, callback)
-            printReceiptLines(service, document.lines, document.currencyCode, callback)
+            printReceiptLines(service, document.lines, document.currencyCode, callback, labels)
             printDivider(service, callback)
             printTotals(service, document.totals, document.currencyCode, callback, labels)
             printDivider(service, callback)
-            printPayments(service, document.payments, document.currencyCode, callback)
+            printPayments(service, document.payments, document.currencyCode, callback, labels)
             printDivider(service, callback)
             printMeta(service, meta, callback)
             printExtraTextBlocks(service, document, callback)
@@ -217,6 +217,7 @@ class SunmiPrinterService(
         lines: List<ReceiptLine>,
         currencyCode: String,
         callback: InnerResultCallback,
+        labels: ReceiptLabels,
     ) {
         lines.forEach { line ->
             val rendered = renderReceiptLine(line, currencyCode)
@@ -236,7 +237,12 @@ class SunmiPrinterService(
         if (totals.discountCents != 0) {
             invokeIfPresent(service, "printText", "${labels.discount}: -${formatMoney(totals.discountCents, currencyCode)}\n", callback)
         }
-        if (totals.taxCents != 0) {
+        if (totals.vatBreakdown.isNotEmpty()) {
+            totals.vatBreakdown.forEach { row ->
+                val rateStr = if (row.ratePercent % 1.0 == 0.0) row.ratePercent.toInt().toString() else row.ratePercent.toString()
+                invokeIfPresent(service, "printText", "${labels.tax} $rateStr%: ${formatMoney(row.taxCents, currencyCode)}\n", callback)
+            }
+        } else if (totals.taxCents != 0) {
             invokeIfPresent(service, "printText", "${labels.tax}: ${formatMoney(totals.taxCents, currencyCode)}\n", callback)
         }
         invokeIfPresent(service, "printText", "${labels.total}: ${formatMoney(totals.totalCents, currencyCode)}\n", callback)
@@ -247,10 +253,15 @@ class SunmiPrinterService(
         payments: List<ReceiptPaymentRecord>,
         currencyCode: String,
         callback: InnerResultCallback,
+        labels: ReceiptLabels,
     ) {
         payments.forEach { payment ->
             val label = payment.displayLabel?.takeIf { it.isNotBlank() }
-                ?: payment.method.name.lowercase().replaceFirstChar { it.titlecase(Locale.ROOT) }
+                ?: when (payment.method) {
+                    PaymentMethod.CASH -> labels.cash
+                    PaymentMethod.CARD -> labels.card
+                    PaymentMethod.VOUCHER -> labels.voucher
+                }
             invokeIfPresent(service, "printText", "$label: ${formatMoney(payment.amountCents, currencyCode)}\n", callback)
         }
     }
@@ -480,6 +491,9 @@ class SunmiPrinterService(
             total = "YHTEENSÄ",
             businessId = "Y-tunnus",
             vatId = "ALV-tunnus",
+            cash = "Käteinen",
+            card = "Kortti",
+            voucher = "Lahjakortti",
         )
         else -> ReceiptLabels(
             place = "Place",
@@ -494,6 +508,9 @@ class SunmiPrinterService(
             total = "TOTAL",
             businessId = "Business ID",
             vatId = "VAT",
+            cash = "Cash",
+            card = "Card",
+            voucher = "Voucher",
         )
     }
 
@@ -510,6 +527,9 @@ class SunmiPrinterService(
         val total: String,
         val businessId: String,
         val vatId: String,
+        val cash: String,
+        val card: String,
+        val voucher: String,
     )
 
     private data class ReceiptMeta(
