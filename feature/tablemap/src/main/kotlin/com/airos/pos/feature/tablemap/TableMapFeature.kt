@@ -64,6 +64,7 @@ import com.airos.pos.core.ui.KeyValueRow
 import com.airos.pos.core.ui.PosPane
 import com.airos.pos.core.ui.StatusBanner
 import com.airos.pos.device.camera.CameraPreviewService
+import com.airos.pos.domain.OpenSaleRepository
 import com.airos.pos.domain.SettingsRepository
 import com.airos.pos.domain.TableRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -81,6 +82,12 @@ private const val PREVIEW_TAG = "TableLivePreview"
 private const val PREVIEW_SURFACE_ASPECT_RATIO = 4f / 3f
 private const val AREA_FILTER_ALL = "All"
 
+/**
+ * Aggregated open-check info for a single service spot.
+ * Phase-1 assumption: one open sale per spot. Structure supports multiple in phase 2.
+ */
+data class OpenCheckSummary(val count: Int, val totalCents: Int)
+
 data class TableLivePreviewTarget(
     val tableId: String,
     val tableLabel: String,
@@ -97,12 +104,15 @@ data class TableMapUiState(
     val cameraPreviewState: CameraPreviewState = CameraPreviewState(),
     val livePreviewTarget: TableLivePreviewTarget? = null,
     val isLivePreviewDialogVisible: Boolean = false,
+    /** Open-check summaries keyed by service spot id. Empty when no open sales exist. */
+    val openChecksBySpotId: Map<String, OpenCheckSummary> = emptyMap(),
 )
 
 class TableMapViewModel(
     private val tableRepository: TableRepository,
     private val settingsRepository: SettingsRepository,
     private val cameraPreviewService: CameraPreviewService,
+    private val openSaleRepository: OpenSaleRepository,
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(TableMapUiState())
     val uiState: StateFlow<TableMapUiState> = mutableState.asStateFlow()
@@ -133,6 +143,22 @@ class TableMapViewModel(
                             ?: if (previewState.connectionState == CameraConnectionState.IDLE) null else current.livePreviewTarget,
                     )
                 }
+            }
+        }
+        viewModelScope.launch {
+            openSaleRepository.observeOpenSales().collect { sales ->
+                val bySpotId = sales
+                    .filter { it.serviceSpotId != null }
+                    .groupBy { it.serviceSpotId!! }
+                    .mapValues { (_, spotSales) ->
+                        OpenCheckSummary(
+                            count = spotSales.size,
+                            totalCents = spotSales.sumOf { sale ->
+                                sale.lines.sumOf { it.quantity * it.unitPriceCents }
+                            },
+                        )
+                    }
+                mutableState.update { it.copy(openChecksBySpotId = bySpotId) }
             }
         }
     }
@@ -246,8 +272,9 @@ class TableMapViewModel(
             tableRepository: TableRepository,
             settingsRepository: SettingsRepository,
             cameraPreviewService: CameraPreviewService,
+            openSaleRepository: OpenSaleRepository,
         ): ViewModelProvider.Factory = viewModelFactory {
-            initializer { TableMapViewModel(tableRepository, settingsRepository, cameraPreviewService) }
+            initializer { TableMapViewModel(tableRepository, settingsRepository, cameraPreviewService, openSaleRepository) }
         }
     }
 }
@@ -432,6 +459,7 @@ fun TableMapScreen(
                                     joinSource = isJoinSource,
                                     joinSelected = isJoinSelected,
                                     joinSelectable = isJoinSelectable,
+                                    openCheckSummary = state.openChecksBySpotId[table.id],
                                     onClick = {
                                         onSelectTable(table.id)
                                         if (isJoinMode && !isJoinSource && isJoinSelectable) {
@@ -506,6 +534,7 @@ fun TableMapScreen(
                     cameraPreviewService = cameraPreviewService,
                     canOpenLivePreview = !selectedTable.cameraId.isNullOrBlank() && !state.edgeBaseUrl.isNullOrBlank(),
                     joinMode = isJoinMode,
+                    openCheckSummary = state.openChecksBySpotId[selectedTable.id],
                     joinSourceTableLabel = joinSourceTable?.label,
                     joinSelectedTableLabels = visibleTables.filter { it.id in joinSelectedTableIds }.map { it.label },
                     canConfirmJoin = joinSelectedTableIds.isNotEmpty(),
@@ -554,6 +583,7 @@ private fun TableDetailsContent(
     cameraPreviewService: CameraPreviewService,
     canOpenLivePreview: Boolean,
     joinMode: Boolean,
+    openCheckSummary: OpenCheckSummary?,
     joinSourceTableLabel: String?,
     joinSelectedTableLabels: List<String>,
     canConfirmJoin: Boolean,
@@ -572,6 +602,10 @@ private fun TableDetailsContent(
         KeyValueRow("Seats", table.seats.toString())
         KeyValueRow("Guests", table.guestCount.toString())
         KeyValueRow("Camera", table.cameraLabel ?: "Not assigned")
+        if (openCheckSummary != null) {
+            KeyValueRow("Open checks", openCheckSummary.count.toString())
+            KeyValueRow("Open total", formatOpenTotal(openCheckSummary.totalCents))
+        }
 
         val mergedHint = mergedHintFor(table)
         if (mergedHint != null) {
@@ -779,6 +813,7 @@ private fun TableGridCard(
     joinSource: Boolean,
     joinSelected: Boolean,
     joinSelectable: Boolean,
+    openCheckSummary: OpenCheckSummary?,
     onClick: () -> Unit,
 ) {
     val mergedHint = mergedHintFor(table)
@@ -868,6 +903,18 @@ private fun TableGridCard(
                         )
                     }
                 }
+                if (openCheckSummary != null) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        MiniStatusChip(
+                            label = "${openCheckSummary.count} open",
+                            tint = MaterialTheme.colorScheme.tertiary,
+                        )
+                        MiniStatusChip(
+                            label = formatOpenTotal(openCheckSummary.totalCents),
+                            tint = MaterialTheme.colorScheme.tertiary,
+                        )
+                    }
+                }
             }
         }
     }
@@ -899,6 +946,12 @@ private fun joinModeSummary(
     } else {
         "Primary: $primary. Selected: ${selectedLabels.joinToString(", ")}"
     }
+}
+
+private fun formatOpenTotal(cents: Int): String {
+    val major = cents / 100
+    val minor = cents % 100
+    return "$major,${minor.toString().padStart(2, '0')} €"
 }
 
 fun mergedHintFor(table: RestaurantTable): String? {

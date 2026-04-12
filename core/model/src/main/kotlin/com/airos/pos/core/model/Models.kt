@@ -244,6 +244,27 @@ data class Ticket(
     val syncState: SyncState,
 )
 
+data class PersistedOpenSale(
+    val saleId: String,
+    val serviceSpotId: String?,
+    val serviceSpotLabel: String?,
+    val status: String,
+    val createdAtEpochMillis: Long,
+    val updatedAtEpochMillis: Long,
+    val lines: List<PersistedOpenSaleLine> = emptyList(),
+)
+
+data class PersistedOpenSaleLine(
+    val saleId: String,
+    val itemId: String,
+    val name: String,
+    val quantity: Int,
+    val unitPriceCents: Int,
+    val taxRatePercent: Double,
+    val discountPercent: Int? = null,
+    val discountAmountCents: Int? = null,
+)
+
 data class KitchenOrder(
     val ticketId: String,
     val tableLabel: String,

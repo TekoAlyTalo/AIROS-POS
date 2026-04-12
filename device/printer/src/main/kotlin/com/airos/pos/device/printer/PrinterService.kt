@@ -70,18 +70,19 @@ class SunmiPrinterService(
 
         return try {
             val callback = createNoOpCallback()
-            val meta = buildReceiptMeta(document)
+            val labels = receiptLabels(document.languageCode)
+            val meta = buildReceiptMeta(document, labels)
 
             invokeIfPresent(service, "printerInit", callback)
 
             printLogoIfPresent(service, document, callback)
             printCenteredLine(service, document.title, callback)
-            printBusinessBlock(service, document, callback)
+            printBusinessBlock(service, document, callback, labels)
             printHeaderText(service, document, callback)
             printDivider(service, callback)
             printReceiptLines(service, document.lines, document.currencyCode, callback)
             printDivider(service, callback)
-            printTotals(service, document.totals, document.currencyCode, callback)
+            printTotals(service, document.totals, document.currencyCode, callback, labels)
             printDivider(service, callback)
             printPayments(service, document.payments, document.currencyCode, callback)
             printDivider(service, callback)
@@ -191,13 +192,14 @@ class SunmiPrinterService(
         service: SunmiInnerPrinterService,
         document: ReceiptDocument,
         callback: InnerResultCallback,
+        labels: ReceiptLabels,
     ) {
         val business = document.business ?: return
         val rows = mutableListOf<String>().apply {
             add(business.displayName)
             business.legalName?.takeIf { it.isNotBlank() && it != business.displayName }?.let { add(it) }
-            business.businessId?.takeIf { it.isNotBlank() }?.let { add("Business ID: $it") }
-            business.vatId?.takeIf { it.isNotBlank() }?.let { add("VAT: $it") }
+            business.businessId?.takeIf { it.isNotBlank() }?.let { add("${labels.businessId}: $it") }
+            business.vatId?.takeIf { it.isNotBlank() }?.let { add("${labels.vatId}: $it") }
             addAll(business.addressLines.filter { it.isNotBlank() })
             business.phone?.takeIf { it.isNotBlank() }?.let { add(it) }
             business.email?.takeIf { it.isNotBlank() }?.let { add(it) }
@@ -227,16 +229,17 @@ class SunmiPrinterService(
         totals: ReceiptTotals?,
         currencyCode: String,
         callback: InnerResultCallback,
+        labels: ReceiptLabels,
     ) {
         if (totals == null) return
-        invokeIfPresent(service, "printText", "Subtotal: ${formatMoney(totals.subtotalCents, currencyCode)}\n", callback)
+        invokeIfPresent(service, "printText", "${labels.subtotal}: ${formatMoney(totals.subtotalCents, currencyCode)}\n", callback)
         if (totals.discountCents != 0) {
-            invokeIfPresent(service, "printText", "Discount: -${formatMoney(totals.discountCents, currencyCode)}\n", callback)
+            invokeIfPresent(service, "printText", "${labels.discount}: -${formatMoney(totals.discountCents, currencyCode)}\n", callback)
         }
         if (totals.taxCents != 0) {
-            invokeIfPresent(service, "printText", "Tax: ${formatMoney(totals.taxCents, currencyCode)}\n", callback)
+            invokeIfPresent(service, "printText", "${labels.tax}: ${formatMoney(totals.taxCents, currencyCode)}\n", callback)
         }
-        invokeIfPresent(service, "printText", "TOTAL: ${formatMoney(totals.totalCents, currencyCode)}\n", callback)
+        invokeIfPresent(service, "printText", "${labels.total}: ${formatMoney(totals.totalCents, currencyCode)}\n", callback)
     }
 
     private fun printPayments(
@@ -337,19 +340,21 @@ class SunmiPrinterService(
         invokeIfPresent(service, "setAlignment", 0, callback)
     }
 
-    private fun buildReceiptMeta(document: ReceiptDocument): ReceiptMeta {
+    private fun buildReceiptMeta(document: ReceiptDocument, labels: ReceiptLabels): ReceiptMeta {
         val printedAt = document.printedAtEpochMillis
         val date = printedAt?.let { formatReceiptDate(it) }
         val time = printedAt?.let { formatReceiptTime(it) }
         val rows = buildList {
+            val tableLabel = document.tableLabel
             val receiptNumber = document.receiptNumber
             val orderNumber = document.orderNumber
             val cashierName = document.cashierName
-            if (!receiptNumber.isNullOrBlank()) add("Receipt: $receiptNumber")
-            if (!orderNumber.isNullOrBlank()) add("Order: $orderNumber")
-            if (!cashierName.isNullOrBlank()) add("Cashier: $cashierName")
-            if (date != null) add("Date: $date")
-            if (time != null) add("Time: $time")
+            if (!tableLabel.isNullOrBlank()) add("${labels.place}: $tableLabel")
+            if (!receiptNumber.isNullOrBlank()) add("${labels.receipt}: $receiptNumber")
+            if (!orderNumber.isNullOrBlank()) add("${labels.order}: $orderNumber")
+            if (!cashierName.isNullOrBlank()) add("${labels.cashier}: $cashierName")
+            if (date != null) add("${labels.date}: $date")
+            if (time != null) add("${labels.time}: $time")
         }
         return ReceiptMeta(rows)
     }
@@ -460,6 +465,52 @@ class SunmiPrinterService(
             }
         }
     }
+
+    private fun receiptLabels(languageCode: String): ReceiptLabels = when (languageCode.trim().lowercase()) {
+        "fi" -> ReceiptLabels(
+            place = "Paikka",
+            receipt = "Kuitti",
+            order = "Tilaus",
+            cashier = "Myyjä",
+            date = "Päivä",
+            time = "Aika",
+            subtotal = "Yhteensä",
+            discount = "Alennus",
+            tax = "ALV",
+            total = "YHTEENSÄ",
+            businessId = "Y-tunnus",
+            vatId = "ALV-tunnus",
+        )
+        else -> ReceiptLabels(
+            place = "Place",
+            receipt = "Receipt",
+            order = "Order",
+            cashier = "Cashier",
+            date = "Date",
+            time = "Time",
+            subtotal = "Subtotal",
+            discount = "Discount",
+            tax = "Tax",
+            total = "TOTAL",
+            businessId = "Business ID",
+            vatId = "VAT",
+        )
+    }
+
+    private data class ReceiptLabels(
+        val place: String,
+        val receipt: String,
+        val order: String,
+        val cashier: String,
+        val date: String,
+        val time: String,
+        val subtotal: String,
+        val discount: String,
+        val tax: String,
+        val total: String,
+        val businessId: String,
+        val vatId: String,
+    )
 
     private data class ReceiptMeta(
         val rows: List<String>,

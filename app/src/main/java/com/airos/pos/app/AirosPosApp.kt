@@ -859,6 +859,7 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                             appContainer.tableRepository,
                             appContainer.settingsRepository,
                             appContainer.cameraPreviewService,
+                            appContainer.openSaleRepository,
                         ),
                     )
                     val state by viewModel.uiState.collectAsState()

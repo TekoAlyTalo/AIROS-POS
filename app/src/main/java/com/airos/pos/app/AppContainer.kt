@@ -18,6 +18,7 @@ import com.airos.pos.device.printer.PrinterService
 import com.airos.pos.device.printer.SunmiPrinterService
 import com.airos.pos.device.scanner.ScannerService
 import com.airos.pos.device.scanner.SunmiScannerService
+import com.airos.pos.app.RoomOpenSaleRepository
 import com.airos.pos.domain.AirosPosLedgerHttpClient
 import com.airos.pos.domain.AuthRepository
 import com.airos.pos.domain.DefaultAirosPosLedgerHttpClient
@@ -26,6 +27,7 @@ import com.airos.pos.domain.MenuRepository
 import com.airos.pos.domain.NfcIdentityRepository
 import com.airos.pos.domain.NfcIdentitySyncClient
 import com.airos.pos.domain.DefaultNfcIdentitySyncClient
+import com.airos.pos.domain.OpenSaleRepository
 import com.airos.pos.domain.PaymentRepository
 import com.airos.pos.domain.SettingsRepository
 import com.airos.pos.domain.ShiftRepository
@@ -41,6 +43,7 @@ interface AppContainer {
     val database: AirosPosDatabase
     val terminalPreferencesStore: TerminalPreferencesStore
     val authRepository: AuthRepository
+    val openSaleRepository: OpenSaleRepository
     val shiftRepository: ShiftRepository
     val tableRepository: TableRepository
     val menuRepository: MenuRepository
@@ -79,6 +82,7 @@ class DefaultAppContainer(
     private val roomNfcIdentityRepository = RoomNfcIdentityRepository(database, nfcIdentitySyncClient)
     override val nfcIdentityRepository: NfcIdentityRepository = roomNfcIdentityRepository
     override val nfcStaffResolver: NfcStaffResolver = RepositoryNfcStaffResolver(roomNfcIdentityRepository)
+    override val openSaleRepository: OpenSaleRepository = RoomOpenSaleRepository(database.openSaleDao())
     override val shiftRepository: ShiftRepository = FakeShiftRepository(store, syncQueueRepository)
     override val tableRepository: TableRepository = FakeTableRepository(store, syncQueueRepository)
     override val menuRepository: MenuRepository = BackendMenuRepository(

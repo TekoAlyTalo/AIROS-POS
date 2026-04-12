@@ -398,6 +398,29 @@ class FakePaymentRepository(
 ) : PaymentRepository {
     private companion object {
         const val TAG = "AIROS_LEDGER"
+
+        /**
+         * Returns true when a ledger failure message indicates a connectivity/availability problem
+         * (network unreachable, socket timeout, server-side 5xx) as opposed to a business logic
+         * rejection from the backend (HTTP 4xx validation error, etc.).
+         *
+         * Only connectivity-style failures activate the local offline fallback.
+         * Business logic rejections still propagate as failures so the operator can act on them.
+         */
+        fun isConnectivityFailure(message: String): Boolean {
+            // Raw network failure — connection couldn't be opened (UnknownHostException, ConnectException, SocketTimeoutException, etc.)
+            if (message.contains("connection open failed", ignoreCase = true)) return true
+            // I/O failure during the HTTP send/receive phase (read timeout, network drop mid-request)
+            if (message.contains("request failed at", ignoreCase = true)) return true
+            // HTTP 5xx — server responded but is unavailable, overloaded, or crashed
+            val httpStatusMatch = Regex("""HTTP (\d{3})""").find(message)
+            if (httpStatusMatch != null) {
+                val code = httpStatusMatch.groupValues[1].toIntOrNull() ?: 0
+                return code >= 500
+            }
+            // Anything else (HTTP 4xx, parse failure, empty base URL, unknown) is not a connectivity error
+            return false
+        }
     }
 
     override fun observePaymentSummary(ticketId: String): Flow<PaymentSummary?> {
@@ -524,6 +547,7 @@ class FakePaymentRepository(
             ),
             receiptNumber = receiptNumber,
             orderNumber = ticketId,
+            tableLabel = resolvedTableLabel,
             printedAtEpochMillis = store.now(),
             cashierName = cashierName,
         )
@@ -598,7 +622,28 @@ class FakePaymentRepository(
                     }
                     is PosResult.Failure -> {
                         Log.e(TAG, "finalizeTablePayment: ledger finalize failure receipt=$receiptNumber baseUrl=$ledgerBaseUrl reason=${ledgerFinalize.message}")
-                        return ledgerFinalize
+                        if (isConnectivityFailure(ledgerFinalize.message)) {
+                            // Backend unreachable — activate local offline fallback.
+                            // The sale is still finalized locally; a pending-sync record is written
+                            // so a future sync pass can reconcile this sale with the ledger.
+                            Log.w(TAG, "finalizeTablePayment: ledger unreachable, activating local offline fallback receipt=$receiptNumber")
+                            enqueueSyncItem(
+                                store = store,
+                                syncQueueRepository = syncQueueRepository,
+                                aggregateType = "ledger_finalize",
+                                aggregateId = receiptNumber,
+                                action = "finalize_ledger_pending",
+                                payloadJson = """{"receipt_number":"$receiptNumber","ticket_id":"$ticketId","total_cents":$totalDueCents,"table_id":"${resolvedTableId ?: ""}","ledger_base_url":"$ledgerBaseUrl"}""",
+                            )
+                            settingsAppliedReceiptDocument.copy(
+                                extraTextBlocks = settingsAppliedReceiptDocument.extraTextBlocks +
+                                    "Payment completed locally\nBackend sync pending",
+                            )
+                        } else {
+                            // A real business logic rejection from the backend (HTTP 4xx, etc.) —
+                            // propagate the failure so the operator can act on it.
+                            return ledgerFinalize
+                        }
                     }
                 }
             }
