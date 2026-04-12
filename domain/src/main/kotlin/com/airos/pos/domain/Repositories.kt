@@ -50,6 +50,27 @@ interface TableRepository {
     fun observeFloorMap(): Flow<FloorMap>
     fun observeTable(tableId: String): Flow<RestaurantTable?>
     suspend fun openTable(tableId: String, guestCount: Int, openedByStaffId: String): PosResult<RestaurantTable>
+
+    /**
+     * Assign or move an open draft to any service spot (table, bar seat, or future types).
+     *
+     * Both tables and bar seats are [RestaurantTable] entries distinguished by [RestaurantTable.spotType].
+     * The assignment logic is identical for all spot types — this method does not branch on type.
+     *
+     * - [fromSpotId]: the spot currently holding the draft, or null for a walk-in draft.
+     * - [toSpotId]: the destination spot; must exist and must not be actively occupied.
+     *
+     * On success, the old spot is released (AVAILABLE) and the new spot is marked OCCUPIED.
+     * Fails with a clear message if:
+     * - [fromSpotId] == [toSpotId] (same spot, no-op guard)
+     * - [toSpotId] does not exist in the floor map
+     * - [toSpotId] is already occupied by an open ticket or another draft session
+     */
+    suspend fun assignDraftToServiceSpot(
+        fromSpotId: String?,
+        toSpotId: String,
+        openedByStaffId: String,
+    ): PosResult<RestaurantTable>
 }
 
 sealed class MenuSyncResult {

@@ -9,6 +9,7 @@ import coil.compose.SubcomposeAsyncImageContent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -68,8 +70,11 @@ import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.model.MenuItem
 import com.airos.pos.core.model.PaymentEntry
 import com.airos.pos.core.model.PaymentMethod
+import com.airos.pos.core.model.RestaurantTable
+import com.airos.pos.core.model.ServiceSpotType
 import com.airos.pos.core.model.TablePaymentRequest
 import com.airos.pos.core.model.TablePaymentResult
+import com.airos.pos.core.model.TableStatus
 import com.airos.pos.core.model.ReceiptDocument
 import com.airos.pos.core.model.ReceiptHandoffPayload
 import com.airos.pos.core.model.TicketLine
@@ -77,6 +82,7 @@ import com.airos.pos.device.platform.CustomerDisplayService
 import com.airos.pos.domain.MenuRepository
 import com.airos.pos.domain.NfcIdentityRepository
 import com.airos.pos.domain.PaymentRepository
+import com.airos.pos.domain.TableRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -117,6 +123,8 @@ data class MenuUiState(
     val receiptHandoffWaiting: Boolean = false,
     val receiptHandoffMessage: String? = null,
     val manualDrawerInProgress: Boolean = false,
+    /** All floor-map service spots (tables + bar seats + future types) — used by the spot-assignment picker. */
+    val availableServiceSpots: List<RestaurantTable> = emptyList(),
 )
 
 data class MenuTicketLine(
@@ -153,7 +161,14 @@ class MenuViewModel(
     private val customerDisplayService: CustomerDisplayService? = null,
     private val activeTableId: String? = null,
     private val activeTableLabel: String? = null,
+    private val tableRepository: TableRepository? = null,
+    private val activeStaffIdProvider: (() -> String?)? = null,
 ) : ViewModel() {
+    // Mutable table assignment — changes when the cashier assigns or moves the draft.
+    // The original constructor params are the initial values only.
+    private var currentTableId: String? = activeTableId
+    private var currentTableLabel: String? = activeTableLabel
+
     private var lastHandledReceiptHandoffKey: String? = null
     private val mutableState = MutableStateFlow(
         MenuUiState(
@@ -169,6 +184,13 @@ class MenuViewModel(
         viewModelScope.launch {
             menuRepository.observeMenuItems().collect { items ->
                 mutableState.update { it.copy(items = items) }
+            }
+        }
+        tableRepository?.let { repo ->
+            viewModelScope.launch {
+                repo.observeFloorMap().collect { floorMap ->
+                    mutableState.update { it.copy(availableServiceSpots = floorMap.tables) }
+                }
             }
         }
     }
@@ -439,6 +461,50 @@ class MenuViewModel(
         }
     }
 
+    /**
+     * Assign or move the current open draft to any service spot ([toSpotId]).
+     *
+     * Works for all [RestaurantTable] spot types (TABLE, BAR_SEAT, etc.) — no branching on type.
+     * - Safe to call with a walk-in draft ([currentTableId] == null).
+     * - Safe to call when already assigned to a spot (spot transfer: table→table, table→bar, bar→table, bar→bar).
+     * - Only allowed while payment is not in progress.
+     * - The repository enforces all domain guards (same-spot, occupied, not found).
+     */
+    fun requestServiceSpotAssignment(toSpotId: String, toSpotLabel: String) {
+        if (mutableState.value.paymentInProgress) return
+        val fromSpotId = currentTableId
+        val staffId = activeStaffIdProvider?.invoke() ?: "pos-draft"
+        viewModelScope.launch {
+            val repo = tableRepository
+            if (repo == null) {
+                mutableState.update { it.copy(paymentMessage = "Service spot assignment is not available on this terminal.") }
+                return@launch
+            }
+            when (val result = repo.assignDraftToServiceSpot(fromSpotId, toSpotId, staffId)) {
+                is PosResult.Success -> {
+                    // Migrate MenuTicketDraftStore key from old spot to new spot.
+                    val currentLines = mutableState.value.ticketLines
+                    fromSpotId?.let { MenuTicketDraftStore.clear(it) }
+                    if (currentLines.isNotEmpty()) {
+                        MenuTicketDraftStore.save(toSpotId, currentLines)
+                    }
+                    currentTableId = toSpotId
+                    currentTableLabel = toSpotLabel
+                    mutableState.update {
+                        it.copy(
+                            activeTableId = toSpotId,
+                            activeTableLabel = toSpotLabel,
+                            paymentMessage = null,
+                        )
+                    }
+                }
+                is PosResult.Failure -> {
+                    mutableState.update { it.copy(paymentMessage = result.message) }
+                }
+            }
+        }
+    }
+
     fun openCashDrawerManually(pin: String) {
         mutableState.update {
             it.copy(
@@ -480,7 +546,7 @@ class MenuViewModel(
     ): TablePaymentRequest {
         val ticketLines = lines.mapIndexed { index, line ->
             TicketLine(
-                id = "${activeTableId ?: "walkin"}-line-$index",
+                id = "${currentTableId ?: "walkin"}-line-$index",
                 menuItemId = line.itemId,
                 name = line.name,
                 quantity = line.quantity,
@@ -545,8 +611,8 @@ class MenuViewModel(
         }
 
         return TablePaymentRequest(
-            tableId = activeTableId,
-            tableLabel = activeTableLabel,
+            tableId = currentTableId,
+            tableLabel = currentTableLabel,
             lines = ticketLines,
             payments = paymentEntries,
             cashTenderedCents = when (result.mode) {
@@ -565,7 +631,7 @@ class MenuViewModel(
     }
 
     private fun clearTicketAfterSuccessfulCheckout() {
-        activeTableId?.let(MenuTicketDraftStore::clear)
+        currentTableId?.let(MenuTicketDraftStore::clear)
         customerDisplayService?.updateCustomerTotalDisplay(null)
         mutableState.update { currentState ->
             currentState.copy(
@@ -579,7 +645,7 @@ class MenuViewModel(
     ) {
         mutableState.update { currentState ->
             val updatedLines = transform(currentState.ticketLines)
-            activeTableId?.let { tableId ->
+            currentTableId?.let { tableId ->
                 if (updatedLines.isEmpty()) {
                     MenuTicketDraftStore.clear(tableId)
                 } else {
@@ -606,6 +672,8 @@ class MenuViewModel(
             customerDisplayService: CustomerDisplayService? = null,
             activeTableId: String? = null,
             activeTableLabel: String? = null,
+            tableRepository: TableRepository? = null,
+            activeStaffIdProvider: (() -> String?)? = null,
         ): ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 MenuViewModel(
@@ -618,6 +686,8 @@ class MenuViewModel(
                     customerDisplayService = customerDisplayService,
                     activeTableId = activeTableId,
                     activeTableLabel = activeTableLabel,
+                    tableRepository = tableRepository,
+                    activeStaffIdProvider = activeStaffIdProvider,
                 )
             }
         }
@@ -637,6 +707,8 @@ fun MenuScreen(
     onStartReceiptHandoff: () -> Unit,
     onCancelReceiptHandoff: () -> Unit,
     onOpenCashDrawer: (String) -> Unit,
+    /** Null when the feature is not wired (e.g. no TableRepository available). */
+    onAssignToServiceSpot: ((tableId: String, tableLabel: String) -> Unit)? = null,
     onScreenShown: () -> Unit = {},
     onScreenDisposed: () -> Unit = {},
 ) {
@@ -779,6 +851,8 @@ fun MenuScreen(
             receiptHandoffWaiting = state.receiptHandoffWaiting,
             receiptHandoffMessage = state.receiptHandoffMessage,
             manualDrawerInProgress = state.manualDrawerInProgress,
+            availableServiceSpots = state.availableServiceSpots,
+            onAssignToServiceSpot = onAssignToServiceSpot,
             onDecrementTicketLine = onDecrementTicketLine,
             onRemoveTicketLine = onRemoveTicketLine,
             onApplyLinePercentDiscount = onApplyLinePercentDiscount,
@@ -1162,6 +1236,8 @@ private fun RowScope.TicketPane(
     receiptHandoffWaiting: Boolean,
     receiptHandoffMessage: String?,
     manualDrawerInProgress: Boolean,
+    availableServiceSpots: List<RestaurantTable> = emptyList(),
+    onAssignToServiceSpot: ((tableId: String, tableLabel: String) -> Unit)? = null,
     onDecrementTicketLine: (String) -> Unit,
     onRemoveTicketLine: (String) -> Unit,
     onApplyLinePercentDiscount: (String, Int) -> Unit,
@@ -1173,6 +1249,7 @@ private fun RowScope.TicketPane(
     onOpenCashDrawer: (String) -> Unit,
 ) {
     var isPaymentDialogOpen by rememberSaveable { mutableStateOf(false) }
+    var isTablePickerOpen by rememberSaveable { mutableStateOf(false) }
     var isDrawerPinDialogOpen by rememberSaveable { mutableStateOf(false) }
     var selectedActionLineId by rememberSaveable { mutableStateOf<String?>(null) }
     var discountEditor by remember { mutableStateOf<LineDiscountEditorState?>(null) }
@@ -1349,6 +1426,19 @@ private fun RowScope.TicketPane(
                         )
                     }
                 }
+                if (onAssignToServiceSpot != null) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        OutlinedReceiptActionButton(
+                            label = if (activeTableId == null) "Valitse paikka" else "Vaihda paikka",
+                            onClick = { isTablePickerOpen = true },
+                            modifier = Modifier.weight(1f),
+                            enabled = !paymentInProgress,
+                        )
+                    }
+                }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1378,6 +1468,18 @@ private fun RowScope.TicketPane(
                         )
                     }
                 }
+            }
+
+            if (isTablePickerOpen && onAssignToServiceSpot != null) {
+                ServiceSpotPickerDialog(
+                    currentSpotId = activeTableId,
+                    spots = availableServiceSpots,
+                    onDismiss = { isTablePickerOpen = false },
+                    onSelectSpot = { spotId, spotLabel ->
+                        isTablePickerOpen = false
+                        onAssignToServiceSpot(spotId, spotLabel)
+                    },
+                )
             }
 
             if (isPaymentDialogOpen) {
@@ -2098,6 +2200,112 @@ private fun MenuKeyValueRow(
     }
 }
 
+
+@Composable
+private fun ServiceSpotPickerDialog(
+    currentSpotId: String?,
+    spots: List<RestaurantTable>,
+    onDismiss: () -> Unit,
+    onSelectSpot: (spotId: String, spotLabel: String) -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = MenuPanelColor,
+            border = BorderStroke(1.dp, MenuBorderColor),
+            contentColor = MenuTextPrimary,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = "Valitse paikka",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MenuTextPrimary,
+                )
+
+                val otherSpots = spots.filterNot { it.id == currentSpotId }
+
+                if (otherSpots.isEmpty()) {
+                    Text(
+                        text = "Ei paikkoja saatavilla.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MenuTextSecondary,
+                    )
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 360.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        otherSpots.forEach { spot ->
+                            val isOccupied = spot.status == TableStatus.OCCUPIED
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onSelectSpot(spot.id, spot.label) },
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (isOccupied) MenuPanelAltColor.copy(alpha = 0.5f) else MenuPanelAltColor,
+                                border = BorderStroke(1.dp, MenuBorderColor),
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = spot.label,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = if (isOccupied) MenuTextMuted else MenuTextPrimary,
+                                        )
+                                        Text(
+                                            text = buildSpotSubtitle(spot),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MenuTextSecondary,
+                                        )
+                                    }
+                                    Text(
+                                        text = when (spot.status) {
+                                            TableStatus.AVAILABLE -> "Vapaa"
+                                            TableStatus.OCCUPIED -> "Käytössä"
+                                            TableStatus.DIRTY -> "Siivottava"
+                                            TableStatus.RESERVED -> "Varaus"
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (isOccupied) MenuTextMuted else MenuAccentTextColor,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Button(
+                    onClick = onDismiss,
+                    modifier = Modifier.align(Alignment.End),
+                ) {
+                    Text("Peruuta")
+                }
+            }
+        }
+    }
+}
+
+private fun buildSpotSubtitle(spot: RestaurantTable): String {
+    val typeLabel = when (spot.spotType) {
+        ServiceSpotType.TABLE -> "Pöytä"
+        ServiceSpotType.BAR_SEAT -> "Baaripaikka"
+    }
+    return if (spot.areaName.isNotBlank()) "$typeLabel · ${spot.areaName}" else typeLabel
+}
 
 private fun buildReceiptTitle(
     activeTableId: String?,

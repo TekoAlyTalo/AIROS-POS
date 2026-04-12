@@ -150,6 +150,18 @@ enum class TableStatus {
     RESERVED,
 }
 
+/**
+ * Distinguishes the physical/functional type of a service spot.
+ * Both types flow through the same assignment and ticket lifecycle —
+ * this is a display/UI hint, not a logic fork.
+ *
+ * Extend here when additional spot categories are needed (e.g. TERRACE_LOUNGE).
+ */
+enum class ServiceSpotType {
+    TABLE,
+    BAR_SEAT,
+}
+
 data class TablePosition(
     val x: Int,
     val y: Int,
@@ -168,6 +180,8 @@ data class RestaurantTable(
     val position: TablePosition = TablePosition(0, 0, 180, 120),
     val cameraId: String? = null,
     val cameraLabel: String? = null,
+    /** Functional type of this service spot. Defaults to TABLE for backward compatibility. */
+    val spotType: ServiceSpotType = ServiceSpotType.TABLE,
 )
 
 data class FloorMap(

@@ -2,6 +2,7 @@ package com.airos.pos.app
 
 import com.airos.pos.core.model.FloorMap
 import com.airos.pos.core.model.MenuItem
+import com.airos.pos.core.model.ServiceSpotType
 import com.airos.pos.core.model.StaffAuthRecord
 import com.airos.pos.core.model.StaffRole
 import com.airos.pos.core.model.SyncState
@@ -121,6 +122,22 @@ object SampleData {
             RestaurantTable("table-18", "T18", "Lounge", 6, TableStatus.DIRTY, position = TablePosition(1060, 760, 150, 150), cameraId = "cam4", cameraLabel = "Cam 4 · Lounge deck"),
             RestaurantTable("table-19", "T19", "Lounge", 4, TableStatus.AVAILABLE, position = TablePosition(1290, 808, 150, 110), cameraId = "cam4", cameraLabel = "Cam 4 · Lounge deck"),
             RestaurantTable("table-20-21", "T20+T21", "Private corner", 8, TableStatus.OCCUPIED, guestCount = 6, position = TablePosition(1200, 560, 240, 120), cameraId = "cam4", cameraLabel = "Cam 4 · Lounge deck"),
+            // Bar counter — BAR1..BAR15 (spotType = BAR_SEAT, same assignment/lifecycle flow as tables)
+            RestaurantTable("bar-1",  "BAR1",  "Bar", 1, TableStatus.AVAILABLE, spotType = ServiceSpotType.BAR_SEAT, position = TablePosition(80,   960, 66, 66)),
+            RestaurantTable("bar-2",  "BAR2",  "Bar", 1, TableStatus.AVAILABLE, spotType = ServiceSpotType.BAR_SEAT, position = TablePosition(155,  960, 66, 66)),
+            RestaurantTable("bar-3",  "BAR3",  "Bar", 1, TableStatus.AVAILABLE, spotType = ServiceSpotType.BAR_SEAT, position = TablePosition(230,  960, 66, 66)),
+            RestaurantTable("bar-4",  "BAR4",  "Bar", 1, TableStatus.AVAILABLE, spotType = ServiceSpotType.BAR_SEAT, position = TablePosition(305,  960, 66, 66)),
+            RestaurantTable("bar-5",  "BAR5",  "Bar", 1, TableStatus.AVAILABLE, spotType = ServiceSpotType.BAR_SEAT, position = TablePosition(380,  960, 66, 66)),
+            RestaurantTable("bar-6",  "BAR6",  "Bar", 1, TableStatus.AVAILABLE, spotType = ServiceSpotType.BAR_SEAT, position = TablePosition(455,  960, 66, 66)),
+            RestaurantTable("bar-7",  "BAR7",  "Bar", 1, TableStatus.AVAILABLE, spotType = ServiceSpotType.BAR_SEAT, position = TablePosition(530,  960, 66, 66)),
+            RestaurantTable("bar-8",  "BAR8",  "Bar", 1, TableStatus.AVAILABLE, spotType = ServiceSpotType.BAR_SEAT, position = TablePosition(605,  960, 66, 66)),
+            RestaurantTable("bar-9",  "BAR9",  "Bar", 1, TableStatus.AVAILABLE, spotType = ServiceSpotType.BAR_SEAT, position = TablePosition(680,  960, 66, 66)),
+            RestaurantTable("bar-10", "BAR10", "Bar", 1, TableStatus.AVAILABLE, spotType = ServiceSpotType.BAR_SEAT, position = TablePosition(755,  960, 66, 66)),
+            RestaurantTable("bar-11", "BAR11", "Bar", 1, TableStatus.AVAILABLE, spotType = ServiceSpotType.BAR_SEAT, position = TablePosition(830,  960, 66, 66)),
+            RestaurantTable("bar-12", "BAR12", "Bar", 1, TableStatus.AVAILABLE, spotType = ServiceSpotType.BAR_SEAT, position = TablePosition(905,  960, 66, 66)),
+            RestaurantTable("bar-13", "BAR13", "Bar", 1, TableStatus.AVAILABLE, spotType = ServiceSpotType.BAR_SEAT, position = TablePosition(980,  960, 66, 66)),
+            RestaurantTable("bar-14", "BAR14", "Bar", 1, TableStatus.AVAILABLE, spotType = ServiceSpotType.BAR_SEAT, position = TablePosition(1055, 960, 66, 66)),
+            RestaurantTable("bar-15", "BAR15", "Bar", 1, TableStatus.AVAILABLE, spotType = ServiceSpotType.BAR_SEAT, position = TablePosition(1130, 960, 66, 66)),
         ),
     )
 
