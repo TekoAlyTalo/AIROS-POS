@@ -423,15 +423,6 @@ class FakePaymentRepository(
         }
     }
 
-    /**
-     * Last successfully fetched receipt settings.
-     *
-     * Written on every successful [RestaurantReceiptSettingsClient.fetchCurrent] call.
-     * Read when the backend is unreachable so the offline fallback receipt still carries
-     * the same logo / business block / footer that was shown during the last online session.
-     */
-    @Volatile private var cachedReceiptSettings: BackendReceiptSettings? = null
-
     override fun observePaymentSummary(ticketId: String): Flow<PaymentSummary?> {
         return combine(store.tickets, store.paymentsByTicket) { tickets, payments ->
             val ticket = tickets[ticketId] ?: return@combine null
@@ -569,19 +560,12 @@ class FakePaymentRepository(
             else -> {
                 when (val settingsResult = client.fetchCurrent()) {
                     is PosResult.Success -> {
-                        cachedReceiptSettings = settingsResult.value
                         Log.i(TAG, "finalizeTablePayment: receipt settings applied receipt=$receiptNumber logoEnabled=${settingsResult.value.logoEnabled}")
                         applyBackendReceiptSettings(baseReceiptDocument, settingsResult.value)
                     }
                     is PosResult.Failure -> {
-                        val cached = cachedReceiptSettings
-                        if (cached != null) {
-                            Log.w(TAG, "finalizeTablePayment: receipt settings fetch failed, using cached settings receipt=$receiptNumber reason=${settingsResult.message}")
-                            applyBackendReceiptSettings(baseReceiptDocument, cached)
-                        } else {
-                            Log.w(TAG, "finalizeTablePayment: receipt settings fetch failed, no cache available, using base receipt document receipt=$receiptNumber reason=${settingsResult.message}")
-                            baseReceiptDocument
-                        }
+                        Log.w(TAG, "finalizeTablePayment: receipt settings unavailable (no live or cached data), using base receipt document receipt=$receiptNumber reason=${settingsResult.message}")
+                        baseReceiptDocument
                     }
                 }
             }
