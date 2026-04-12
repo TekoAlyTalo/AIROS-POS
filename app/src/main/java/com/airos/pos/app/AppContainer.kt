@@ -24,6 +24,8 @@ import com.airos.pos.domain.DefaultAirosPosLedgerHttpClient
 import com.airos.pos.domain.KitchenRepository
 import com.airos.pos.domain.MenuRepository
 import com.airos.pos.domain.NfcIdentityRepository
+import com.airos.pos.domain.NfcIdentitySyncClient
+import com.airos.pos.domain.DefaultNfcIdentitySyncClient
 import com.airos.pos.domain.PaymentRepository
 import com.airos.pos.domain.SettingsRepository
 import com.airos.pos.domain.ShiftRepository
@@ -64,6 +66,9 @@ class DefaultAppContainer(
 ) : AppContainer {
     private val appContext = context.applicationContext
     private val store = FakePosStore()
+    private val nfcIdentitySyncClient = DefaultNfcIdentitySyncClient(
+        backendBaseUrlProvider = { currentLedgerBackendBaseUrl().orEmpty() },
+    )
     private val androidDeviceInfoService = AndroidDeviceInfoService()
 
     override val database: AirosPosDatabase = AirosPosDatabase.build(appContext)
@@ -71,7 +76,7 @@ class DefaultAppContainer(
     override val syncQueueRepository: SyncQueueRepository = InMemorySyncQueueRepository()
     override val syncCoordinator: SyncCoordinator = SyncCoordinator(syncQueueRepository)
     override val authRepository: AuthRepository = FakeAuthRepository(SampleData.localAuthStaffRecords())
-    private val roomNfcIdentityRepository = RoomNfcIdentityRepository(database)
+    private val roomNfcIdentityRepository = RoomNfcIdentityRepository(database, nfcIdentitySyncClient)
     override val nfcIdentityRepository: NfcIdentityRepository = roomNfcIdentityRepository
     override val nfcStaffResolver: NfcStaffResolver = RepositoryNfcStaffResolver(roomNfcIdentityRepository)
     override val shiftRepository: ShiftRepository = FakeShiftRepository(store, syncQueueRepository)
@@ -134,6 +139,10 @@ class DefaultAppContainer(
 
     private fun currentCashierName(): String? = authRepository.activeSession.value?.displayName
 
+    private fun currentCashierSessionId(): String? = authRepository.activeSession.value?.sessionId
+
+    private fun currentCashierAuthMethodSnapshot(): String? = authRepository.activeSession.value?.authMethodSnapshot
+
 
     private val restaurantReceiptSettingsClient: RestaurantReceiptSettingsClient by lazy {
         DefaultRestaurantReceiptSettingsClient(
@@ -147,16 +156,18 @@ class DefaultAppContainer(
         )
     }
 
-    override val paymentRepository: PaymentRepository = FakePaymentRepository(
-        store = store,
-        syncQueueRepository = syncQueueRepository,
-        ledgerHttpClient = ledgerHttpClient,
-        ledgerBackendBaseUrlProvider = { currentLedgerBackendBaseUrl() },
-        terminalIdProvider = { currentTerminalId() },
-        terminalNameProvider = { currentTerminalName() },
-        restaurantIdProvider = { null },
-        cashierStaffIdProvider = { currentCashierStaffId() },
-        cashierNameProvider = { currentCashierName() },
-        restaurantReceiptSettingsClient = restaurantReceiptSettingsClient,
-    )
+        override val paymentRepository: PaymentRepository = FakePaymentRepository(
+            store = store,
+            syncQueueRepository = syncQueueRepository,
+            ledgerHttpClient = ledgerHttpClient,
+            ledgerBackendBaseUrlProvider = { currentLedgerBackendBaseUrl() },
+            terminalIdProvider = { currentTerminalId() },
+            terminalNameProvider = { currentTerminalName() },
+            restaurantIdProvider = { null },
+            cashierStaffIdProvider = { currentCashierStaffId() },
+            cashierNameProvider = { currentCashierName() },
+            cashierSessionIdProvider = { currentCashierSessionId() },
+            cashierAuthMethodSnapshotProvider = { currentCashierAuthMethodSnapshot() },
+            restaurantReceiptSettingsClient = restaurantReceiptSettingsClient,
+        )
 }

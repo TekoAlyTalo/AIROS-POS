@@ -52,6 +52,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.roundToInt
 
@@ -86,13 +87,15 @@ class FakeAuthRepository(
     override fun observeQuickSelectStaff(): Flow<List<StaffMember>> = staffFlow
     override fun observeManagerQuickSelectStaff(): Flow<List<StaffMember>> = managerFlow
 
-    private fun buildSession(authRecord: StaffAuthRecord): AuthSession {
+    private fun buildSession(authRecord: StaffAuthRecord, authMethod: String): AuthSession {
         return AuthSession(
             staffId = authRecord.staffId,
             displayName = authRecord.displayName,
             role = authRecord.role,
             isManager = authRecord.isManager,
             authenticatedAtEpochMillis = System.currentTimeMillis(),
+            sessionId = UUID.randomUUID().toString(),
+            authMethodSnapshot = authMethod,
         )
     }
 
@@ -105,7 +108,7 @@ class FakeAuthRepository(
         if (authRecord.pin != pin) {
             return PosResult.Failure("Incorrect PIN.")
         }
-        val session = buildSession(authRecord)
+        val session = buildSession(authRecord, "PIN")
         activeSessionFlow.value = session
         return PosResult.Success(session)
     }
@@ -116,7 +119,7 @@ class FakeAuthRepository(
         if (!authRecord.isEnabled) {
             return PosResult.Failure("This staff profile is disabled.")
         }
-        val session = buildSession(authRecord)
+        val session = buildSession(authRecord, "NFC")
         activeSessionFlow.value = session
         return PosResult.Success(session)
     }
@@ -339,6 +342,8 @@ class FakePaymentRepository(
     private val restaurantIdProvider: (() -> String?)? = null,
     private val cashierStaffIdProvider: (() -> String?)? = null,
     private val cashierNameProvider: (() -> String?)? = null,
+    private val cashierSessionIdProvider: (() -> String?)? = null,
+    private val cashierAuthMethodSnapshotProvider: (() -> String?)? = null,
     private val restaurantReceiptSettingsClient: RestaurantReceiptSettingsClient? = null,
 ) : PaymentRepository {
     private companion object {
@@ -413,6 +418,8 @@ class FakePaymentRepository(
 
         val cashierStaffId = cashierStaffIdProvider?.invoke()?.trim().orEmpty()
         val cashierName = cashierNameProvider?.invoke()?.trim().orEmpty()
+        val cashierSessionId = cashierSessionIdProvider?.invoke()?.trim().takeUnless { it.isNullOrBlank() }
+        val cashierAuthMethodSnapshot = cashierAuthMethodSnapshotProvider?.invoke()?.trim().takeUnless { it.isNullOrBlank() }
         if (cashierStaffId.isBlank() || cashierName.isBlank()) {
             return PosResult.Failure("Cannot finalize payment without signed-in staff attribution.")
         }
@@ -496,30 +503,32 @@ class FakePaymentRepository(
                 val ledgerBaseUrl = ledgerBackendBaseUrlProvider?.invoke().orEmpty()
                 Log.i(TAG, "finalizeTablePayment: attempting ledger finalize receipt=$receiptNumber baseUrl=$ledgerBaseUrl tableId=$resolvedTableId totalDueCents=$totalDueCents totalPaidCents=$totalPaidCents")
                 when (
-                    val ledgerFinalize = AirosPosLedgerFinalizeBridge.finalizeSaleAndAttachQr(
-                        client = ledgerHttpClient,
-                        backendBaseUrl = ledgerBaseUrl,
-                        paymentRequest = request,
-                        paymentResult = TablePaymentResult(
-                            ticketId = ticketId,
-                            tableId = resolvedTableId,
-                            tableLabel = resolvedTableLabel,
-                            totalDueCents = totalDueCents,
-                            totalPaidCents = totalPaidCents,
-                            changeCents = changeCents,
-                            payments = paymentRecords,
-                            receiptDocument = settingsAppliedReceiptDocument,
-                        ),
-                        terminalId = terminalIdProvider?.invoke(),
-                        terminalName = terminalNameProvider?.invoke(),
-                        restaurantId = restaurantIdProvider?.invoke(),
-                        cashierStaffId = cashierStaffId,
-                        cashierName = cashierName,
-                        countryProfile = "FI",
-                        languageCode = "fi",
-                        currencyCode = settingsAppliedReceiptDocument.currencyCode,
-                        saleChannel = if (resolvedTableId.isNullOrBlank()) "walk_in" else "table_service",
-                    )
+                        val ledgerFinalize = AirosPosLedgerFinalizeBridge.finalizeSaleAndAttachQr(
+                            client = ledgerHttpClient,
+                            backendBaseUrl = ledgerBaseUrl,
+                            paymentRequest = request,
+                            paymentResult = TablePaymentResult(
+                                ticketId = ticketId,
+                                tableId = resolvedTableId,
+                                tableLabel = resolvedTableLabel,
+                                totalDueCents = totalDueCents,
+                                totalPaidCents = totalPaidCents,
+                                changeCents = changeCents,
+                                payments = paymentRecords,
+                                receiptDocument = settingsAppliedReceiptDocument,
+                            ),
+                            terminalId = terminalIdProvider?.invoke(),
+                            terminalName = terminalNameProvider?.invoke(),
+                            restaurantId = restaurantIdProvider?.invoke(),
+                            cashierStaffId = cashierStaffId,
+                            cashierName = cashierName,
+                            cashierSessionId = cashierSessionId,
+                            cashierAuthMethodSnapshot = cashierAuthMethodSnapshot,
+                            countryProfile = "FI",
+                            languageCode = "fi",
+                            currencyCode = settingsAppliedReceiptDocument.currencyCode,
+                            saleChannel = if (resolvedTableId.isNullOrBlank()) "walk_in" else "table_service",
+                        )
                 ) {
                     is PosResult.Success -> {
                         val ledgerResponse = ledgerFinalize.value.ledgerResponse

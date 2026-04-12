@@ -16,6 +16,8 @@ import com.airos.pos.core.model.ReceiptHandoffPayload
 import com.airos.pos.core.model.StaffAuthRecord
 import com.airos.pos.core.model.StaffMember
 import com.airos.pos.domain.NfcIdentityRepository
+import com.airos.pos.domain.NfcIdentitySyncClient
+import com.airos.pos.domain.NfcIdentityBindingRequest
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -33,6 +35,7 @@ private val legacyStaffTagSeeds = listOf(
 
 class RoomNfcIdentityRepository(
     private val database: AirosPosDatabase,
+    private val syncClient: NfcIdentitySyncClient,
 ) : NfcIdentityRepository {
     private val dao
         get() = database.nfcIdentityDao()
@@ -183,6 +186,27 @@ class RoomNfcIdentityRepository(
                 NfcIdentityLogTag,
                 "NFC tag enrolled | staffId=${staff.id} uid=${record.canonicalUid}",
             )
+            runCatching {
+                when (val syncResult = syncClient.syncBinding(
+                    NfcIdentityBindingRequest(
+                        canonicalUid = record.canonicalUid,
+                        staffId = staff.id,
+                        staffName = staff.displayName,
+                        staffRole = staff.role.name,
+                        enabled = record.enabled,
+                        metadata = mapOf(
+                            "source" to "pos-device",
+                            "syncedAt" to System.currentTimeMillis(),
+                        ),
+                    ),
+                )) {
+                    is PosResult.Success -> Log.i(NfcIdentityLogTag, "NFC binding synced to backend for uid=${record.canonicalUid}")
+                    is PosResult.Failure -> Log.w(
+                        NfcIdentityLogTag,
+                        "NFC binding sync failed | uid=${record.canonicalUid} reason=${syncResult.message}",
+                    )
+                }
+            }
             PosResult.Success(record)
         } catch (error: IllegalArgumentException) {
             Log.w(NfcIdentityLogTag, "NFC enroll rejected | reason=${error.message}")

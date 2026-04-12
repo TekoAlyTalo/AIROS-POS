@@ -1,5 +1,7 @@
 package com.airos.pos.core.model
 
+import java.util.UUID
+
 enum class StaffRole {
     SERVER,
     MANAGER,
@@ -47,6 +49,8 @@ data class AuthSession(
     val role: StaffRole,
     val isManager: Boolean,
     val authenticatedAtEpochMillis: Long,
+    val sessionId: String = UUID.randomUUID().toString(),
+    val authMethodSnapshot: String = "UNKNOWN",
 )
 
 val AuthSession.staffName: String
