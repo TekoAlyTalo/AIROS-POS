@@ -141,6 +141,7 @@ private data class BillDragUiState(
     val active: Boolean = false,
     val positionInRoot: Offset = Offset.Zero,
     val saleCount: Int = 0,
+    val sourceSpotId: String? = null,
     val hoveredTableId: String? = null,
 )
 
@@ -630,6 +631,7 @@ fun TableMapScreen(
     val transferState = state.transferState
     val isPickingTransferTarget = transferState?.stage == TableTransferStage.PICKING_TARGET
 
+    var tableMapBoundsInRoot by remember { mutableStateOf<Rect?>(null) }
     var floorPlanBoundsInRoot by remember { mutableStateOf<Rect?>(null) }
     var billDrag by remember { mutableStateOf(BillDragUiState()) }
 
@@ -641,7 +643,7 @@ fun TableMapScreen(
 
     fun endBillDragAndMaybeTransfer() {
         val hovered = billDrag.hoveredTableId
-        val sourceSpotId = transferState?.sourceSpotId
+        val sourceSpotId = billDrag.sourceSpotId ?: transferState?.sourceSpotId
         if (billDrag.active && hovered != null && hovered != sourceSpotId) {
             onTransferTargetSelected(hovered)
         }
@@ -725,9 +727,13 @@ LaunchedEffect(
         visibleTables.firstOrNull()?.id?.let(onSelectTable)
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .onGloballyPositioned { coords -> tableMapBoundsInRoot = coords.boundsInRoot() },
+    ) {
     Row(
-                                modifier = Modifier.fillMaxSize().onGloballyPositioned { coords -> floorPlanBoundsInRoot = coords.boundsInRoot() },
+        modifier = Modifier.fillMaxSize(),
         horizontalArrangement = Arrangement.spacedBy(20.dp),
     ) {
         Surface(
@@ -828,7 +834,8 @@ LaunchedEffect(
                         Box(
                             modifier = Modifier
                                 .weight(1f, fill = true)
-                                .fillMaxWidth(),
+                                .fillMaxWidth()
+                                .onGloballyPositioned { coords -> floorPlanBoundsInRoot = coords.boundsInRoot() },
                         ) {
                             FloorPlanTableMap(
                                 tables = visibleTables,
@@ -850,7 +857,7 @@ LaunchedEffect(
                                 openTotalLabelsByTableId = openTotalLabelsBySpotId,
                                 openBillCountsByTableId = openBillCountsBySpotId,
                                 externalDragPosition = externalDragPositionForFloorPlan,
-                                externalDragSourceTableId = transferState?.sourceSpotId,
+                                externalDragSourceTableId = billDrag.sourceSpotId ?: transferState?.sourceSpotId,
                                 onExternalDragHoverTableId = { updateBillDragHover(it) },
                                 modifier = Modifier.fillMaxSize(),
                             )
@@ -900,7 +907,13 @@ LaunchedEffect(
                     onCancelTransferMode = onCancelTransferMode,
                     onOpenLivePreview = onOpenLivePreview,
                     onBillDragStartInRoot = { saleCount, positionInRoot ->
-                        billDrag = BillDragUiState(active = true, positionInRoot = positionInRoot, saleCount = saleCount, hoveredTableId = null)
+                        billDrag = BillDragUiState(
+                            active = true,
+                            positionInRoot = positionInRoot,
+                            saleCount = saleCount,
+                            sourceSpotId = selectedTable.id,
+                            hoveredTableId = null,
+                        )
                     },
                     onBillDragMoveInRoot = { positionInRoot ->
                         if (billDrag.active) {
@@ -917,7 +930,13 @@ if (billDrag.active) {
         state.floorMap?.tables?.firstOrNull { it.id == hoveredId }?.label
     }
     val density = LocalDensity.current
-    val finger = billDrag.positionInRoot
+    val overlayBounds = tableMapBoundsInRoot
+    val finger = overlayBounds?.let { bounds ->
+        Offset(
+            x = billDrag.positionInRoot.x - bounds.left,
+            y = billDrag.positionInRoot.y - bounds.top,
+        )
+    } ?: billDrag.positionInRoot
     var badgeSize by remember { mutableStateOf(IntSize.Zero) }
     val gapPx = with(density) { 10.dp.toPx() }
 
