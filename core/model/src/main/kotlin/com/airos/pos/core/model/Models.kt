@@ -62,8 +62,15 @@ enum class StaffTableMapViewPreference {
     GRID,
 }
 
+data class StaffFloorPlanViewportPreference(
+    val zoomScale: Float? = null,
+    val panX: Float? = null,
+    val panY: Float? = null,
+)
+
 data class StaffUiPreferences(
     val tableMapViewMode: StaffTableMapViewPreference = StaffTableMapViewPreference.FLOOR_PLAN,
+    val floorPlanViewport: StaffFloorPlanViewportPreference = StaffFloorPlanViewportPreference(),
 )
 
 enum class NfcLinkedEntityType {

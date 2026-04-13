@@ -5,8 +5,10 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.airos.pos.core.model.StaffFloorPlanViewportPreference
 import com.airos.pos.core.model.StaffUiPreferences
 import com.airos.pos.core.model.StaffTableMapViewPreference
 import kotlinx.coroutines.flow.Flow
@@ -33,6 +35,11 @@ class StaffUiPreferencesStore(
                     tableMapViewMode = preferences[tableMapViewModeKey(staffId)]
                         ?.toStaffTableMapViewPreference()
                         ?: StaffTableMapViewPreference.FLOOR_PLAN,
+                    floorPlanViewport = StaffFloorPlanViewportPreference(
+                        zoomScale = preferences[floorPlanZoomScaleKey(staffId)],
+                        panX = preferences[floorPlanPanXKey(staffId)],
+                        panY = preferences[floorPlanPanYKey(staffId)],
+                    ),
                 )
             }
     }
@@ -50,8 +57,34 @@ class StaffUiPreferencesStore(
         }
     }
 
+    suspend fun setFloorPlanViewport(
+        staffId: String,
+        viewport: StaffFloorPlanViewportPreference,
+    ) {
+        context.staffUiPreferencesDataStore.edit { preferences ->
+            viewport.zoomScale?.let { preferences[floorPlanZoomScaleKey(staffId)] = it }
+                ?: preferences.remove(floorPlanZoomScaleKey(staffId))
+            viewport.panX?.let { preferences[floorPlanPanXKey(staffId)] = it }
+                ?: preferences.remove(floorPlanPanXKey(staffId))
+            viewport.panY?.let { preferences[floorPlanPanYKey(staffId)] = it }
+                ?: preferences.remove(floorPlanPanYKey(staffId))
+        }
+    }
+
     private fun tableMapViewModeKey(staffId: String): Preferences.Key<String> {
         return stringPreferencesKey("table_map_view_mode_${staffId.trim()}")
+    }
+
+    private fun floorPlanZoomScaleKey(staffId: String): Preferences.Key<Float> {
+        return floatPreferencesKey("table_map_floor_plan_zoom_scale_${staffId.trim()}")
+    }
+
+    private fun floorPlanPanXKey(staffId: String): Preferences.Key<Float> {
+        return floatPreferencesKey("table_map_floor_plan_pan_x_${staffId.trim()}")
+    }
+
+    private fun floorPlanPanYKey(staffId: String): Preferences.Key<Float> {
+        return floatPreferencesKey("table_map_floor_plan_pan_y_${staffId.trim()}")
     }
 
     private fun String.toStaffTableMapViewPreference(): StaffTableMapViewPreference {

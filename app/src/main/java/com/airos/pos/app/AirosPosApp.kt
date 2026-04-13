@@ -85,6 +85,7 @@ import com.airos.pos.feature.shift.ShiftScreen
 import com.airos.pos.feature.shift.ShiftViewModel
 import com.airos.pos.feature.tablemap.TableMapScreen
 import com.airos.pos.feature.tablemap.TableMapViewModel
+import com.airos.pos.feature.tablemap.TableTransferStage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
@@ -876,14 +877,19 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                         cameraPreviewService = appContainer.cameraPreviewService,
                         onSelectTable = viewModel::selectTable,
                         onViewModeChange = viewModel::setViewMode,
+                        onFloorPlanViewportChange = viewModel::setFloorPlanViewport,
                         onOpenTableSale = { tableId, tableLabel, saleId ->
-                            navController.navigate(
-                                Routes.menu(
-                                    tableId = tableId,
-                                    tableLabel = tableLabel,
-                                    saleId = saleId,
-                                ),
-                            )
+                            if (state.transferState?.stage == TableTransferStage.PICKING_TARGET) {
+                                viewModel.transferSelectedBillsTo(tableId)
+                            } else {
+                                navController.navigate(
+                                    Routes.menu(
+                                        tableId = tableId,
+                                        tableLabel = tableLabel,
+                                        saleId = saleId,
+                                    ),
+                                )
+                            }
                         },
                         onStartTransferMode = viewModel::startTransferMode,
                         onToggleTransferSale = viewModel::toggleTransferSale,
