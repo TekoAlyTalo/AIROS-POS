@@ -47,7 +47,7 @@ import com.airos.pos.core.database.entity.TicketLocalEntity
         OpenSaleEntity::class,
         OpenSaleLineEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = false,
 )
 abstract class AirosPosDatabase : RoomDatabase() {
@@ -241,12 +241,23 @@ abstract class AirosPosDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    ALTER TABLE `backend_menu_items`
+                    ADD COLUMN `subcategoryImageUrl` TEXT
+                    """.trimIndent(),
+                )
+            }
+        }
+
         fun build(context: Context): AirosPosDatabase {
             return Room.databaseBuilder(
                 context,
                 AirosPosDatabase::class.java,
                 "airos-pos.db",
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).build()
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6).build()
         }
     }
 }

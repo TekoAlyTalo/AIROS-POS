@@ -20,15 +20,16 @@ import java.io.InputStream
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
 /**
  * MenuRepository backed by a Room cache.
  *
  * On [refresh]:
- *  - If network succeeds → replace cache, return [MenuSyncResult.Fresh]
- *  - If network fails and cache exists → return [MenuSyncResult.FromCache]
- *  - If network fails and cache is empty → return [MenuSyncResult.NoData]
+ *  - If network succeeds â†’ replace cache, return [MenuSyncResult.Fresh]
+ *  - If network fails and cache exists â†’ return [MenuSyncResult.FromCache]
+ *  - If network fails and cache is empty â†’ return [MenuSyncResult.NoData]
  *
  * [observeMenuItems] emits directly from Room, so the UI reacts automatically when
  * the cache is updated.
@@ -64,12 +65,14 @@ class BackendMenuRepository(
             log("baseUrl empty")
             return@withContext fallbackOrNoData(
                 restaurantKey,
-                "Backend URL on tyhjä — tarkista päätelaitteen asetukset."
+                "Backend URL on tyhjÃ¤ â€” tarkista pÃ¤Ã¤telaitteen asetukset."
             )
         }
 
-        val urlString = "$baseUrl/api/menu"
-        log("refresh start url='$urlString'")
+        val restaurantQuery = URLEncoder.encode(restaurantKey, StandardCharsets.UTF_8.name())
+        val urlString = "$baseUrl/api/menu?restaurant_key=$restaurantQuery"
+        val visualsUrlString = "$baseUrl/api/menu/subcategory-visuals?restaurant_key=$restaurantQuery"
+        log("refresh start url='$urlString' visualsUrl='$visualsUrlString'")
 
         val connection = try {
             (URL(urlString).openConnection() as HttpURLConnection).apply {
@@ -84,7 +87,7 @@ class BackendMenuRepository(
             log("connection open failed: ${t.javaClass.simpleName}: ${t.message}")
             return@withContext fallbackOrNoData(
                 restaurantKey,
-                "Yhteys backendiin epäonnistui: ${t.javaClass.simpleName}: ${t.message ?: "ei viestiä"}"
+                "Yhteys backendiin epÃ¤onnistui: ${t.javaClass.simpleName}: ${t.message ?: "ei viestiÃ¤"}"
             )
         }
 
@@ -102,7 +105,8 @@ class BackendMenuRepository(
                 )
             }
 
-            val entities = parseMenuItemEntities(body, restaurantKey, baseUrl)
+            val subcategoryVisuals = fetchSubcategoryVisualMap(visualsUrlString, baseUrl)
+            val entities = parseMenuItemEntities(body, restaurantKey, baseUrl, subcategoryVisuals)
             val now = System.currentTimeMillis()
             val metadata = MenuCacheMetadataEntity(
                 restaurantKey = restaurantKey,
@@ -116,7 +120,7 @@ class BackendMenuRepository(
             log("request failed: ${t.javaClass.simpleName}: ${t.message}")
             fallbackOrNoData(
                 restaurantKey,
-                "Tuotelistan haku epäonnistui: ${t.javaClass.simpleName}: ${t.message ?: "ei viestiä"}"
+                "Tuotelistan haku epÃ¤onnistui: ${t.javaClass.simpleName}: ${t.message ?: "ei viestiÃ¤"}"
             )
         } finally {
             connection.disconnect()
@@ -141,6 +145,7 @@ class BackendMenuRepository(
         json: String,
         restaurantKey: String,
         baseUrl: String,
+        subcategoryVisuals: Map<String, String>,
     ): List<BackendMenuItemEntity> {
         val array = JSONArray(json.trim())
         val result = mutableListOf<BackendMenuItemEntity>()
@@ -161,6 +166,12 @@ class BackendMenuRepository(
                     subcategory = obj.optString("subcategory").takeIf { it.isNotEmpty() },
                     barcode = obj.optString("barcode").takeIf { it.isNotEmpty() },
                     imageUrl = resolveImageUrl(obj.optString("image_url"), baseUrl),
+                    subcategoryImageUrl = subcategoryVisuals[
+                        subcategoryVisualKey(
+                            obj.optString("category", ""),
+                            obj.optString("subcategory"),
+                        )
+                    ],
                     cachedAt = now,
                 )
             )
@@ -168,12 +179,61 @@ class BackendMenuRepository(
         return result
     }
 
+    private fun fetchSubcategoryVisualMap(
+        urlString: String,
+        baseUrl: String,
+    ): Map<String, String> {
+        val connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = connectTimeoutMs
+            readTimeout = readTimeoutMs
+            doInput = true
+            useCaches = false
+            setRequestProperty("Accept", "application/json")
+        }
+
+        return try {
+            val statusCode = connection.responseCode
+            val body = readStream(if (statusCode in 200..299) connection.inputStream else connection.errorStream)
+            if (statusCode !in 200..299) {
+                log("subcategory visuals skipped: status=$statusCode body=${body.take(200)}")
+                emptyMap()
+            } else {
+                parseSubcategoryVisualMap(body, baseUrl)
+            }
+        } catch (t: Throwable) {
+            log("subcategory visuals request failed: ${t.javaClass.simpleName}: ${t.message}")
+            emptyMap()
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun parseSubcategoryVisualMap(
+        json: String,
+        baseUrl: String,
+    ): Map<String, String> {
+        val array = JSONArray(json.trim())
+        val result = linkedMapOf<String, String>()
+        for (i in 0 until array.length()) {
+            val obj = array.getJSONObject(i)
+            val category = obj.optString("category", "")
+            val subcategory = obj.optString("subcategory", "")
+            val imageUrl = resolveImageUrl(obj.optString("image_url"), baseUrl) ?: continue
+            val key = subcategoryVisualKey(category, subcategory)
+            if (key.isNotEmpty()) {
+                result[key] = imageUrl
+            }
+        }
+        return result
+    }
+
     /**
      * Converts a backend image_url value to an absolute URL ready for Coil.
      *
-     * - Already absolute (http/https) → returned as-is
-     * - Relative path starting with "/" → prepend baseUrl
-     * - Empty or unrecognised → null
+     * - Already absolute (http/https) â†’ returned as-is
+     * - Relative path starting with "/" â†’ prepend baseUrl
+     * - Empty or unrecognised â†’ null
      */
     private fun resolveImageUrl(raw: String, baseUrl: String): String? {
         if (raw.isBlank()) return null
@@ -215,4 +275,14 @@ private fun BackendMenuItemEntity.toMenuItem() = MenuItem(
     barcode = barcode,
     imageUrl = imageUrl,
     subcategory = subcategory,
+    subcategoryImageUrl = subcategoryImageUrl,
 )
+
+private fun subcategoryVisualKey(category: String?, subcategory: String?): String {
+    val normalizedCategory = category.orEmpty().trim().lowercase()
+    val normalizedSubcategory = subcategory.orEmpty().trim().lowercase()
+    if (normalizedCategory.isEmpty() || normalizedSubcategory.isEmpty()) {
+        return ""
+    }
+    return "$normalizedCategory|$normalizedSubcategory"
+}
