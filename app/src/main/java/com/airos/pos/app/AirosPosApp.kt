@@ -949,6 +949,7 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                             nfcIdentityRepository = appContainer.nfcIdentityRepository,
                             printReceipt = appContainer.printerService::printReceipt,
                             openCashDrawer = appContainer.cashDrawerService::openDrawer,
+                            customerDisplayService = appContainer.customerDisplayService,
                             verifyDrawerPin = { pin ->
                                 val session = appContainer.authRepository.activeSession.first()
                                     ?: return@factory PosResult.Failure("No signed-in staff session for cash drawer access.")
