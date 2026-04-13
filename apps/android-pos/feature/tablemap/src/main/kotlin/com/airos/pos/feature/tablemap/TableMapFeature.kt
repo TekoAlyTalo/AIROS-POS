@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -26,12 +27,11 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -46,6 +46,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -85,11 +86,31 @@ import org.webrtc.EglBase
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
 import java.net.URI
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
+import androidx.compose.foundation.gestures.awaitTouchSlopOrCancellation
+import androidx.compose.foundation.gestures.drag
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
+import kotlin.math.roundToInt
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.layout.offset
 
 private const val SIGNALING_PORT = 8000
 private const val PREVIEW_TAG = "TableLivePreview"
 private const val PREVIEW_SURFACE_ASPECT_RATIO = 4f / 3f
 private const val AREA_FILTER_ALL = "All"
+
+// Compose pointer event consumption helper.
+// Our current Compose version does not expose PointerInputChange.consume(), so we provide a local no-op.
+private fun PointerInputChange.consume() { /* no-op */ }
 
 /**
  * Aggregated open-check info for a single service spot.
@@ -102,11 +123,25 @@ enum class TableTransferStage {
     PICKING_TARGET,
 }
 
+
+
+enum class TableSaleOpenSource {
+    TABLE_TAP,
+    BILL_ROW,
+    NEW_SALE_BUTTON,
+}
 data class TableTransferState(
     val sourceSpotId: String,
     val sourceSpotLabel: String,
     val selectedSaleIds: Set<String> = emptySet(),
     val stage: TableTransferStage = TableTransferStage.SELECTING_BILLS,
+)
+
+private data class BillDragUiState(
+    val active: Boolean = false,
+    val positionInRoot: Offset = Offset.Zero,
+    val saleCount: Int = 0,
+    val hoveredTableId: String? = null,
 )
 
 data class TableLivePreviewTarget(
@@ -268,6 +303,47 @@ class TableMapViewModel(
                     sourceSpotId = tableId,
                     sourceSpotLabel = table.label,
                     selectedSaleIds = autoSelectedSaleIds,
+                    stage = initialStage,
+                ),
+            )
+        }
+    }
+
+    fun startTransferModeForSale(tableId: String, saleId: String) {
+        val state = mutableState.value
+        val table = state.floorMap?.tables?.firstOrNull { it.id == tableId } ?: return
+        val openSales = state.openSalesBySpotId[tableId].orEmpty()
+        if (openSales.isEmpty()) {
+            mutableState.update {
+                it.copy(
+                    selectedTableId = tableId,
+                    message = "No open bills to transfer from ${table.label}.",
+                    transferState = null,
+                )
+            }
+            return
+        }
+        if (openSales.none { it.saleId == saleId }) {
+            startTransferMode(tableId)
+            return
+        }
+
+        val initialStage = if (openSales.size == 1) {
+            TableTransferStage.PICKING_TARGET
+        } else {
+            TableTransferStage.SELECTING_BILLS
+        }
+        mutableState.update {
+            it.copy(
+                selectedTableId = tableId,
+                message = when (initialStage) {
+                    TableTransferStage.PICKING_TARGET -> "Select target table for 1 bill from ${table.label}."
+                    TableTransferStage.SELECTING_BILLS -> "Bill selected from ${table.label}. Tap more bills or start transfer."
+                },
+                transferState = TableTransferState(
+                    sourceSpotId = tableId,
+                    sourceSpotLabel = table.label,
+                    selectedSaleIds = setOf(saleId),
                     stage = initialStage,
                 ),
             )
@@ -511,8 +587,9 @@ fun TableMapScreen(
     onSelectTable: (String) -> Unit,
     onViewModeChange: (StaffTableMapViewPreference) -> Unit,
     onFloorPlanViewportChange: (StaffFloorPlanViewportPreference) -> Unit,
-    onOpenTableSale: (tableId: String, tableLabel: String, saleId: String?) -> Unit,
+    onOpenTableSale: (tableId: String, tableLabel: String, saleId: String?, source: TableSaleOpenSource) -> Unit,
     onStartTransferMode: (String) -> Unit,
+    onStartTransferModeForSale: (tableId: String, saleId: String) -> Unit,
     onToggleTransferSale: (String) -> Unit,
     onBeginTransferTargetSelection: () -> Unit,
     onTransferTargetSelected: (String) -> Unit,
@@ -553,23 +630,64 @@ fun TableMapScreen(
     val transferState = state.transferState
     val isPickingTransferTarget = transferState?.stage == TableTransferStage.PICKING_TARGET
 
+    var floorPlanBoundsInRoot by remember { mutableStateOf<Rect?>(null) }
+    var billDrag by remember { mutableStateOf(BillDragUiState()) }
+
+    fun updateBillDragHover(tableId: String?) {
+        if (billDrag.hoveredTableId != tableId) {
+            billDrag = billDrag.copy(hoveredTableId = tableId)
+        }
+    }
+
+    fun endBillDragAndMaybeTransfer() {
+        val hovered = billDrag.hoveredTableId
+        val sourceSpotId = transferState?.sourceSpotId
+        if (billDrag.active && hovered != null && hovered != sourceSpotId) {
+            onTransferTargetSelected(hovered)
+        }
+        billDrag = BillDragUiState()
+    }
+
+    val externalDragPositionForFloorPlan: Offset? = run {
+        val bounds = floorPlanBoundsInRoot ?: return@run null
+        if (!billDrag.active) return@run null
+        val p = billDrag.positionInRoot
+        if (p.x < bounds.left || p.x > bounds.right || p.y < bounds.top || p.y > bounds.bottom) {
+            null
+        } else {
+            Offset(p.x - bounds.left, p.y - bounds.top)
+        }
+    }
+
     fun handleTableTap(table: RestaurantTable) {
         if (isPickingTransferTarget) {
             onTransferTargetSelected(table.id)
             return
         }
+
+        // In transfer SELECTING_BILLS stage, allow direct target selection by tapping any other table
+        // as soon as at least one bill is selected. This avoids extra intermediate buttons.
+        transferState?.let { transfer ->
+            if (
+                transfer.stage == TableTransferStage.SELECTING_BILLS &&
+                transfer.selectedSaleIds.isNotEmpty() &&
+                table.id != transfer.sourceSpotId
+            ) {
+                onTransferTargetSelected(table.id)
+                return
+            }
+        }
+
         onSelectTable(table.id)
 
         val openSales = state.openSalesBySpotId[table.id].orEmpty()
         when (openSales.size) {
-            0 -> onOpenTableSale(table.id, table.label, null)
-            1 -> onOpenTableSale(table.id, table.label, openSales.single().saleId)
+            0 -> onOpenTableSale(table.id, table.label, null, TableSaleOpenSource.TABLE_TAP)
+            1 -> onOpenTableSale(table.id, table.label, openSales.single().saleId, TableSaleOpenSource.TABLE_TAP)
             else -> Unit
         }
     }
-
-
-    LaunchedEffect(
+LaunchedEffect(
         desiredPreviewTarget?.tableId,
         desiredPreviewTarget?.cameraId,
         state.edgeBaseUrl,
@@ -607,8 +725,9 @@ fun TableMapScreen(
         visibleTables.firstOrNull()?.id?.let(onSelectTable)
     }
 
+    Box(modifier = Modifier.fillMaxSize()) {
     Row(
-        modifier = Modifier.fillMaxSize(),
+                                modifier = Modifier.fillMaxSize().onGloballyPositioned { coords -> floorPlanBoundsInRoot = coords.boundsInRoot() },
         horizontalArrangement = Arrangement.spacedBy(20.dp),
     ) {
         Surface(
@@ -730,6 +849,9 @@ fun TableMapScreen(
                                 onFloorPlanViewportChange = onFloorPlanViewportChange,
                                 openTotalLabelsByTableId = openTotalLabelsBySpotId,
                                 openBillCountsByTableId = openBillCountsBySpotId,
+                                externalDragPosition = externalDragPositionForFloorPlan,
+                                externalDragSourceTableId = transferState?.sourceSpotId,
+                                onExternalDragHoverTableId = { updateBillDragHover(it) },
                                 modifier = Modifier.fillMaxSize(),
                             )
 
@@ -769,19 +891,85 @@ fun TableMapScreen(
                     openCheckSummary = state.openChecksBySpotId[selectedTable.id],
                     openSales = state.openSalesBySpotId[selectedTable.id].orEmpty(),
                     transferState = transferState,
-                    onOpenSale = { saleId -> onOpenTableSale(selectedTable.id, selectedTable.label, saleId) },
-                    onOpenNewSale = { onOpenTableSale(selectedTable.id, selectedTable.label, null) },
+                    onOpenSale = { saleId -> onOpenTableSale(selectedTable.id, selectedTable.label, saleId, TableSaleOpenSource.BILL_ROW) },
+                    onOpenNewSale = { onOpenTableSale(selectedTable.id, selectedTable.label, null, TableSaleOpenSource.NEW_SALE_BUTTON) },
                     onStartTransfer = { onStartTransferMode(selectedTable.id) },
+                    onStartTransferForSale = { saleId -> onStartTransferModeForSale(selectedTable.id, saleId) },
                     onToggleTransferSale = onToggleTransferSale,
                     onBeginTransferTargetSelection = onBeginTransferTargetSelection,
                     onCancelTransferMode = onCancelTransferMode,
                     onOpenLivePreview = onOpenLivePreview,
+                    onBillDragStartInRoot = { saleCount, positionInRoot ->
+                        billDrag = BillDragUiState(active = true, positionInRoot = positionInRoot, saleCount = saleCount, hoveredTableId = null)
+                    },
+                    onBillDragMoveInRoot = { positionInRoot ->
+                        if (billDrag.active) {
+                            billDrag = billDrag.copy(positionInRoot = positionInRoot)
+                        }
+                    },
+                    onBillDragEnd = { endBillDragAndMaybeTransfer() },
                 )
             }
         }
     }
+if (billDrag.active) {
+    val hoveredLabel = billDrag.hoveredTableId?.let { hoveredId ->
+        state.floorMap?.tables?.firstOrNull { it.id == hoveredId }?.label
+    }
+    val density = LocalDensity.current
+    val finger = billDrag.positionInRoot
+    var badgeSize by remember { mutableStateOf(IntSize.Zero) }
+    val gapPx = with(density) { 10.dp.toPx() }
 
-    if (state.isLivePreviewDialogVisible) {
+    // Visual anchor at the real drop point (finger).
+    Box(
+        modifier = Modifier
+            .align(Alignment.TopStart)
+            .offset { IntOffset(finger.x.roundToInt() - 4, finger.y.roundToInt() - 4) }
+            .size(8.dp)
+            .background(
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.78f),
+                shape = RoundedCornerShape(999.dp),
+            )
+    )
+
+    Surface(
+        modifier = Modifier
+            .align(Alignment.TopStart)
+            .onGloballyPositioned { coords -> badgeSize = coords.size }
+            .offset {
+                val x = (finger.x - (badgeSize.width / 2f)).roundToInt()
+                val y = (finger.y - badgeSize.height - gapPx).roundToInt()
+                IntOffset(x, y)
+            },
+        shape = RoundedCornerShape(999.dp),
+        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.95f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.65f)),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "${billDrag.saleCount} laskua",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                fontWeight = FontWeight.SemiBold,
+            )
+            if (hoveredLabel != null) {
+                Text(
+                    text = "Pudota: $hoveredLabel",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.9f),
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+        }
+    }
+}
+
+if (state.isLivePreviewDialogVisible) {
         state.livePreviewTarget?.let { target ->
         TableLivePreviewDialog(
             target = target,
@@ -795,6 +983,7 @@ fun TableMapScreen(
 }
 
 
+}
 @Composable
 private fun TableDetailsContent(
     table: RestaurantTable,
@@ -809,10 +998,14 @@ private fun TableDetailsContent(
     onOpenSale: (String) -> Unit,
     onOpenNewSale: () -> Unit,
     onStartTransfer: () -> Unit,
+    onStartTransferForSale: (String) -> Unit,
     onToggleTransferSale: (String) -> Unit,
     onBeginTransferTargetSelection: () -> Unit,
     onCancelTransferMode: () -> Unit,
     onOpenLivePreview: () -> Unit,
+    onBillDragStartInRoot: (selectedSaleCount: Int, positionInRoot: Offset) -> Unit = { _, _ -> },
+    onBillDragMoveInRoot: (positionInRoot: Offset) -> Unit = {},
+    onBillDragEnd: () -> Unit = {},
 ) {
     val displayStatus = resolveTableDisplayStatus(
         physicalStatus = table.status,
@@ -860,7 +1053,7 @@ private fun TableDetailsContent(
                         text = if (transferForThisTable.stage == TableTransferStage.PICKING_TARGET) {
                             "Valitse kohdepöytä gridistä tai floor planista."
                         } else {
-                            "Valitse siirrettävät laskut pöydästä ${transferForThisTable.sourceSpotLabel}."
+                            "Napauta siirrettävät laskut. Kun valinta on tehty, napauta kohdepöytää gridistä tai floor planista."
                         },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -870,19 +1063,15 @@ private fun TableDetailsContent(
                             sale = sale,
                             selected = sale.saleId in transferForThisTable.selectedSaleIds,
                             enabled = transferForThisTable.stage == TableTransferStage.SELECTING_BILLS,
-                            showCheckbox = openSales.size > 1,
+                            showCheckbox = false,
+                            dragEnabled = sale.saleId in transferForThisTable.selectedSaleIds,
+                            onDragStartInRoot = { positionInRoot -> onBillDragStartInRoot(transferForThisTable.selectedSaleIds.size, positionInRoot) },
+                            onDragInRoot = onBillDragMoveInRoot,
+                            onDragEnd = onBillDragEnd,
                             onToggle = { onToggleTransferSale(sale.saleId) },
                         )
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        if (transferForThisTable.stage == TableTransferStage.SELECTING_BILLS) {
-                            Button(
-                                onClick = onBeginTransferTargetSelection,
-                                enabled = transferForThisTable.selectedSaleIds.isNotEmpty(),
-                            ) {
-                                Text("Siirrä valitut")
-                            }
-                        }
                         OutlinedButton(onClick = onCancelTransferMode) {
                             Text("Peruuta")
                         }
@@ -918,23 +1107,25 @@ private fun TableDetailsContent(
                         1 -> {
                             OpenSaleActionRow(
                                 sale = openSales.single(),
-                                actionLabel = "Avaa lasku",
+                                actionLabel = "Napauta avataksesi",
                                 onOpen = { onOpenSale(openSales.single().saleId) },
+                                onLongPress = { onStartTransferForSale(openSales.single().saleId) },
+                                onDragStartInRoot = { pos -> onBillDragStartInRoot(1, pos) },
+                                onDragInRoot = onBillDragMoveInRoot,
+                                onDragEnd = onBillDragEnd,
                             )
-                            Button(onClick = onStartTransfer) {
-                                Text("Siirrä lasku")
-                            }
                         }
                         else -> {
                             openSales.forEach { sale ->
                                 OpenSaleActionRow(
                                     sale = sale,
-                                    actionLabel = "Avaa",
+                                    actionLabel = "Napauta avataksesi",
                                     onOpen = { onOpenSale(sale.saleId) },
+                                    onLongPress = { onStartTransferForSale(sale.saleId) },
+                                    onDragStartInRoot = { pos -> onBillDragStartInRoot(1, pos) },
+                                    onDragInRoot = onBillDragMoveInRoot,
+                                    onDragEnd = onBillDragEnd,
                                 )
-                            }
-                            Button(onClick = onStartTransfer) {
-                                Text("Siirrä laskuja")
                             }
                         }
                     }
@@ -1031,12 +1222,46 @@ private fun TransferSaleSelectionRow(
     selected: Boolean,
     enabled: Boolean,
     showCheckbox: Boolean = true,
+    dragEnabled: Boolean = false,
+    onDragStartInRoot: (Offset) -> Unit = {},
+    onDragInRoot: (Offset) -> Unit = {},
+    onDragEnd: () -> Unit = {},
     onToggle: () -> Unit,
 ) {
+    var originInRoot by remember { mutableStateOf(Offset.Zero) }
     Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.62f),
+        modifier = Modifier
+            .fillMaxWidth()
+            .onGloballyPositioned { coords -> originInRoot = coords.positionInRoot() }
+            .then(
+                if (dragEnabled) {
+                    Modifier.pointerInput(sale.saleId, dragEnabled, originInRoot) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            var started = false
+                            val slopChange = awaitTouchSlopOrCancellation(down.id) { change, _ ->
+                                started = true
+                                change.consume()
+                            }
+                            if (!started || slopChange == null) return@awaitEachGesture
+
+                            onDragStartInRoot(originInRoot + slopChange.position)
+                            drag(down.id) { change ->
+                                change.consume()
+                                onDragInRoot(originInRoot + change.position)
+                            }
+                            onDragEnd()
+                        }
+                    }
+                } else {
+                    Modifier
+                }
+            ),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+        } else {
+            MaterialTheme.colorScheme.surface.copy(alpha = 0.62f)
+        },
         border = androidx.compose.foundation.BorderStroke(
             1.dp,
             if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.7f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
@@ -1050,13 +1275,6 @@ private fun TransferSaleSelectionRow(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (showCheckbox) {
-                Checkbox(
-                    checked = selected,
-                    onCheckedChange = { if (enabled) onToggle() },
-                    enabled = enabled,
-                )
-            }
             OpenSaleSummaryColumn(
                 sale = sale,
                 modifier = Modifier.weight(1f),
@@ -1076,9 +1294,42 @@ private fun OpenSaleActionRow(
     sale: PersistedOpenSale,
     actionLabel: String,
     onOpen: () -> Unit,
+    onLongPress: () -> Unit,
+    onDragStartInRoot: (Offset) -> Unit = {},
+    onDragInRoot: (Offset) -> Unit = {},
+    onDragEnd: () -> Unit = {},
 ) {
+    var originInRoot by remember { mutableStateOf(Offset.Zero) }
+
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .onGloballyPositioned { coords -> originInRoot = coords.positionInRoot() }
+            .pointerInput(sale.saleId, originInRoot, onLongPress) {
+                // Enables: long-press -> enter transfer mode, and if the user moves after the long press, start dragging
+                // without requiring another long press.
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val longPress = awaitLongPressOrCancellation(down.id)
+                    if (longPress == null) return@awaitEachGesture
+
+                    // Enter transfer mode immediately on long-press.
+                    onLongPress()
+
+                    // If the user moves (touch slop) after the long press, start a drag using the finger position.
+                    val slopChange = awaitTouchSlopOrCancellation(down.id) { change, _ ->
+                        change.consume()
+                    } ?: return@awaitEachGesture
+
+                    onDragStartInRoot(originInRoot + slopChange.position)
+                    drag(down.id) { change ->
+                        change.consume()
+                        onDragInRoot(originInRoot + change.position)
+                    }
+                    onDragEnd()
+                }
+            },
+        onClick = onOpen,
         shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.62f),
         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.22f)),
@@ -1092,16 +1343,18 @@ private fun OpenSaleActionRow(
                 sale = sale,
                 modifier = Modifier.weight(1f),
             )
-            Column(horizontalAlignment = Alignment.End) {
+            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                     text = formatOpenTotal(sale.openSaleTotalCents()),
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.primary,
                 )
-                TextButton(onClick = onOpen) {
-                    Text(actionLabel)
-                }
+                Text(
+                    text = actionLabel,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }

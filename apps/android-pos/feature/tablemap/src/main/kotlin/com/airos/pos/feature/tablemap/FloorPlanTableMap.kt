@@ -311,6 +311,9 @@ internal fun FloorPlanTableMap(
     onFloorPlanViewportChange: (StaffFloorPlanViewportPreference) -> Unit = {},
     openTotalLabelsByTableId: Map<String, String> = emptyMap(),
     openBillCountsByTableId: Map<String, Int> = emptyMap(),
+    externalDragPosition: Offset? = null,
+    externalDragSourceTableId: String? = null,
+    onExternalDragHoverTableId: (String?) -> Unit = {},
     onRotate90: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -329,6 +332,9 @@ internal fun FloorPlanTableMap(
                 onFloorPlanViewportChange = onFloorPlanViewportChange,
                 openTotalLabelsByTableId = openTotalLabelsByTableId,
                 openBillCountsByTableId = openBillCountsByTableId,
+                externalDragPosition = externalDragPosition,
+                externalDragSourceTableId = externalDragSourceTableId,
+                onExternalDragHoverTableId = onExternalDragHoverTableId,
                 onRotate90 = onRotate90,
                 modifier = modifier,
             )
@@ -345,6 +351,9 @@ internal fun FloorPlanTableMap(
                 onFloorPlanViewportChange = onFloorPlanViewportChange,
                 openTotalLabelsByTableId = openTotalLabelsByTableId,
                 openBillCountsByTableId = openBillCountsByTableId,
+                externalDragPosition = externalDragPosition,
+                externalDragSourceTableId = externalDragSourceTableId,
+                onExternalDragHoverTableId = onExternalDragHoverTableId,
                 onRotate90 = onRotate90,
                 modifier = modifier,
                 overlayNote = "Rich visual style scaffold is wired. Simple renderer is active for now.",
@@ -364,6 +373,9 @@ private fun SimpleFloorPlanTableMap(
     onFloorPlanViewportChange: (StaffFloorPlanViewportPreference) -> Unit,
     openTotalLabelsByTableId: Map<String, String>,
     openBillCountsByTableId: Map<String, Int>,
+    externalDragPosition: Offset? = null,
+    externalDragSourceTableId: String? = null,
+    onExternalDragHoverTableId: (String?) -> Unit = {},
     onRotate90: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     overlayNote: String? = null,
@@ -522,6 +534,18 @@ private fun SimpleFloorPlanTableMap(
         val currentOnSelectTable by rememberUpdatedState(onSelectTable)
         val currentOnLongPressTable by rememberUpdatedState(onLongPressTable)
         val currentOnFloorPlanViewportChange by rememberUpdatedState(onFloorPlanViewportChange)
+        var externalHoverTableId by remember { mutableStateOf<String?>(null) }
+        val currentOnExternalDragHoverTableId by rememberUpdatedState(onExternalDragHoverTableId)
+        val currentExternalDragSourceTableId by rememberUpdatedState(externalDragSourceTableId)
+
+        LaunchedEffect(externalDragPosition, currentClampedOffset, currentZoomScale, currentTableHitTargets, currentExternalDragSourceTableId) {
+            val hovered = externalDragPosition?.let { pos ->
+                val mapPosition = (pos - currentClampedOffset) / currentZoomScale
+                currentTableHitTargets.lastOrNull { it.contains(mapPosition) }?.tableId
+            }?.takeIf { it != currentExternalDragSourceTableId }
+            externalHoverTableId = hovered
+            currentOnExternalDragHoverTableId(hovered)
+        }
 
         Box(
             modifier = Modifier
@@ -584,6 +608,7 @@ private fun SimpleFloorPlanTableMap(
                                 table = placement.table,
                                 rect = placement.rect,
                                 selected = placement.table.id == selectedTableId,
+                                dropHovered = placement.table.id == externalHoverTableId,
                                 openTotalLabel = openTotalLabelsByTableId[placement.table.id],
                                 openBillCount = openBillCountsByTableId[placement.table.id] ?: 0,
                                 sample = false,
@@ -799,6 +824,7 @@ private fun FloorPlanTableNode(
     table: RestaurantTable,
     rect: FloorPlanRect,
     selected: Boolean,
+    dropHovered: Boolean = false,
     openTotalLabel: String?,
     openBillCount: Int,
     sample: Boolean = false,
@@ -827,10 +853,22 @@ private fun FloorPlanTableNode(
         shape = shape,
         color = if (selected) Color(0xFF16272C) else FloorPlanTableSurface,
         border = BorderStroke(
-            width = if (selected) 2.dp else 1.dp,
-            color = if (selected) FloorPlanSelectionColor else accent.copy(alpha = 0.56f),
+            width = when {
+                dropHovered -> 3.dp
+                selected -> 2.dp
+                else -> 1.dp
+            },
+            color = when {
+                dropHovered -> FloorPlanSelectionColor
+                selected -> FloorPlanSelectionColor
+                else -> accent.copy(alpha = 0.56f)
+            },
         ),
-        shadowElevation = if (selected) 6.dp else 1.dp,
+        shadowElevation = when {
+            dropHovered -> 10.dp
+            selected -> 6.dp
+            else -> 1.dp
+        },
     ) {
         Box(
             modifier = Modifier

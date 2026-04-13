@@ -85,6 +85,7 @@ import com.airos.pos.feature.shift.ShiftScreen
 import com.airos.pos.feature.shift.ShiftViewModel
 import com.airos.pos.feature.tablemap.TableMapScreen
 import com.airos.pos.feature.tablemap.TableMapViewModel
+import com.airos.pos.feature.tablemap.TableSaleOpenSource
 import com.airos.pos.feature.tablemap.TableTransferStage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.drop
@@ -878,20 +879,38 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                         onSelectTable = viewModel::selectTable,
                         onViewModeChange = viewModel::setViewMode,
                         onFloorPlanViewportChange = viewModel::setFloorPlanViewport,
-                        onOpenTableSale = { tableId, tableLabel, saleId ->
-                            if (state.transferState?.stage == TableTransferStage.PICKING_TARGET) {
+                        onOpenTableSale = { tableId, tableLabel, saleId, source ->
+
+                            val transfer = state.transferState
+                            val hasSelectedBills = transfer?.selectedSaleIds?.isNotEmpty() == true
+
+                            // Hard guard: while transfer mode is active, table taps should never open Menu.
+                            // If user taps a different table while having 1+ selected bills, treat it as target selection.
+                            if (source == TableSaleOpenSource.TABLE_TAP && transfer != null) {
+                                if (hasSelectedBills && tableId != transfer.sourceSpotId) {
+                                    viewModel.transferSelectedBillsTo(tableId)
+                                }
+                            } else if (source == TableSaleOpenSource.TABLE_TAP && transfer?.stage == TableTransferStage.PICKING_TARGET) {
                                 viewModel.transferSelectedBillsTo(tableId)
                             } else {
-                                navController.navigate(
-                                    Routes.menu(
-                                        tableId = tableId,
-                                        tableLabel = tableLabel,
-                                        saleId = saleId,
-                                    ),
-                                )
+                                val openBillCount = state.openChecksBySpotId[tableId]?.count ?: 0
+                                val blockTableTapMultiBill =
+                                    source == TableSaleOpenSource.TABLE_TAP && openBillCount > 1
+
+                                if (!blockTableTapMultiBill) {
+                                    navController.navigate(
+                                        Routes.menu(
+                                            tableId = tableId,
+                                            tableLabel = tableLabel,
+                                            saleId = saleId,
+                                        ),
+                                    )
+                                }
                             }
+
                         },
                         onStartTransferMode = viewModel::startTransferMode,
+                        onStartTransferModeForSale = viewModel::startTransferModeForSale,
                         onToggleTransferSale = viewModel::toggleTransferSale,
                         onBeginTransferTargetSelection = viewModel::beginTransferTargetSelection,
                         onTransferTargetSelected = viewModel::transferSelectedBillsTo,
