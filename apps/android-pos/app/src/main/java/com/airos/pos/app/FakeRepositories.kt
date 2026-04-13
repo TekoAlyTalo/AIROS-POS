@@ -27,6 +27,7 @@ import com.airos.pos.core.model.RefundRequest
 import com.airos.pos.core.model.RestaurantTable
 import com.airos.pos.core.model.ShiftStatus
 import com.airos.pos.core.model.StaffAuthRecord
+import com.airos.pos.core.model.StaffFloorPlanViewportPreference
 import com.airos.pos.core.model.StaffMember
 import com.airos.pos.core.model.SyncItem
 import com.airos.pos.core.model.SyncState
@@ -819,6 +820,13 @@ class DataStoreStaffUiPreferencesRepository(
         mode: StaffTableMapViewPreference,
     ) {
         preferencesStore.setTableMapViewMode(staffId, mode)
+    }
+
+    override suspend fun setFloorPlanViewport(
+        staffId: String,
+        viewport: StaffFloorPlanViewportPreference,
+    ) {
+        preferencesStore.setFloorPlanViewport(staffId, viewport)
     }
 }
 

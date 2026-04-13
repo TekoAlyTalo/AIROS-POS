@@ -50,7 +50,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.airos.pos.core.model.RestaurantTable
-import com.airos.pos.core.model.TableStatus
+import com.airos.pos.core.model.StaffFloorPlanViewportPreference
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -307,7 +307,10 @@ internal fun FloorPlanTableMap(
     onLongPressTable: (String) -> Unit = {},
     style: FloorPlanVisualStyle,
     viewpoint: FloorPlanViewpoint = DefaultFloorPlanViewpoint,
+    floorPlanViewport: StaffFloorPlanViewportPreference = StaffFloorPlanViewportPreference(),
+    onFloorPlanViewportChange: (StaffFloorPlanViewportPreference) -> Unit = {},
     openTotalLabelsByTableId: Map<String, String> = emptyMap(),
+    openBillCountsByTableId: Map<String, Int> = emptyMap(),
     onRotate90: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -322,7 +325,10 @@ internal fun FloorPlanTableMap(
                 onSelectTable = onSelectTable,
                 onLongPressTable = onLongPressTable,
                 viewpoint = viewpoint,
+                floorPlanViewport = floorPlanViewport,
+                onFloorPlanViewportChange = onFloorPlanViewportChange,
                 openTotalLabelsByTableId = openTotalLabelsByTableId,
+                openBillCountsByTableId = openBillCountsByTableId,
                 onRotate90 = onRotate90,
                 modifier = modifier,
             )
@@ -335,7 +341,10 @@ internal fun FloorPlanTableMap(
                 onSelectTable = onSelectTable,
                 onLongPressTable = onLongPressTable,
                 viewpoint = viewpoint,
+                floorPlanViewport = floorPlanViewport,
+                onFloorPlanViewportChange = onFloorPlanViewportChange,
                 openTotalLabelsByTableId = openTotalLabelsByTableId,
+                openBillCountsByTableId = openBillCountsByTableId,
                 onRotate90 = onRotate90,
                 modifier = modifier,
                 overlayNote = "Rich visual style scaffold is wired. Simple renderer is active for now.",
@@ -351,7 +360,10 @@ private fun SimpleFloorPlanTableMap(
     onSelectTable: (String) -> Unit,
     onLongPressTable: (String) -> Unit,
     viewpoint: FloorPlanViewpoint,
+    floorPlanViewport: StaffFloorPlanViewportPreference,
+    onFloorPlanViewportChange: (StaffFloorPlanViewportPreference) -> Unit,
     openTotalLabelsByTableId: Map<String, String>,
+    openBillCountsByTableId: Map<String, Int>,
     onRotate90: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     overlayNote: String? = null,
@@ -376,7 +388,30 @@ private fun SimpleFloorPlanTableMap(
         val contentWidthDp = remember(contentWidthPx, density) { contentWidthPx.toDp(density) }
         val contentHeightDp = remember(contentHeightPx, density) { contentHeightPx.toDp(density) }
         val viewportKey = constraints.maxWidth to constraints.maxHeight
-        var zoomScale by rememberSaveable(viewportKey) { mutableStateOf(1f) }
+        val defaultOffset = remember(viewportKey, layoutModel, density) {
+            defaultFloorPlanOffset(
+                viewportWidthPx = viewportWidthPx,
+                viewportHeightPx = viewportHeightPx,
+                contentWidthPx = contentWidthPx,
+                contentHeightPx = contentHeightPx,
+                viewpoint = layoutModel.normalizedViewpoint,
+            )
+        }
+        var userChangedViewport by rememberSaveable(viewportKey) { mutableStateOf(false) }
+        var zoomScale by rememberSaveable(viewportKey) {
+            mutableStateOf(floorPlanViewport.resolvedZoomScale())
+        }
+        var panOffset by remember(viewportKey, layoutModel, density) {
+            mutableStateOf(
+                floorPlanViewport.resolvedPanOffset(
+                    defaultOffset = defaultOffset,
+                    viewportWidthPx = viewportWidthPx,
+                    viewportHeightPx = viewportHeightPx,
+                    contentWidthPx = contentWidthPx,
+                    contentHeightPx = contentHeightPx,
+                ),
+            )
+        }
         val scaledContentWidthPx = contentWidthPx * zoomScale
         val scaledContentHeightPx = contentHeightPx * zoomScale
         val xRange = remember(viewportWidthPx, scaledContentWidthPx) {
@@ -391,16 +426,24 @@ private fun SimpleFloorPlanTableMap(
                 contentSizePx = scaledContentHeightPx,
             )
         }
-        var panOffset by remember(viewportKey, layoutModel, density) {
-            mutableStateOf(
-                defaultFloorPlanOffset(
+        LaunchedEffect(
+            viewportKey,
+            layoutModel,
+            floorPlanViewport.zoomScale,
+            floorPlanViewport.panX,
+            floorPlanViewport.panY,
+        ) {
+            if (!userChangedViewport && floorPlanViewport.hasCompleteViewport()) {
+                val restoredZoom = floorPlanViewport.resolvedZoomScale()
+                zoomScale = restoredZoom
+                panOffset = floorPlanViewport.resolvedPanOffset(
+                    defaultOffset = defaultOffset,
                     viewportWidthPx = viewportWidthPx,
                     viewportHeightPx = viewportHeightPx,
                     contentWidthPx = contentWidthPx,
                     contentHeightPx = contentHeightPx,
-                    viewpoint = layoutModel.normalizedViewpoint,
-                ),
-            )
+                )
+            }
         }
         val clampedOffset = clampPanOffset(
             offset = panOffset,
@@ -478,6 +521,7 @@ private fun SimpleFloorPlanTableMap(
         val currentZoomScale by rememberUpdatedState(zoomScale)
         val currentOnSelectTable by rememberUpdatedState(onSelectTable)
         val currentOnLongPressTable by rememberUpdatedState(onLongPressTable)
+        val currentOnFloorPlanViewportChange by rememberUpdatedState(onFloorPlanViewportChange)
 
         Box(
             modifier = Modifier
@@ -505,13 +549,22 @@ private fun SimpleFloorPlanTableMap(
                         val nextScale = (previousScale * adjustedZoom).coerceIn(FLOOR_PLAN_MIN_ZOOM, FLOOR_PLAN_MAX_ZOOM)
                         val scaleChange = nextScale / previousScale
                         val transformedOffset = centroid + (panOffset - centroid) * scaleChange + pan
-                        zoomScale = nextScale
-                        panOffset = clampPanOffset(
+                        val nextOffset = clampPanOffset(
                             offset = transformedOffset,
                             viewportWidthPx = viewportWidthPx,
                             viewportHeightPx = viewportHeightPx,
                             contentWidthPx = contentWidthPx * nextScale,
                             contentHeightPx = contentHeightPx * nextScale,
+                        )
+                        zoomScale = nextScale
+                        panOffset = nextOffset
+                        userChangedViewport = true
+                        currentOnFloorPlanViewportChange(
+                            StaffFloorPlanViewportPreference(
+                                zoomScale = nextScale,
+                                panX = nextOffset.x,
+                                panY = nextOffset.y,
+                            ),
                         )
                     }
                 },
@@ -532,6 +585,7 @@ private fun SimpleFloorPlanTableMap(
                                 rect = placement.rect,
                                 selected = placement.table.id == selectedTableId,
                                 openTotalLabel = openTotalLabelsByTableId[placement.table.id],
+                                openBillCount = openBillCountsByTableId[placement.table.id] ?: 0,
                                 sample = false,
                             )
                         }
@@ -746,13 +800,18 @@ private fun FloorPlanTableNode(
     rect: FloorPlanRect,
     selected: Boolean,
     openTotalLabel: String?,
+    openBillCount: Int,
     sample: Boolean = false,
 ) {
     val density = LocalDensity.current
     val isMerged = "+" in table.label
     val isRound = !isMerged && abs(rect.width - rect.height) <= 18f
-    val accent = table.status.floorPlanAccent()
-    val statusLabel = table.status.floorPlanLabel()
+    val displayStatus = resolveTableDisplayStatus(
+        physicalStatus = table.status,
+        openBillCount = openBillCount,
+    )
+    val accent = displayStatus.floorPlanAccent()
+    val statusLabel = displayStatus.label
     val shape: Shape = if (isRound) CircleShape else RoundedCornerShape(if (isMerged) 28.dp else 22.dp)
 
     Surface(
@@ -902,6 +961,41 @@ private fun panRange(
         return centeredOffset to centeredOffset
     }
     return (viewportSizePx - contentSizePx) to 0f
+}
+
+private fun StaffFloorPlanViewportPreference.hasCompleteViewport(): Boolean {
+    return zoomScale?.isFinite() == true &&
+        panX?.isFinite() == true &&
+        panY?.isFinite() == true
+}
+
+private fun StaffFloorPlanViewportPreference.resolvedZoomScale(): Float {
+    return zoomScale
+        ?.takeIf { it.isFinite() }
+        ?.coerceIn(FLOOR_PLAN_MIN_ZOOM, FLOOR_PLAN_MAX_ZOOM)
+        ?: 1f
+}
+
+private fun StaffFloorPlanViewportPreference.resolvedPanOffset(
+    defaultOffset: Offset,
+    viewportWidthPx: Float,
+    viewportHeightPx: Float,
+    contentWidthPx: Float,
+    contentHeightPx: Float,
+): Offset {
+    val resolvedPanX = panX
+    val resolvedPanY = panY
+    if (resolvedPanX?.isFinite() != true || resolvedPanY?.isFinite() != true) {
+        return defaultOffset
+    }
+    val resolvedZoomScale = resolvedZoomScale()
+    return clampPanOffset(
+        offset = Offset(resolvedPanX, resolvedPanY),
+        viewportWidthPx = viewportWidthPx,
+        viewportHeightPx = viewportHeightPx,
+        contentWidthPx = contentWidthPx * resolvedZoomScale,
+        contentHeightPx = contentHeightPx * resolvedZoomScale,
+    )
 }
 
 
@@ -1220,21 +1314,17 @@ private fun ContentCornerMarker(
 
 private fun Float.toDp(density: Density) = with(density) { this@toDp.toDp() }
 
-private fun TableStatus.floorPlanAccent(): Color {
-    return when (this) {
-        TableStatus.AVAILABLE -> FloorPlanAvailableColor
-        TableStatus.OCCUPIED -> FloorPlanOccupiedColor
-        TableStatus.DIRTY -> FloorPlanDirtyColor
-        TableStatus.RESERVED -> FloorPlanReservedColor
-    }
-}
+private fun TableDisplayStatus.floorPlanAccent(): Color {
+    return when (kind) {
+        TableDisplayStatusKind.AVAILABLE -> FloorPlanAvailableColor
+        TableDisplayStatusKind.OPEN_BILL,
+        TableDisplayStatusKind.OCCUPIED,
+        -> FloorPlanOccupiedColor
 
-private fun TableStatus.floorPlanLabel(): String {
-    return when (this) {
-        TableStatus.AVAILABLE -> "Free"
-        TableStatus.OCCUPIED -> "Occupied"
-        TableStatus.DIRTY -> "Needs cleaning"
-        TableStatus.RESERVED -> "Reserved"
+        TableDisplayStatusKind.DIRTY -> FloorPlanDirtyColor
+        TableDisplayStatusKind.RESERVED,
+        TableDisplayStatusKind.RESERVED_WITH_OPEN_BILL,
+        -> FloorPlanReservedColor
     }
 }
 

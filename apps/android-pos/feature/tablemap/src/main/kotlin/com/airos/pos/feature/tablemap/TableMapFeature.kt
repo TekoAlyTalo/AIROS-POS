@@ -64,6 +64,8 @@ import com.airos.pos.core.model.FloorMap
 import com.airos.pos.core.model.PersistedOpenSale
 import com.airos.pos.core.model.PersistedOpenSaleLine
 import com.airos.pos.core.model.RestaurantTable
+import com.airos.pos.core.model.StaffFloorPlanViewportPreference
+import com.airos.pos.core.model.StaffTableMapViewPreference
 import com.airos.pos.core.ui.KeyValueRow
 import com.airos.pos.core.ui.PosPane
 import com.airos.pos.core.ui.StatusBanner
@@ -72,7 +74,8 @@ import com.airos.pos.domain.OpenSaleRepository
 import com.airos.pos.domain.SettingsRepository
 import com.airos.pos.domain.StaffUiPreferencesRepository
 import com.airos.pos.domain.TableRepository
-import com.airos.pos.core.model.StaffTableMapViewPreference
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -117,6 +120,7 @@ data class TableMapUiState(
     val floorMap: FloorMap? = null,
     val selectedTableId: String? = null,
     val viewMode: StaffTableMapViewPreference = StaffTableMapViewPreference.FLOOR_PLAN,
+    val floorPlanViewport: StaffFloorPlanViewportPreference = StaffFloorPlanViewportPreference(),
     val busy: Boolean = false,
     val message: String? = null,
     val edgeBaseUrl: String? = null,
@@ -140,6 +144,7 @@ class TableMapViewModel(
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(TableMapUiState())
     val uiState: StateFlow<TableMapUiState> = mutableState.asStateFlow()
+    private var floorPlanViewportSaveJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -170,8 +175,13 @@ class TableMapViewModel(
             }
         }
         viewModelScope.launch {
-            staffUiPreferencesRepository.observeTableMapViewMode(currentStaffId).collect { savedViewMode ->
-                mutableState.update { it.copy(viewMode = savedViewMode) }
+            staffUiPreferencesRepository.observeStaffUiPreferences(currentStaffId).collect { preferences ->
+                mutableState.update {
+                    it.copy(
+                        viewMode = preferences.tableMapViewMode,
+                        floorPlanViewport = preferences.floorPlanViewport,
+                    )
+                }
             }
         }
 
@@ -213,7 +223,13 @@ class TableMapViewModel(
     }
 
     fun selectTable(tableId: String) {
-        mutableState.update { it.copy(selectedTableId = tableId, message = null) }
+        mutableState.update { current ->
+            if (current.transferState?.stage == TableTransferStage.PICKING_TARGET) {
+                current
+            } else {
+                current.copy(selectedTableId = tableId, message = null)
+            }
+        }
     }
 
     fun startTransferMode(tableId: String) {
@@ -230,13 +246,29 @@ class TableMapViewModel(
             }
             return
         }
+        val autoSelectedSaleIds = if (openSales.size == 1) {
+            setOf(openSales.single().saleId)
+        } else {
+            emptySet()
+        }
+        val initialStage = if (openSales.size == 1) {
+            TableTransferStage.PICKING_TARGET
+        } else {
+            TableTransferStage.SELECTING_BILLS
+        }
         mutableState.update {
             it.copy(
                 selectedTableId = tableId,
-                message = null,
+                message = if (initialStage == TableTransferStage.PICKING_TARGET) {
+                    "Select target table for 1 bill from ${table.label}."
+                } else {
+                    null
+                },
                 transferState = TableTransferState(
                     sourceSpotId = tableId,
                     sourceSpotLabel = table.label,
+                    selectedSaleIds = autoSelectedSaleIds,
+                    stage = initialStage,
                 ),
             )
         }
@@ -328,6 +360,18 @@ class TableMapViewModel(
             staffUiPreferencesRepository.setTableMapViewMode(
                 staffId = currentStaffId,
                 mode = viewMode,
+            )
+        }
+    }
+
+    fun setFloorPlanViewport(viewport: StaffFloorPlanViewportPreference) {
+        mutableState.update { it.copy(floorPlanViewport = viewport) }
+        floorPlanViewportSaveJob?.cancel()
+        floorPlanViewportSaveJob = viewModelScope.launch {
+            delay(250)
+            staffUiPreferencesRepository.setFloorPlanViewport(
+                staffId = currentStaffId,
+                viewport = viewport,
             )
         }
     }
@@ -466,6 +510,7 @@ fun TableMapScreen(
     cameraPreviewService: CameraPreviewService,
     onSelectTable: (String) -> Unit,
     onViewModeChange: (StaffTableMapViewPreference) -> Unit,
+    onFloorPlanViewportChange: (StaffFloorPlanViewportPreference) -> Unit,
     onOpenTableSale: (tableId: String, tableLabel: String, saleId: String?) -> Unit,
     onStartTransferMode: (String) -> Unit,
     onToggleTransferSale: (String) -> Unit,
@@ -499,6 +544,9 @@ fun TableMapScreen(
                 ?.let { totalCents -> spotId to formatOpenTotal(totalCents) }
         }.toMap()
     }
+    val openBillCountsBySpotId = remember(state.openChecksBySpotId) {
+        state.openChecksBySpotId.mapValues { (_, summary) -> summary.count }
+    }
     val selectedTable = visibleTables.firstOrNull { it.id == state.selectedTableId } ?: visibleTables.firstOrNull()
     val desiredPreviewTarget = selectedTable?.previewTarget()
     val selectedPreviewTarget = state.livePreviewTarget?.takeIf { it.tableId == selectedTable?.id }
@@ -506,11 +554,11 @@ fun TableMapScreen(
     val isPickingTransferTarget = transferState?.stage == TableTransferStage.PICKING_TARGET
 
     fun handleTableTap(table: RestaurantTable) {
-        onSelectTable(table.id)
         if (isPickingTransferTarget) {
             onTransferTargetSelected(table.id)
             return
         }
+        onSelectTable(table.id)
 
         val openSales = state.openSalesBySpotId[table.id].orEmpty()
         when (openSales.size) {
@@ -647,7 +695,11 @@ fun TableMapScreen(
                                     transferTargetMode = isPickingTransferTarget && !isTransferSource,
                                     openCheckSummary = state.openChecksBySpotId[table.id],
                                     onClick = { handleTableTap(table) },
-                                    onLongPress = { onStartTransferMode(table.id) },
+                                    onLongPress = {
+                                        if (!isPickingTransferTarget) {
+                                            onStartTransferMode(table.id)
+                                        }
+                                    },
                                 )
                             }
                         }
@@ -667,10 +719,17 @@ fun TableMapScreen(
                                         ?.let(::handleTableTap)
                                         ?: onSelectTable(tableId)
                                 },
-                                onLongPressTable = onStartTransferMode,
+                                onLongPressTable = { tableId ->
+                                    if (!isPickingTransferTarget) {
+                                        onStartTransferMode(tableId)
+                                    }
+                                },
                                 style = floorPlanStyle,
                                 viewpoint = floorPlanViewpoint,
+                                floorPlanViewport = state.floorPlanViewport,
+                                onFloorPlanViewportChange = onFloorPlanViewportChange,
                                 openTotalLabelsByTableId = openTotalLabelsBySpotId,
+                                openBillCountsByTableId = openBillCountsBySpotId,
                                 modifier = Modifier.fillMaxSize(),
                             )
 
@@ -755,12 +814,19 @@ private fun TableDetailsContent(
     onCancelTransferMode: () -> Unit,
     onOpenLivePreview: () -> Unit,
 ) {
+    val displayStatus = resolveTableDisplayStatus(
+        physicalStatus = table.status,
+        openBillCount = openCheckSummary?.count ?: 0,
+    )
     Column(
         modifier = Modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         KeyValueRow("Area", table.areaName)
-        KeyValueRow("Status", table.status.name)
+        KeyValueRow("Status", displayStatus.label)
+        if (displayStatus.differsFromPhysical) {
+            KeyValueRow("Physical status", displayStatus.physicalLabel)
+        }
         KeyValueRow("Seats", table.seats.toString())
         KeyValueRow("Guests", table.guestCount.toString())
         KeyValueRow("Camera", table.cameraLabel ?: "Not assigned")
@@ -804,16 +870,18 @@ private fun TableDetailsContent(
                             sale = sale,
                             selected = sale.saleId in transferForThisTable.selectedSaleIds,
                             enabled = transferForThisTable.stage == TableTransferStage.SELECTING_BILLS,
+                            showCheckbox = openSales.size > 1,
                             onToggle = { onToggleTransferSale(sale.saleId) },
                         )
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Button(
-                            onClick = onBeginTransferTargetSelection,
-                            enabled = transferForThisTable.selectedSaleIds.isNotEmpty() &&
-                                transferForThisTable.stage == TableTransferStage.SELECTING_BILLS,
-                        ) {
-                            Text("Siirrä valitut")
+                        if (transferForThisTable.stage == TableTransferStage.SELECTING_BILLS) {
+                            Button(
+                                onClick = onBeginTransferTargetSelection,
+                                enabled = transferForThisTable.selectedSaleIds.isNotEmpty(),
+                            ) {
+                                Text("Siirrä valitut")
+                            }
                         }
                         OutlinedButton(onClick = onCancelTransferMode) {
                             Text("Peruuta")
@@ -962,6 +1030,7 @@ private fun TransferSaleSelectionRow(
     sale: PersistedOpenSale,
     selected: Boolean,
     enabled: Boolean,
+    showCheckbox: Boolean = true,
     onToggle: () -> Unit,
 ) {
     Surface(
@@ -981,11 +1050,13 @@ private fun TransferSaleSelectionRow(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Checkbox(
-                checked = selected,
-                onCheckedChange = { if (enabled) onToggle() },
-                enabled = enabled,
-            )
+            if (showCheckbox) {
+                Checkbox(
+                    checked = selected,
+                    onCheckedChange = { if (enabled) onToggle() },
+                    enabled = enabled,
+                )
+            }
             OpenSaleSummaryColumn(
                 sale = sale,
                 modifier = Modifier.weight(1f),
@@ -1133,12 +1204,21 @@ private fun TableGridCard(
     val openTotalLabel = openCheckSummary?.totalCents
         ?.takeIf { it > 0 }
         ?.let(::formatOpenTotal)
-    val hasOpenSales = (openCheckSummary?.count ?: 0) > 0
-    val accent = when (table.status.name) {
-        "OCCUPIED" -> MaterialTheme.colorScheme.primary
-        "DIRTY" -> MaterialTheme.colorScheme.error
-        "RESERVED" -> MaterialTheme.colorScheme.tertiary
-        else -> if (hasOpenSales) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
+    val displayStatus = resolveTableDisplayStatus(
+        physicalStatus = table.status,
+        openBillCount = openCheckSummary?.count ?: 0,
+    )
+    val accent = when (displayStatus.kind) {
+        TableDisplayStatusKind.OCCUPIED,
+        TableDisplayStatusKind.OPEN_BILL,
+        -> MaterialTheme.colorScheme.primary
+
+        TableDisplayStatusKind.DIRTY -> MaterialTheme.colorScheme.error
+        TableDisplayStatusKind.RESERVED,
+        TableDisplayStatusKind.RESERVED_WITH_OPEN_BILL,
+        -> MaterialTheme.colorScheme.tertiary
+
+        TableDisplayStatusKind.AVAILABLE -> MaterialTheme.colorScheme.secondary
     }
 
     val cardColor = when {
@@ -1206,7 +1286,7 @@ private fun TableGridCard(
             }
 
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                MiniStatusChip(label = if (hasOpenSales) "OCCUPIED" else table.status.name, tint = accent)
+                MiniStatusChip(label = displayStatus.label, tint = accent)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Surface(
                         shape = RoundedCornerShape(16.dp),

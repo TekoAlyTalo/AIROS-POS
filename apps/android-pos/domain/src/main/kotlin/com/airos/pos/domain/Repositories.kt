@@ -21,6 +21,7 @@ import com.airos.pos.core.model.RestaurantTable
 import com.airos.pos.core.model.StaffMember
 import com.airos.pos.core.model.PersistedOpenSale
 import com.airos.pos.core.model.PersistedOpenSaleLine
+import com.airos.pos.core.model.StaffFloorPlanViewportPreference
 import com.airos.pos.core.model.SyncItem
 import com.airos.pos.core.model.SyncState
 import com.airos.pos.core.model.TerminalSettings
@@ -126,6 +127,10 @@ interface StaffUiPreferencesRepository {
     suspend fun setTableMapViewMode(
         staffId: String,
         mode: StaffTableMapViewPreference,
+    )
+    suspend fun setFloorPlanViewport(
+        staffId: String,
+        viewport: StaffFloorPlanViewportPreference,
     )
 }
 
