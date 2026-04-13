@@ -66,7 +66,6 @@ data class StaffUiPreferences(
     val tableMapViewMode: StaffTableMapViewPreference = StaffTableMapViewPreference.FLOOR_PLAN,
 )
 
-
 enum class NfcLinkedEntityType {
     STAFF,
     LOYALTY_MEMBER,
@@ -228,6 +227,7 @@ data class MenuItem(
     val barcode: String? = null,
     val imageUrl: String? = null,
     val subcategory: String? = null,
+    val subcategoryImageUrl: String? = null,
     val requiresManagerOverride: Boolean = false,
 )
 

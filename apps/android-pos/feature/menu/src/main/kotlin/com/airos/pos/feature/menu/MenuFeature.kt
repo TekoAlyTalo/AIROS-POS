@@ -785,6 +785,16 @@ fun MenuScreen(
             else -> emptyList()
         }
     }
+    val subcategoryImageUrls = remember(currentGroup) {
+        currentGroup?.items
+            .orEmpty()
+            .mapNotNull { item ->
+                val subcategory = item.subcategory?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val imageUrl = item.subcategoryImageUrl?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                subcategory to imageUrl
+            }
+            .toMap()
+    }
     val pageCount = if (filteredItems.isEmpty()) 0 else maxOf(
         ((filteredItems.size + gridConfig.itemsPerPage - 1) / gridConfig.itemsPerPage).coerceAtLeast(1),
         minimumPageCountForCategory(currentCategory),
@@ -856,6 +866,7 @@ fun MenuScreen(
                             SubcategoryPickerGrid(
                                 modifier = Modifier.weight(1f),
                                 subcategories = subcategories,
+                                imageUrlsBySubcategory = subcategoryImageUrls,
                                 onSelectSubcategory = { sub ->
                                     selectedSubcategory = sub
                                     currentCategory?.let { activePageByCategory[it] = 0 }
@@ -1004,6 +1015,7 @@ private fun ProductGrid(
 private fun SubcategoryPickerGrid(
     modifier: Modifier = Modifier,
     subcategories: List<String>,
+    imageUrlsBySubcategory: Map<String, String>,
     onSelectSubcategory: (String) -> Unit,
 ) {
     val config = ProductGridConfig(rows = 3, columns = 3)
@@ -1032,6 +1044,7 @@ private fun SubcategoryPickerGrid(
                         } else {
                             SubcategoryCard(
                                 label = sub,
+                                imageUrl = imageUrlsBySubcategory[sub],
                                 onClick = { onSelectSubcategory(sub) },
                             )
                         }
@@ -1043,7 +1056,11 @@ private fun SubcategoryPickerGrid(
 }
 
 @Composable
-private fun SubcategoryCard(label: String, onClick: () -> Unit) {
+private fun SubcategoryCard(
+    label: String,
+    imageUrl: String?,
+    onClick: () -> Unit,
+) {
     Surface(
         modifier = Modifier
             .fillMaxSize()
@@ -1066,17 +1083,11 @@ private fun SubcategoryCard(label: String, onClick: () -> Unit) {
                 shape = RoundedCornerShape(18.dp),
                 color = MenuPanelAltColor,
             ) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = label.take(2).uppercase(),
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MenuTextSecondary,
-                    )
-                }
+                ProductImage(
+                    imageUrl = imageUrl,
+                    contentDescription = label,
+                    fallbackLabel = label.take(2).uppercase(),
+                )
             }
             Text(
                 text = label,

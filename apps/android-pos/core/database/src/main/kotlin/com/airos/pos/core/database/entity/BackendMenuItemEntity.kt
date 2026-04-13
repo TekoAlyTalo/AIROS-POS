@@ -23,6 +23,8 @@ data class BackendMenuItemEntity(
     val subcategory: String?,
     val barcode: String?,
     val imageUrl: String?,
+    /** Still-image used by the intermediate submenu/subcategory tile. */
+    val subcategoryImageUrl: String?,
     /** Epoch millis when this row was written to the cache. */
     val cachedAt: Long,
 )
