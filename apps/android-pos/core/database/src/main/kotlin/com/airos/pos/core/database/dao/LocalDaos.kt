@@ -84,11 +84,20 @@ interface OpenSaleDao {
     @Query("SELECT * FROM open_sales WHERE status = 'OPEN' LIMIT 1")
     suspend fun loadOpenSale(): OpenSaleEntity?
 
+    @Query("SELECT * FROM open_sales WHERE status = 'OPEN' AND saleId = :saleId LIMIT 1")
+    suspend fun loadOpenSaleById(saleId: String): OpenSaleEntity?
+
     @Query("SELECT * FROM open_sales WHERE status = 'OPEN' AND serviceSpotId = :serviceSpotId LIMIT 1")
     suspend fun loadOpenSaleForSpot(serviceSpotId: String): OpenSaleEntity?
 
     @Query("SELECT * FROM open_sales WHERE status = 'OPEN' AND serviceSpotId IS NULL LIMIT 1")
     suspend fun loadOpenSaleForWalkIn(): OpenSaleEntity?
+
+    @Query("SELECT * FROM open_sales WHERE status = 'OPEN' AND serviceSpotId = :serviceSpotId ORDER BY createdAtEpochMillis")
+    suspend fun loadOpenSalesForSpot(serviceSpotId: String): List<OpenSaleEntity>
+
+    @Query("SELECT * FROM open_sales WHERE status = 'OPEN' AND serviceSpotId IS NULL ORDER BY createdAtEpochMillis")
+    suspend fun loadOpenSalesForWalkIn(): List<OpenSaleEntity>
 
     @Query("SELECT * FROM open_sales WHERE status = 'OPEN'")
     fun observeAllOpen(): Flow<List<OpenSaleEntity>>

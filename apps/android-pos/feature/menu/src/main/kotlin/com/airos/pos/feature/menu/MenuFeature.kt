@@ -163,6 +163,7 @@ class MenuViewModel(
     private val customerDisplayService: CustomerDisplayService? = null,
     private val activeTableId: String? = null,
     private val activeTableLabel: String? = null,
+    private val activeSaleId: String? = null,
     private val tableRepository: TableRepository? = null,
     private val activeStaffIdProvider: (() -> String?)? = null,
     private val openSaleRepository: OpenSaleRepository? = null,
@@ -202,12 +203,28 @@ class MenuViewModel(
         // A non-null activeTableId means we were launched for a specific service spot; null = walk-in.
         openSaleRepository?.let { repo ->
             viewModelScope.launch {
-                val existingSale = repo.loadOpenSaleForSpot(activeTableId)
-                if (existingSale != null && existingSale.lines.isNotEmpty()) {
+                val existingSale = activeSaleId
+                    ?.let { repo.loadOpenSaleById(it) }
+                    ?: repo.loadOpenSaleForSpot(activeTableId)
+                if (existingSale != null) {
                     currentSaleId = existingSale.saleId
+                    currentTableId = existingSale.serviceSpotId ?: activeTableId
+                    currentTableLabel = existingSale.serviceSpotLabel ?: activeTableLabel
                     val restored = existingSale.lines.map { it.toMenuTicketLine() }
-                    activeTableId?.let { MenuTicketDraftStore.save(it, restored) }
-                    mutableState.update { it.copy(ticketLines = restored) }
+                    currentTableId?.let { tableId ->
+                        if (restored.isEmpty()) {
+                            MenuTicketDraftStore.clear(tableId)
+                        } else {
+                            MenuTicketDraftStore.save(tableId, restored)
+                        }
+                    }
+                    mutableState.update {
+                        it.copy(
+                            activeTableId = currentTableId,
+                            activeTableLabel = currentTableLabel,
+                            ticketLines = restored,
+                        )
+                    }
                     syncCustomerDisplayToCurrentTicket()
                 }
             }
@@ -714,6 +731,7 @@ class MenuViewModel(
             customerDisplayService: CustomerDisplayService? = null,
             activeTableId: String? = null,
             activeTableLabel: String? = null,
+            activeSaleId: String? = null,
             tableRepository: TableRepository? = null,
             activeStaffIdProvider: (() -> String?)? = null,
             openSaleRepository: OpenSaleRepository? = null,
@@ -729,6 +747,7 @@ class MenuViewModel(
                     customerDisplayService = customerDisplayService,
                     activeTableId = activeTableId,
                     activeTableLabel = activeTableLabel,
+                    activeSaleId = activeSaleId,
                     tableRepository = tableRepository,
                     activeStaffIdProvider = activeStaffIdProvider,
                     openSaleRepository = openSaleRepository,

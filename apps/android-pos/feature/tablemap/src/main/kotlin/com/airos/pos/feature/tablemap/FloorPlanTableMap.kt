@@ -304,6 +304,7 @@ internal fun FloorPlanTableMap(
     tables: List<RestaurantTable>,
     selectedTableId: String?,
     onSelectTable: (String) -> Unit,
+    onLongPressTable: (String) -> Unit = {},
     style: FloorPlanVisualStyle,
     viewpoint: FloorPlanViewpoint = DefaultFloorPlanViewpoint,
     openTotalLabelsByTableId: Map<String, String> = emptyMap(),
@@ -319,6 +320,7 @@ internal fun FloorPlanTableMap(
                 tables = tables,
                 selectedTableId = selectedTableId,
                 onSelectTable = onSelectTable,
+                onLongPressTable = onLongPressTable,
                 viewpoint = viewpoint,
                 openTotalLabelsByTableId = openTotalLabelsByTableId,
                 onRotate90 = onRotate90,
@@ -331,6 +333,7 @@ internal fun FloorPlanTableMap(
                 tables = tables,
                 selectedTableId = selectedTableId,
                 onSelectTable = onSelectTable,
+                onLongPressTable = onLongPressTable,
                 viewpoint = viewpoint,
                 openTotalLabelsByTableId = openTotalLabelsByTableId,
                 onRotate90 = onRotate90,
@@ -346,6 +349,7 @@ private fun SimpleFloorPlanTableMap(
     tables: List<RestaurantTable>,
     selectedTableId: String?,
     onSelectTable: (String) -> Unit,
+    onLongPressTable: (String) -> Unit,
     viewpoint: FloorPlanViewpoint,
     openTotalLabelsByTableId: Map<String, String>,
     onRotate90: (() -> Unit)? = null,
@@ -473,17 +477,26 @@ private fun SimpleFloorPlanTableMap(
         val currentClampedOffset by rememberUpdatedState(clampedOffset)
         val currentZoomScale by rememberUpdatedState(zoomScale)
         val currentOnSelectTable by rememberUpdatedState(onSelectTable)
+        val currentOnLongPressTable by rememberUpdatedState(onLongPressTable)
 
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInput(Unit) {
-                    detectTapGestures { tapPosition ->
-                        val mapPosition = (tapPosition - currentClampedOffset) / currentZoomScale
-                        currentTableHitTargets.lastOrNull { it.contains(mapPosition) }?.let { hit ->
-                            currentOnSelectTable(hit.tableId)
-                        }
-                    }
+                    detectTapGestures(
+                        onTap = { tapPosition ->
+                            val mapPosition = (tapPosition - currentClampedOffset) / currentZoomScale
+                            currentTableHitTargets.lastOrNull { it.contains(mapPosition) }?.let { hit ->
+                                currentOnSelectTable(hit.tableId)
+                            }
+                        },
+                        onLongPress = { tapPosition ->
+                            val mapPosition = (tapPosition - currentClampedOffset) / currentZoomScale
+                            currentTableHitTargets.lastOrNull { it.contains(mapPosition) }?.let { hit ->
+                                currentOnLongPressTable(hit.tableId)
+                            }
+                        },
+                    )
                 }
                 .pointerInput(viewportWidthPx, viewportHeightPx, contentWidthPx, contentHeightPx) {
                     detectTransformGestures { centroid, pan, zoom, _ ->
