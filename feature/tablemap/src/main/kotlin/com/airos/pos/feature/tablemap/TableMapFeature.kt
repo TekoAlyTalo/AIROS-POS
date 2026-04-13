@@ -83,6 +83,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import org.webrtc.EglBase
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
@@ -682,13 +683,6 @@ fun TableMapScreen(
         }
 
         onSelectTable(table.id)
-
-        val openSales = state.openSalesBySpotId[table.id].orEmpty()
-        when (openSales.size) {
-            0 -> onOpenTableSale(table.id, table.label, null, TableSaleOpenSource.TABLE_TAP)
-            1 -> onOpenTableSale(table.id, table.label, openSales.single().saleId, TableSaleOpenSource.TABLE_TAP)
-            else -> Unit
-        }
     }
 LaunchedEffect(
         desiredPreviewTarget?.tableId,
@@ -1104,7 +1098,12 @@ private fun TableDetailsContent(
                         val selectedSaleIds = transferForThisTable?.selectedSaleIds.orEmpty()
                         val selectedForTransfer = sale.saleId in selectedSaleIds
                         val selectionEnabled = transferForThisTable?.stage == TableTransferStage.SELECTING_BILLS
-                        val selectedSaleCount = selectedSaleIds.size.coerceAtLeast(1)
+                        val selectedSaleCount = if (selectedForTransfer) {
+                            selectedSaleIds.size
+                        } else {
+                            (selectedSaleIds + sale.saleId).size
+                        }.coerceAtLeast(1)
+                        val dragImmediately = transferForThisTable == null || selectedForTransfer || selectionEnabled
                         OpenSaleActionRow(
                             sale = sale,
                             actionLabel = when {
@@ -1114,7 +1113,7 @@ private fun TableDetailsContent(
                                 else -> "Valittu"
                             },
                             selected = selectedForTransfer,
-                            dragImmediately = selectedForTransfer,
+                            dragImmediately = dragImmediately,
                             onOpen = {
                                 if (transferForThisTable == null) {
                                     onOpenSale(sale.saleId)
@@ -1255,17 +1254,36 @@ private fun OpenSaleActionRow(
             .fillMaxWidth()
             .onGloballyPositioned { coords -> originInRoot = coords.positionInRoot() }
             .pointerInput(sale.saleId) {
-                // Enables: long-press -> enter transfer mode, and if the user moves after the long press, start dragging
-                // without requiring another long press.
+                // Tap stays a click; movement past touch slop prepares transfer and starts drag.
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
 
                     if (currentDragImmediately) {
-                        val slopChange = awaitTouchSlopOrCancellation(down.id) { change, _ ->
-                            change.consume()
-                        } ?: return@awaitEachGesture
+                        var slopChange: PointerInputChange? = null
+                        val movedBeforeLongPress = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                            val change = awaitTouchSlopOrCancellation(down.id) { change, _ ->
+                                change.consume()
+                            }
+                            if (change == null) {
+                                false
+                            } else {
+                                slopChange = change
+                                true
+                            }
+                        }
 
-                        currentOnDragStartInRoot(currentOriginInRoot + slopChange.position)
+                        when (movedBeforeLongPress) {
+                            true -> currentOnLongPress()
+                            false -> return@awaitEachGesture
+                            null -> {
+                                currentOnLongPress()
+                                slopChange = awaitTouchSlopOrCancellation(down.id) { change, _ ->
+                                    change.consume()
+                                } ?: return@awaitEachGesture
+                            }
+                        }
+
+                        currentOnDragStartInRoot(currentOriginInRoot + slopChange!!.position)
                         drag(down.id) { change ->
                             change.consume()
                             currentOnDragInRoot(currentOriginInRoot + change.position)
