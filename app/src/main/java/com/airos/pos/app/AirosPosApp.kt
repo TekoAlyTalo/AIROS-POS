@@ -111,17 +111,18 @@ private object Routes {
     const val Shift = "shift"
     const val TableMap = "tablemap"
     const val Menu = "menu"
-    const val MenuPattern = "menu?tableId={tableId}&tableLabel={tableLabel}"
+    const val MenuPattern = "menu?tableId={tableId}&tableLabel={tableLabel}&saleId={saleId}"
     const val Kitchen = "kitchen"
     const val Scanner = "scanner"
     const val Settings = "settings"
     const val PaymentPattern = "payment/{ticketId}"
     const val RefundPattern = "refund/{ticketId}"
 
-    fun menu(tableId: String? = null, tableLabel: String? = null): String {
+    fun menu(tableId: String? = null, tableLabel: String? = null, saleId: String? = null): String {
         val queryParts = buildList {
             tableId?.let { add("tableId=${Uri.encode(it)}") }
             tableLabel?.let { add("tableLabel=${Uri.encode(it)}") }
+            saleId?.let { add("saleId=${Uri.encode(it)}") }
         }
         return if (queryParts.isEmpty()) {
             Menu
@@ -875,16 +876,20 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                         cameraPreviewService = appContainer.cameraPreviewService,
                         onSelectTable = viewModel::selectTable,
                         onViewModeChange = viewModel::setViewMode,
-                        onOpenSelectedTable = { staffId ->
-                            viewModel.openSelectedTable(staffId)
+                        onOpenTableSale = { tableId, tableLabel, saleId ->
                             navController.navigate(
                                 Routes.menu(
-                                    tableId = selectedTableId,
-                                    tableLabel = selectedTableLabel,
+                                    tableId = tableId,
+                                    tableLabel = tableLabel,
+                                    saleId = saleId,
                                 ),
                             )
                         },
-                        onJoinTables = { },
+                        onStartTransferMode = viewModel::startTransferMode,
+                        onToggleTransferSale = viewModel::toggleTransferSale,
+                        onBeginTransferTargetSelection = viewModel::beginTransferTargetSelection,
+                        onTransferTargetSelected = viewModel::transferSelectedBillsTo,
+                        onCancelTransferMode = viewModel::cancelTransferMode,
                         onOpenLivePreview = viewModel::openLivePreview,
                         onRetryLivePreview = viewModel::retryLivePreview,
                         onCloseLivePreview = viewModel::closeLivePreview,
@@ -902,12 +907,17 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                             type = NavType.StringType
                             nullable = true
                         },
+                        navArgument("saleId") {
+                            type = NavType.StringType
+                            nullable = true
+                        },
                     ),
                 ) { entry ->
                     val tableId = entry.arguments?.getString("tableId")
                     val tableLabel = entry.arguments?.getString("tableLabel")
+                    val saleId = entry.arguments?.getString("saleId")
                     val viewModel: MenuViewModel = viewModel(
-                        key = "menu-${tableId ?: "general"}",
+                        key = "menu-${saleId ?: tableId ?: "general"}",
                         factory = MenuViewModel.factory(
                             menuRepository = appContainer.menuRepository,
                             paymentRepository = appContainer.paymentRepository,
@@ -941,6 +951,7 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                             },
                             activeTableId = tableId,
                             activeTableLabel = tableLabel,
+                            activeSaleId = saleId,
                             tableRepository = appContainer.tableRepository,
                             activeStaffIdProvider = {
                                 appContainer.authRepository.activeSession.value?.staffId

@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
@@ -25,6 +26,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -43,6 +45,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -54,11 +57,12 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
-import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.model.CameraConnectionState
 import com.airos.pos.core.model.CameraPreviewRequest
 import com.airos.pos.core.model.CameraPreviewState
 import com.airos.pos.core.model.FloorMap
+import com.airos.pos.core.model.PersistedOpenSale
+import com.airos.pos.core.model.PersistedOpenSaleLine
 import com.airos.pos.core.model.RestaurantTable
 import com.airos.pos.core.ui.KeyValueRow
 import com.airos.pos.core.ui.PosPane
@@ -86,9 +90,21 @@ private const val AREA_FILTER_ALL = "All"
 
 /**
  * Aggregated open-check info for a single service spot.
- * Phase-1 assumption: one open sale per spot. Structure supports multiple in phase 2.
+ * Each service spot can have one or more persisted open sales.
  */
 data class OpenCheckSummary(val count: Int, val totalCents: Int)
+
+enum class TableTransferStage {
+    SELECTING_BILLS,
+    PICKING_TARGET,
+}
+
+data class TableTransferState(
+    val sourceSpotId: String,
+    val sourceSpotLabel: String,
+    val selectedSaleIds: Set<String> = emptySet(),
+    val stage: TableTransferStage = TableTransferStage.SELECTING_BILLS,
+)
 
 data class TableLivePreviewTarget(
     val tableId: String,
@@ -109,6 +125,9 @@ data class TableMapUiState(
     val isLivePreviewDialogVisible: Boolean = false,
     /** Open-check summaries keyed by service spot id. Empty when no open sales exist. */
     val openChecksBySpotId: Map<String, OpenCheckSummary> = emptyMap(),
+    /** Persisted open sales keyed by service spot id. This is the table map bill truth. */
+    val openSalesBySpotId: Map<String, List<PersistedOpenSale>> = emptyMap(),
+    val transferState: TableTransferState? = null,
 )
 
 class TableMapViewModel(
@@ -158,18 +177,37 @@ class TableMapViewModel(
 
         viewModelScope.launch {
             openSaleRepository.observeOpenSales().collect { sales ->
-                val bySpotId = sales
+                val salesBySpotId = sales
                     .filter { it.serviceSpotId != null }
                     .groupBy { it.serviceSpotId!! }
+                    .mapValues { (_, spotSales) -> spotSales.sortedBy { it.createdAtEpochMillis } }
+                val bySpotId = salesBySpotId
                     .mapValues { (_, spotSales) ->
                         OpenCheckSummary(
                             count = spotSales.size,
-                            totalCents = spotSales.sumOf { sale ->
-                                sale.lines.sumOf { it.quantity * it.unitPriceCents }
-                            },
+                            totalCents = spotSales.sumOf { it.openSaleTotalCents() },
                         )
                     }
-                mutableState.update { it.copy(openChecksBySpotId = bySpotId) }
+                mutableState.update { current ->
+                    val transferState = current.transferState
+                    val prunedTransferState = transferState?.let { transfer ->
+                        val sourceSaleIds = salesBySpotId[transfer.sourceSpotId].orEmpty().map { it.saleId }.toSet()
+                        val selected = transfer.selectedSaleIds.intersect(sourceSaleIds)
+                        when {
+                            sourceSaleIds.isEmpty() -> null
+                            selected == transfer.selectedSaleIds -> transfer
+                            else -> transfer.copy(
+                                selectedSaleIds = selected,
+                                stage = if (selected.isEmpty()) TableTransferStage.SELECTING_BILLS else transfer.stage,
+                            )
+                        }
+                    }
+                    current.copy(
+                        openChecksBySpotId = bySpotId,
+                        openSalesBySpotId = salesBySpotId,
+                        transferState = prunedTransferState,
+                    )
+                }
             }
         }
     }
@@ -178,13 +216,108 @@ class TableMapViewModel(
         mutableState.update { it.copy(selectedTableId = tableId, message = null) }
     }
 
-    fun openSelectedTable(staffId: String) {
-        val tableId = mutableState.value.selectedTableId ?: return
+    fun startTransferMode(tableId: String) {
+        val state = mutableState.value
+        val table = state.floorMap?.tables?.firstOrNull { it.id == tableId } ?: return
+        val openSales = state.openSalesBySpotId[tableId].orEmpty()
+        if (openSales.isEmpty()) {
+            mutableState.update {
+                it.copy(
+                    selectedTableId = tableId,
+                    message = "No open bills to transfer from ${table.label}.",
+                    transferState = null,
+                )
+            }
+            return
+        }
+        mutableState.update {
+            it.copy(
+                selectedTableId = tableId,
+                message = null,
+                transferState = TableTransferState(
+                    sourceSpotId = tableId,
+                    sourceSpotLabel = table.label,
+                ),
+            )
+        }
+    }
+
+    fun toggleTransferSale(saleId: String) {
+        mutableState.update { current ->
+            val transfer = current.transferState ?: return@update current
+            if (transfer.stage != TableTransferStage.SELECTING_BILLS) return@update current
+            current.copy(
+                transferState = transfer.copy(
+                    selectedSaleIds = if (saleId in transfer.selectedSaleIds) {
+                        transfer.selectedSaleIds - saleId
+                    } else {
+                        transfer.selectedSaleIds + saleId
+                    },
+                ),
+                message = null,
+            )
+        }
+    }
+
+    fun beginTransferTargetSelection() {
+        mutableState.update { current ->
+            val transfer = current.transferState ?: return@update current
+            if (transfer.selectedSaleIds.isEmpty()) {
+                current.copy(message = "Select at least one bill to transfer.")
+            } else {
+                current.copy(
+                    transferState = transfer.copy(stage = TableTransferStage.PICKING_TARGET),
+                    message = "Select target table for ${transfer.selectedSaleIds.size} bill(s).",
+                )
+            }
+        }
+    }
+
+    fun cancelTransferMode() {
+        mutableState.update { it.copy(transferState = null, message = null) }
+    }
+
+    fun transferSelectedBillsTo(targetSpotId: String) {
+        val state = mutableState.value
+        val transfer = state.transferState ?: return
+        val targetTable = state.floorMap?.tables?.firstOrNull { it.id == targetSpotId } ?: return
+        if (targetSpotId == transfer.sourceSpotId) {
+            mutableState.update {
+                it.copy(message = "Cannot transfer selected bills to the same table.")
+            }
+            return
+        }
+        if (transfer.selectedSaleIds.isEmpty()) {
+            mutableState.update { it.copy(message = "Select at least one bill to transfer.") }
+            return
+        }
+
         viewModelScope.launch {
             mutableState.update { it.copy(busy = true, message = null) }
-            when (val result = tableRepository.openTable(tableId, guestCount = 2, openedByStaffId = staffId)) {
-                is PosResult.Success -> mutableState.update { it.copy(busy = false, message = "${result.value.label} opened.") }
-                is PosResult.Failure -> mutableState.update { it.copy(busy = false, message = result.message) }
+            runCatching {
+                transfer.selectedSaleIds.forEach { saleId ->
+                    openSaleRepository.assignServiceSpot(
+                        saleId = saleId,
+                        serviceSpotId = targetSpotId,
+                        serviceSpotLabel = targetTable.label,
+                    )
+                }
+            }.onSuccess {
+                mutableState.update {
+                    it.copy(
+                        busy = false,
+                        selectedTableId = targetSpotId,
+                        transferState = null,
+                        message = "Transferred ${transfer.selectedSaleIds.size} bill(s) to ${targetTable.label}.",
+                    )
+                }
+            }.onFailure { error ->
+                mutableState.update {
+                    it.copy(
+                        busy = false,
+                        message = error.message ?: "Bill transfer failed.",
+                    )
+                }
             }
         }
     }
@@ -333,8 +466,12 @@ fun TableMapScreen(
     cameraPreviewService: CameraPreviewService,
     onSelectTable: (String) -> Unit,
     onViewModeChange: (StaffTableMapViewPreference) -> Unit,
-    onOpenSelectedTable: (String) -> Unit,
-    onJoinTables: (String) -> Unit,
+    onOpenTableSale: (tableId: String, tableLabel: String, saleId: String?) -> Unit,
+    onStartTransferMode: (String) -> Unit,
+    onToggleTransferSale: (String) -> Unit,
+    onBeginTransferTargetSelection: () -> Unit,
+    onTransferTargetSelected: (String) -> Unit,
+    onCancelTransferMode: () -> Unit,
     onOpenLivePreview: () -> Unit,
     onRetryLivePreview: () -> Unit,
     onCloseLivePreview: () -> Unit,
@@ -365,22 +502,23 @@ fun TableMapScreen(
     val selectedTable = visibleTables.firstOrNull { it.id == state.selectedTableId } ?: visibleTables.firstOrNull()
     val desiredPreviewTarget = selectedTable?.previewTarget()
     val selectedPreviewTarget = state.livePreviewTarget?.takeIf { it.tableId == selectedTable?.id }
+    val transferState = state.transferState
+    val isPickingTransferTarget = transferState?.stage == TableTransferStage.PICKING_TARGET
 
-    var joinSourceTableId by rememberSaveable { mutableStateOf<String?>(null) }
-    var joinSelectedTableIds by rememberSaveable { mutableStateOf(setOf<String>()) }
-    val isJoinMode = joinSourceTableId != null
-    val joinableTableIds = remember(visibleTables, joinSourceTableId) {
-        val sourceId = joinSourceTableId
-        if (sourceId == null) {
-            emptySet()
-        } else {
-            visibleTables
-                .filter { table -> table.id != sourceId }
-                .map { it.id }
-                .toSet()
+    fun handleTableTap(table: RestaurantTable) {
+        onSelectTable(table.id)
+        if (isPickingTransferTarget) {
+            onTransferTargetSelected(table.id)
+            return
+        }
+
+        val openSales = state.openSalesBySpotId[table.id].orEmpty()
+        when (openSales.size) {
+            0 -> onOpenTableSale(table.id, table.label, null)
+            1 -> onOpenTableSale(table.id, table.label, openSales.single().saleId)
+            else -> Unit
         }
     }
-    val joinSourceTable = visibleTables.firstOrNull { it.id == joinSourceTableId }
 
 
     LaunchedEffect(
@@ -409,16 +547,6 @@ fun TableMapScreen(
                 sourceLabel = target.cameraLabel,
             ),
         )
-    }
-
-    LaunchedEffect(joinSourceTableId, visibleTables) {
-        val sourceId = joinSourceTableId ?: return@LaunchedEffect
-        if (visibleTables.none { it.id == sourceId }) {
-            joinSourceTableId = null
-            joinSelectedTableIds = emptySet()
-        } else {
-            joinSelectedTableIds = joinSelectedTableIds.intersect(joinableTableIds)
-        }
     }
 
     LaunchedEffect(activeAreaName, allTables) {
@@ -451,7 +579,15 @@ fun TableMapScreen(
                 state.message?.let {
                     StatusBanner(
                         text = it,
-                        tint = if (it.contains("opened", ignoreCase = true)) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                        tint = if (
+                            it.contains("opened", ignoreCase = true) ||
+                            it.contains("transferred", ignoreCase = true) ||
+                            it.contains("select target", ignoreCase = true)
+                        ) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
                     )
                 }
 
@@ -502,27 +638,16 @@ fun TableMapScreen(
                             verticalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
                             items(visibleTables, key = { it.id }) { table ->
-                                val isJoinSource = table.id == joinSourceTableId
-                                val isJoinSelected = table.id in joinSelectedTableIds
-                                val isJoinSelectable = table.id in joinableTableIds
+                                val isTransferSource = table.id == transferState?.sourceSpotId
                                 TableGridCard(
                                     table = table,
                                     selected = table.id == selectedTable?.id,
-                                    joinMode = isJoinMode,
-                                    joinSource = isJoinSource,
-                                    joinSelected = isJoinSelected,
-                                    joinSelectable = isJoinSelectable,
+                                    transferMode = transferState != null,
+                                    transferSource = isTransferSource,
+                                    transferTargetMode = isPickingTransferTarget && !isTransferSource,
                                     openCheckSummary = state.openChecksBySpotId[table.id],
-                                    onClick = {
-                                        onSelectTable(table.id)
-                                        if (isJoinMode && !isJoinSource && isJoinSelectable) {
-                                            joinSelectedTableIds = if (table.id in joinSelectedTableIds) {
-                                                joinSelectedTableIds - table.id
-                                            } else {
-                                                joinSelectedTableIds + table.id
-                                            }
-                                        }
-                                    },
+                                    onClick = { handleTableTap(table) },
+                                    onLongPress = { onStartTransferMode(table.id) },
                                 )
                             }
                         }
@@ -538,15 +663,11 @@ fun TableMapScreen(
                                 tables = visibleTables,
                                 selectedTableId = selectedTable?.id,
                                 onSelectTable = { tableId ->
-                                    onSelectTable(tableId)
-                                    if (isJoinMode && tableId != joinSourceTableId && tableId in joinableTableIds) {
-                                        joinSelectedTableIds = if (tableId in joinSelectedTableIds) {
-                                            joinSelectedTableIds - tableId
-                                        } else {
-                                            joinSelectedTableIds + tableId
-                                        }
-                                    }
+                                    visibleTables.firstOrNull { it.id == tableId }
+                                        ?.let(::handleTableTap)
+                                        ?: onSelectTable(tableId)
                                 },
+                                onLongPressTable = onStartTransferMode,
                                 style = floorPlanStyle,
                                 viewpoint = floorPlanViewpoint,
                                 openTotalLabelsByTableId = openTotalLabelsBySpotId,
@@ -581,32 +702,20 @@ fun TableMapScreen(
             } else {
                 TableDetailsContent(
                     table = selectedTable,
-                    currentStaffId = currentStaffId,
                     previewState = state.cameraPreviewState,
                     previewTarget = selectedPreviewTarget,
                     isLivePreviewDialogVisible = state.isLivePreviewDialogVisible,
                     cameraPreviewService = cameraPreviewService,
                     canOpenLivePreview = !selectedTable.cameraId.isNullOrBlank() && !state.edgeBaseUrl.isNullOrBlank(),
-                    joinMode = isJoinMode,
                     openCheckSummary = state.openChecksBySpotId[selectedTable.id],
-                    joinSourceTableLabel = joinSourceTable?.label,
-                    joinSelectedTableLabels = visibleTables.filter { it.id in joinSelectedTableIds }.map { it.label },
-                    canConfirmJoin = joinSelectedTableIds.isNotEmpty(),
-                    onOpenSelectedTable = onOpenSelectedTable,
-                    onJoinTables = {
-                        joinSourceTableId = selectedTable.id
-                        joinSelectedTableIds = emptySet()
-                        onSelectTable(selectedTable.id)
-                    },
-                    onCancelJoin = {
-                        joinSourceTableId = null
-                        joinSelectedTableIds = emptySet()
-                    },
-                    onConfirmJoin = {
-                        joinSourceTableId?.let(onJoinTables)
-                        joinSourceTableId = null
-                        joinSelectedTableIds = emptySet()
-                    },
+                    openSales = state.openSalesBySpotId[selectedTable.id].orEmpty(),
+                    transferState = transferState,
+                    onOpenSale = { saleId -> onOpenTableSale(selectedTable.id, selectedTable.label, saleId) },
+                    onOpenNewSale = { onOpenTableSale(selectedTable.id, selectedTable.label, null) },
+                    onStartTransfer = { onStartTransferMode(selectedTable.id) },
+                    onToggleTransferSale = onToggleTransferSale,
+                    onBeginTransferTargetSelection = onBeginTransferTargetSelection,
+                    onCancelTransferMode = onCancelTransferMode,
                     onOpenLivePreview = onOpenLivePreview,
                 )
             }
@@ -630,21 +739,20 @@ fun TableMapScreen(
 @Composable
 private fun TableDetailsContent(
     table: RestaurantTable,
-    currentStaffId: String?,
     previewState: CameraPreviewState,
     previewTarget: TableLivePreviewTarget?,
     isLivePreviewDialogVisible: Boolean,
     cameraPreviewService: CameraPreviewService,
     canOpenLivePreview: Boolean,
-    joinMode: Boolean,
     openCheckSummary: OpenCheckSummary?,
-    joinSourceTableLabel: String?,
-    joinSelectedTableLabels: List<String>,
-    canConfirmJoin: Boolean,
-    onOpenSelectedTable: (String) -> Unit,
-    onJoinTables: (String) -> Unit,
-    onCancelJoin: () -> Unit,
-    onConfirmJoin: () -> Unit,
+    openSales: List<PersistedOpenSale>,
+    transferState: TableTransferState?,
+    onOpenSale: (String) -> Unit,
+    onOpenNewSale: () -> Unit,
+    onStartTransfer: () -> Unit,
+    onToggleTransferSale: (String) -> Unit,
+    onBeginTransferTargetSelection: () -> Unit,
+    onCancelTransferMode: () -> Unit,
     onOpenLivePreview: () -> Unit,
 ) {
     Column(
@@ -666,7 +774,8 @@ private fun TableDetailsContent(
             KeyValueRow("Merged", mergedHint)
         }
 
-        if (joinMode) {
+        val transferForThisTable = transferState?.takeIf { it.sourceSpotId == table.id }
+        if (transferForThisTable != null) {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(24.dp),
@@ -677,38 +786,90 @@ private fun TableDetailsContent(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     Text(
-                        text = "Join mode",
+                        text = "Siirtotila",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        text = joinModeSummary(joinSourceTableLabel, joinSelectedTableLabels),
+                        text = if (transferForThisTable.stage == TableTransferStage.PICKING_TARGET) {
+                            "Valitse kohdepöytä gridistä tai floor planista."
+                        } else {
+                            "Valitse siirrettävät laskut pöydästä ${transferForThisTable.sourceSpotLabel}."
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    openSales.forEach { sale ->
+                        TransferSaleSelectionRow(
+                            sale = sale,
+                            selected = sale.saleId in transferForThisTable.selectedSaleIds,
+                            enabled = transferForThisTable.stage == TableTransferStage.SELECTING_BILLS,
+                            onToggle = { onToggleTransferSale(sale.saleId) },
+                        )
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Button(
-                            onClick = onConfirmJoin,
-                            enabled = canConfirmJoin,
+                            onClick = onBeginTransferTargetSelection,
+                            enabled = transferForThisTable.selectedSaleIds.isNotEmpty() &&
+                                transferForThisTable.stage == TableTransferStage.SELECTING_BILLS,
                         ) {
-                            Text("Confirm join")
+                            Text("Siirrä valitut")
                         }
-                        OutlinedButton(onClick = onCancelJoin) {
-                            Text("Cancel")
+                        OutlinedButton(onClick = onCancelTransferMode) {
+                            Text("Peruuta")
                         }
                     }
                 }
             }
         } else {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(
-                    onClick = { currentStaffId?.let(onOpenSelectedTable) },
-                    enabled = currentStaffId != null,
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Text("Open table")
-                }
-                Button(onClick = { onJoinTables(table.id) }) {
-                    Text("Join tables")
+                    Text(
+                        text = "Avoimet laskut",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    when (openSales.size) {
+                        0 -> {
+                            Text(
+                                text = "Ei avoimia laskuja.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Button(onClick = onOpenNewSale) {
+                                Text("Avaa uusi lasku")
+                            }
+                        }
+                        1 -> {
+                            OpenSaleActionRow(
+                                sale = openSales.single(),
+                                actionLabel = "Avaa lasku",
+                                onOpen = { onOpenSale(openSales.single().saleId) },
+                            )
+                            Button(onClick = onStartTransfer) {
+                                Text("Siirrä lasku")
+                            }
+                        }
+                        else -> {
+                            openSales.forEach { sale ->
+                                OpenSaleActionRow(
+                                    sale = sale,
+                                    actionLabel = "Avaa",
+                                    onOpen = { onOpenSale(sale.saleId) },
+                                )
+                            }
+                            Button(onClick = onStartTransfer) {
+                                Text("Siirrä laskuja")
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -796,6 +957,104 @@ private fun TableDetailsContent(
     }
 }
 
+@Composable
+private fun TransferSaleSelectionRow(
+    sale: PersistedOpenSale,
+    selected: Boolean,
+    enabled: Boolean,
+    onToggle: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.62f),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.7f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
+        ),
+        onClick = {
+            if (enabled) onToggle()
+        },
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Checkbox(
+                checked = selected,
+                onCheckedChange = { if (enabled) onToggle() },
+                enabled = enabled,
+            )
+            OpenSaleSummaryColumn(
+                sale = sale,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = formatOpenTotal(sale.openSaleTotalCents()),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+}
+
+@Composable
+private fun OpenSaleActionRow(
+    sale: PersistedOpenSale,
+    actionLabel: String,
+    onOpen: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.62f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.22f)),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OpenSaleSummaryColumn(
+                sale = sale,
+                modifier = Modifier.weight(1f),
+            )
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = formatOpenTotal(sale.openSaleTotalCents()),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                TextButton(onClick = onOpen) {
+                    Text(actionLabel)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OpenSaleSummaryColumn(
+    sale: PersistedOpenSale,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            text = sale.openSaleLabel(),
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+            text = "${sale.openSaleItemCount()} items",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
 
 private fun buildAreaFilterOptions(tables: List<RestaurantTable>): List<String> {
     val areaNames = tables
@@ -863,46 +1122,52 @@ private fun TableMapAreaSelector(
 private fun TableGridCard(
     table: RestaurantTable,
     selected: Boolean,
-    joinMode: Boolean,
-    joinSource: Boolean,
-    joinSelected: Boolean,
-    joinSelectable: Boolean,
+    transferMode: Boolean,
+    transferSource: Boolean,
+    transferTargetMode: Boolean,
     openCheckSummary: OpenCheckSummary?,
     onClick: () -> Unit,
+    onLongPress: () -> Unit,
 ) {
     val mergedHint = mergedHintFor(table)
     val openTotalLabel = openCheckSummary?.totalCents
         ?.takeIf { it > 0 }
         ?.let(::formatOpenTotal)
+    val hasOpenSales = (openCheckSummary?.count ?: 0) > 0
     val accent = when (table.status.name) {
         "OCCUPIED" -> MaterialTheme.colorScheme.primary
         "DIRTY" -> MaterialTheme.colorScheme.error
         "RESERVED" -> MaterialTheme.colorScheme.tertiary
-        else -> MaterialTheme.colorScheme.secondary
+        else -> if (hasOpenSales) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
     }
 
     val cardColor = when {
-        joinSource -> MaterialTheme.colorScheme.primaryContainer
-        joinSelected -> MaterialTheme.colorScheme.secondaryContainer
+        transferSource -> MaterialTheme.colorScheme.primaryContainer
+        transferTargetMode -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.75f)
         selected -> MaterialTheme.colorScheme.primaryContainer
-        joinMode && !joinSelectable -> MaterialTheme.colorScheme.surfaceVariant
+        transferMode && !transferSource && !transferTargetMode -> MaterialTheme.colorScheme.surfaceVariant
         else -> MaterialTheme.colorScheme.surfaceVariant
     }
 
     Surface(
         modifier = Modifier
             .height(172.dp)
-            .alpha(if (joinMode && !joinSource && !joinSelected && !joinSelectable) 0.42f else 1f)
+            .alpha(if (transferMode && !transferSource && !transferTargetMode) 0.76f else 1f)
             .border(
-                width = if (joinSource || joinSelected) 2.dp else 0.dp,
+                width = if (transferSource || transferTargetMode) 2.dp else 0.dp,
                 color = when {
-                    joinSource -> MaterialTheme.colorScheme.primary
-                    joinSelected -> MaterialTheme.colorScheme.secondary
+                    transferSource -> MaterialTheme.colorScheme.primary
+                    transferTargetMode -> MaterialTheme.colorScheme.secondary
                     else -> Color.Transparent
                 },
                 shape = RoundedCornerShape(24.dp),
             )
-            .clickable(onClick = onClick),
+            .pointerInput(onClick, onLongPress) {
+                detectTapGestures(
+                    onTap = { onClick() },
+                    onLongPress = { onLongPress() },
+                )
+            },
         shape = RoundedCornerShape(24.dp),
         color = cardColor,
     ) {
@@ -941,7 +1206,7 @@ private fun TableGridCard(
             }
 
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                MiniStatusChip(label = table.status.name, tint = accent)
+                MiniStatusChip(label = if (hasOpenSales) "OCCUPIED" else table.status.name, tint = accent)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Surface(
                         shape = RoundedCornerShape(16.dp),
@@ -993,22 +1258,31 @@ private fun MiniStatusChip(label: String, tint: Color) {
     }
 }
 
-private fun joinModeSummary(
-    sourceLabel: String?,
-    selectedLabels: List<String>,
-): String {
-    val primary = sourceLabel ?: "No source table"
-    return if (selectedLabels.isEmpty()) {
-        "Primary: $primary. Select tables from the map."
-    } else {
-        "Primary: $primary. Selected: ${selectedLabels.joinToString(", ")}"
-    }
-}
-
 private fun formatOpenTotal(cents: Int): String {
     val major = cents / 100
     val minor = cents % 100
     return "$major,${minor.toString().padStart(2, '0')} €"
+}
+
+private fun PersistedOpenSale.openSaleTotalCents(): Int = lines.sumOf { it.openLineTotalCents() }
+
+private fun PersistedOpenSale.openSaleItemCount(): Int = lines.sumOf { it.quantity }
+
+private fun PersistedOpenSale.openSaleLabel(): String {
+    val shortId = saleId.takeLast(6).uppercase()
+    return "Lasku $shortId"
+}
+
+private fun PersistedOpenSaleLine.openLineTotalCents(): Int {
+    val subtotal = quantity * unitPriceCents
+    val percent = discountPercent
+    val amountCents = discountAmountCents
+    val discount = when {
+        percent != null -> ((subtotal * percent.coerceIn(0, 100)) / 100).coerceIn(0, subtotal)
+        amountCents != null -> amountCents.coerceIn(0, subtotal)
+        else -> 0
+    }
+    return (subtotal - discount).coerceAtLeast(0)
 }
 
 fun mergedHintFor(table: RestaurantTable): String? {
