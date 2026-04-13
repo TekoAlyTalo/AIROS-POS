@@ -1,0 +1,38 @@
+﻿            raw.startsWith("http://") || raw.startsWith("https://") -> raw
+            raw.startsWith("/") && baseUrl.isNotEmpty() -> "$baseUrl$raw"
+            else -> null
+        }
+        return url?.replace(" ", "%20")
+    }
+
+    private fun readStream(stream: InputStream?): String {
+        if (stream == null) return ""
+        return stream.use { input ->
+            BufferedReader(InputStreamReader(input, StandardCharsets.UTF_8)).use { reader ->
+                buildString {
+                    var line: String?
+                    while (true) {
+                        line = reader.readLine() ?: break
+                        append(line)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun log(message: String) {
+        Log.d("AIROS", "[BackendMenuRepository] $message")
+    }
+}
+
+private fun BackendMenuItemEntity.toMenuItem() = MenuItem(
+    id = id,
+    sku = sku,
+    name = name,
+    category = category,
+    priceCents = priceCents,
+    taxRatePercent = taxRatePercent,
+    barcode = barcode,
+    imageUrl = imageUrl,
+    subcategory = subcategory,
+)
