@@ -38,6 +38,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -1053,16 +1054,20 @@ private fun TableDetailsContent(
         }
 
         val transferForThisTable = transferState?.takeIf { it.sourceSpotId == table.id }
-        if (transferForThisTable != null) {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(24.dp),
-                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            color = if (transferForThisTable != null) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+            } else {
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+            },
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Column(
-                    modifier = Modifier.padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
+                if (transferForThisTable != null) {
                     Text(
                         text = "Siirtotila",
                         style = MaterialTheme.typography.titleMedium,
@@ -1077,75 +1082,64 @@ private fun TableDetailsContent(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    openSales.forEach { sale ->
-                        TransferSaleSelectionRow(
-                            sale = sale,
-                            selected = sale.saleId in transferForThisTable.selectedSaleIds,
-                            enabled = transferForThisTable.stage == TableTransferStage.SELECTING_BILLS,
-                            showCheckbox = false,
-                            dragEnabled = sale.saleId in transferForThisTable.selectedSaleIds,
-                            onDragStartInRoot = { positionInRoot -> onBillDragStartInRoot(transferForThisTable.selectedSaleIds.size, positionInRoot) },
-                            onDragInRoot = onBillDragMoveInRoot,
-                            onDragEnd = onBillDragEnd,
-                            onToggle = { onToggleTransferSale(sale.saleId) },
-                        )
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        OutlinedButton(onClick = onCancelTransferMode) {
-                            Text("Peruuta")
-                        }
-                    }
-                }
-            }
-        } else {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(24.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-            ) {
-                Column(
-                    modifier = Modifier.padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
+                } else {
                     Text(
                         text = "Avoimet laskut",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                     )
-                    when (openSales.size) {
-                        0 -> {
-                            Text(
-                                text = "Ei avoimia laskuja.",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Button(onClick = onOpenNewSale) {
-                                Text("Avaa uusi lasku")
-                            }
-                        }
-                        1 -> {
-                            OpenSaleActionRow(
-                                sale = openSales.single(),
-                                actionLabel = "Napauta avataksesi",
-                                onOpen = { onOpenSale(openSales.single().saleId) },
-                                onLongPress = { onStartTransferForSale(openSales.single().saleId) },
-                                onDragStartInRoot = { pos -> onBillDragStartInRoot(1, pos) },
-                                onDragInRoot = onBillDragMoveInRoot,
-                                onDragEnd = onBillDragEnd,
-                            )
-                        }
-                        else -> {
-                            openSales.forEach { sale ->
-                                OpenSaleActionRow(
-                                    sale = sale,
-                                    actionLabel = "Napauta avataksesi",
-                                    onOpen = { onOpenSale(sale.saleId) },
-                                    onLongPress = { onStartTransferForSale(sale.saleId) },
-                                    onDragStartInRoot = { pos -> onBillDragStartInRoot(1, pos) },
-                                    onDragInRoot = onBillDragMoveInRoot,
-                                    onDragEnd = onBillDragEnd,
-                                )
-                            }
+                }
+
+                if (openSales.isEmpty() && transferForThisTable == null) {
+                    Text(
+                        text = "Ei avoimia laskuja.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Button(onClick = onOpenNewSale) {
+                        Text("Avaa uusi lasku")
+                    }
+                } else {
+                    openSales.forEach { sale ->
+                        val selectedSaleIds = transferForThisTable?.selectedSaleIds.orEmpty()
+                        val selectedForTransfer = sale.saleId in selectedSaleIds
+                        val selectionEnabled = transferForThisTable?.stage == TableTransferStage.SELECTING_BILLS
+                        val selectedSaleCount = selectedSaleIds.size.coerceAtLeast(1)
+                        OpenSaleActionRow(
+                            sale = sale,
+                            actionLabel = when {
+                                transferForThisTable == null -> "Napauta avataksesi"
+                                selectedForTransfer -> "Valittu"
+                                selectionEnabled -> "Napauta valitaksesi"
+                                else -> "Valittu"
+                            },
+                            selected = selectedForTransfer,
+                            dragImmediately = selectedForTransfer,
+                            onOpen = {
+                                if (transferForThisTable == null) {
+                                    onOpenSale(sale.saleId)
+                                } else if (selectionEnabled) {
+                                    onToggleTransferSale(sale.saleId)
+                                }
+                            },
+                            onLongPress = {
+                                if (transferForThisTable == null) {
+                                    onStartTransferForSale(sale.saleId)
+                                } else if (selectionEnabled && !selectedForTransfer) {
+                                    onToggleTransferSale(sale.saleId)
+                                }
+                            },
+                            onDragStartInRoot = { pos -> onBillDragStartInRoot(selectedSaleCount, pos) },
+                            onDragInRoot = onBillDragMoveInRoot,
+                            onDragEnd = onBillDragEnd,
+                        )
+                    }
+                }
+
+                if (transferForThisTable != null) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        OutlinedButton(onClick = onCancelTransferMode) {
+                            Text("Peruuta")
                         }
                     }
                 }
@@ -1236,82 +1230,11 @@ private fun TableDetailsContent(
 }
 
 @Composable
-private fun TransferSaleSelectionRow(
-    sale: PersistedOpenSale,
-    selected: Boolean,
-    enabled: Boolean,
-    showCheckbox: Boolean = true,
-    dragEnabled: Boolean = false,
-    onDragStartInRoot: (Offset) -> Unit = {},
-    onDragInRoot: (Offset) -> Unit = {},
-    onDragEnd: () -> Unit = {},
-    onToggle: () -> Unit,
-) {
-    var originInRoot by remember { mutableStateOf(Offset.Zero) }
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .onGloballyPositioned { coords -> originInRoot = coords.positionInRoot() }
-            .then(
-                if (dragEnabled) {
-                    Modifier.pointerInput(sale.saleId, dragEnabled, originInRoot) {
-                        awaitEachGesture {
-                            val down = awaitFirstDown(requireUnconsumed = false)
-                            var started = false
-                            val slopChange = awaitTouchSlopOrCancellation(down.id) { change, _ ->
-                                started = true
-                                change.consume()
-                            }
-                            if (!started || slopChange == null) return@awaitEachGesture
-
-                            onDragStartInRoot(originInRoot + slopChange.position)
-                            drag(down.id) { change ->
-                                change.consume()
-                                onDragInRoot(originInRoot + change.position)
-                            }
-                            onDragEnd()
-                        }
-                    }
-                } else {
-                    Modifier
-                }
-            ),
-        color = if (selected) {
-            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
-        } else {
-            MaterialTheme.colorScheme.surface.copy(alpha = 0.62f)
-        },
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.7f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
-        ),
-        onClick = {
-            if (enabled) onToggle()
-        },
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OpenSaleSummaryColumn(
-                sale = sale,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                text = formatOpenTotal(sale.openSaleTotalCents()),
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.primary,
-            )
-        }
-    }
-}
-
-@Composable
 private fun OpenSaleActionRow(
     sale: PersistedOpenSale,
     actionLabel: String,
+    selected: Boolean = false,
+    dragImmediately: Boolean = false,
     onOpen: () -> Unit,
     onLongPress: () -> Unit,
     onDragStartInRoot: (Offset) -> Unit = {},
@@ -1319,39 +1242,72 @@ private fun OpenSaleActionRow(
     onDragEnd: () -> Unit = {},
 ) {
     var originInRoot by remember { mutableStateOf(Offset.Zero) }
+    val currentOriginInRoot by rememberUpdatedState(originInRoot)
+    val currentDragImmediately by rememberUpdatedState(dragImmediately)
+    val currentOnOpen by rememberUpdatedState(onOpen)
+    val currentOnLongPress by rememberUpdatedState(onLongPress)
+    val currentOnDragStartInRoot by rememberUpdatedState(onDragStartInRoot)
+    val currentOnDragInRoot by rememberUpdatedState(onDragInRoot)
+    val currentOnDragEnd by rememberUpdatedState(onDragEnd)
 
     Surface(
         modifier = Modifier
             .fillMaxWidth()
             .onGloballyPositioned { coords -> originInRoot = coords.positionInRoot() }
-            .pointerInput(sale.saleId, originInRoot, onLongPress) {
+            .pointerInput(sale.saleId) {
                 // Enables: long-press -> enter transfer mode, and if the user moves after the long press, start dragging
                 // without requiring another long press.
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
+
+                    if (currentDragImmediately) {
+                        val slopChange = awaitTouchSlopOrCancellation(down.id) { change, _ ->
+                            change.consume()
+                        } ?: return@awaitEachGesture
+
+                        currentOnDragStartInRoot(currentOriginInRoot + slopChange.position)
+                        drag(down.id) { change ->
+                            change.consume()
+                            currentOnDragInRoot(currentOriginInRoot + change.position)
+                        }
+                        currentOnDragEnd()
+                        return@awaitEachGesture
+                    }
+
                     val longPress = awaitLongPressOrCancellation(down.id)
                     if (longPress == null) return@awaitEachGesture
 
                     // Enter transfer mode immediately on long-press.
-                    onLongPress()
+                    currentOnLongPress()
 
                     // If the user moves (touch slop) after the long press, start a drag using the finger position.
                     val slopChange = awaitTouchSlopOrCancellation(down.id) { change, _ ->
                         change.consume()
                     } ?: return@awaitEachGesture
 
-                    onDragStartInRoot(originInRoot + slopChange.position)
+                    currentOnDragStartInRoot(currentOriginInRoot + slopChange.position)
                     drag(down.id) { change ->
                         change.consume()
-                        onDragInRoot(originInRoot + change.position)
+                        currentOnDragInRoot(currentOriginInRoot + change.position)
                     }
-                    onDragEnd()
+                    currentOnDragEnd()
                 }
             },
-        onClick = onOpen,
+        onClick = currentOnOpen,
         shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.62f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.22f)),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+        } else {
+            MaterialTheme.colorScheme.surface.copy(alpha = 0.62f)
+        },
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (selected) {
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+            } else {
+                MaterialTheme.colorScheme.outline.copy(alpha = 0.22f)
+            },
+        ),
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
