@@ -835,9 +835,10 @@ private fun FloorPlanTableNode(
     val displayStatus = resolveTableDisplayStatus(
         physicalStatus = table.status,
         openBillCount = openBillCount,
+        attentionFlag = table.attentionFlag,
     )
+    val statusTick = rememberStatusTickPresentation(displayStatus)
     val accent = displayStatus.floorPlanAccent()
-    val statusLabel = displayStatus.label
     val shape: Shape = if (isRound) CircleShape else RoundedCornerShape(if (isMerged) 28.dp else 22.dp)
 
     Surface(
@@ -898,15 +899,28 @@ private fun FloorPlanTableNode(
                 )
 
 
+                val tickTint = statusTick.chipTint ?: accent
+                val tickTextColor = statusTick.textTint ?: accent
                 Surface(
                     shape = RoundedCornerShape(999.dp),
-                    color = accent.copy(alpha = if (statusTick.attentionVisible) 0.26f else 0.16f),
+                    color = tickTint.copy(
+                        alpha = ((if (statusTick.attentionVisible) 0.30f else 0.16f) * statusTick.pulseAlpha)
+                            .coerceIn(0.16f, 0.52f)
+                    ),
+                    border = if (statusTick.attentionVisible) {
+                        BorderStroke(
+                            1.dp,
+                            tickTint.copy(alpha = (0.34f * statusTick.pulseAlpha).coerceIn(0.34f, 0.74f)),
+                        )
+                    } else {
+                        null
+                    },
                 ) {
                     Text(
                         text = statusTick.label,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                         style = MaterialTheme.typography.labelSmall,
-                        color = accent,
+                        color = tickTextColor.copy(alpha = (0.96f * statusTick.pulseAlpha).coerceIn(0.96f, 1f)),
                         fontWeight = FontWeight.SemiBold,
                     )
                 }
@@ -936,7 +950,7 @@ private fun FloorPlanTableNode(
                         )
                     }
                     Text(
-                        text = "${table.guestCount}G · ${table.seats}S",
+                        text = "${table.guestCount}C · ${table.seats}S",
                         style = MaterialTheme.typography.labelMedium,
                         color = TableMapVisualTokens.TextSecondary,
                         textAlign = TextAlign.Center,

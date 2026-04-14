@@ -1,5 +1,6 @@
 package com.airos.pos.feature.tablemap
 
+import com.airos.pos.core.model.TableAttentionFlag
 import com.airos.pos.core.model.TableStatus
 
 internal enum class TableDisplayStatusKind {
@@ -16,17 +17,32 @@ internal data class TableDisplayStatus(
     val label: String,
     val physicalStatus: TableStatus,
     val openBillCount: Int,
+    val attentionFlag: TableAttentionFlag = TableAttentionFlag.NONE,
 ) {
     val physicalLabel: String
         get() = physicalStatus.physicalStatusLabel()
 
     val differsFromPhysical: Boolean
         get() = label != physicalLabel
+
+    val hasCheckAttention: Boolean
+        get() = attentionFlag == TableAttentionFlag.CHECK_TABLE &&
+            kind in setOf(TableDisplayStatusKind.OCCUPIED, TableDisplayStatusKind.OPEN_BILL)
+
+    val hasServiceAttention: Boolean
+        get() = !hasCheckAttention &&
+            physicalStatus == TableStatus.OCCUPIED &&
+            openBillCount <= 0 &&
+            kind == TableDisplayStatusKind.OCCUPIED
+
+    val hasAnyAttention: Boolean
+        get() = hasCheckAttention || hasServiceAttention
 }
 
 internal fun resolveTableDisplayStatus(
     physicalStatus: TableStatus,
     openBillCount: Int,
+    attentionFlag: TableAttentionFlag = TableAttentionFlag.NONE,
 ): TableDisplayStatus {
     val safeOpenBillCount = openBillCount.coerceAtLeast(0)
     val kind = when {
@@ -43,6 +59,7 @@ internal fun resolveTableDisplayStatus(
         label = kind.labelFor(safeOpenBillCount),
         physicalStatus = physicalStatus,
         openBillCount = safeOpenBillCount,
+        attentionFlag = attentionFlag,
     )
 }
 
@@ -58,13 +75,13 @@ private fun TableStatus.toDisplayStatusKind(): TableDisplayStatusKind {
 private fun TableDisplayStatusKind.labelFor(openBillCount: Int): String {
     return when (this) {
         TableDisplayStatusKind.AVAILABLE -> "Free"
-        TableDisplayStatusKind.OPEN_BILL -> if (openBillCount == 1) "Open bill" else "Open bills"
-        TableDisplayStatusKind.OCCUPIED -> "Occupied"
-        TableDisplayStatusKind.DIRTY -> "Needs cleaning"
-        TableDisplayStatusKind.RESERVED -> "Reserved"
-        TableDisplayStatusKind.RESERVED_WITH_OPEN_BILL -> {
-            if (openBillCount == 1) "Reserved + bill" else "Reserved + bills"
-        }
+        TableDisplayStatusKind.OPEN_BILL,
+        TableDisplayStatusKind.OCCUPIED,
+        -> "Occupied"
+        TableDisplayStatusKind.DIRTY -> "Needs Cleaning"
+        TableDisplayStatusKind.RESERVED,
+        TableDisplayStatusKind.RESERVED_WITH_OPEN_BILL,
+        -> "Reserved"
     }
 }
 
@@ -72,7 +89,7 @@ private fun TableStatus.physicalStatusLabel(): String {
     return when (this) {
         TableStatus.AVAILABLE -> "Free"
         TableStatus.OCCUPIED -> "Occupied"
-        TableStatus.DIRTY -> "Needs cleaning"
+        TableStatus.DIRTY -> "Needs Cleaning"
         TableStatus.RESERVED -> "Reserved"
     }
 }

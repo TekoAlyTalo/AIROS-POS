@@ -628,6 +628,40 @@ fun TableMapScreen(
         state.openChecksBySpotId.mapValues { (_, summary) -> summary.count }
     }
     val selectedTable = visibleTables.firstOrNull { it.id == state.selectedTableId } ?: visibleTables.firstOrNull()
+    val attentionBannerEntries = remember(visibleTables, state.openChecksBySpotId, selectedTable?.id) {
+        val selectedId = selectedTable?.id
+        visibleTables
+            .sortedWith(compareByDescending<RestaurantTable> { it.id == selectedId }.thenBy { it.label })
+            .flatMap { table ->
+                val displayStatus = resolveTableDisplayStatus(
+                    physicalStatus = table.status,
+                    openBillCount = state.openChecksBySpotId[table.id]?.count ?: 0,
+                    attentionFlag = table.attentionFlag,
+                )
+                if (!displayStatus.hasAnyAttention) {
+                    emptyList()
+                } else {
+                    table.label
+                        .split("+", "&")
+                        .map { it.trim() }
+                        .filter { it.isNotBlank() }
+                        .ifEmpty { listOf(table.label) }
+                        .map { label -> label to displayStatus }
+                }
+            }
+    }
+    var attentionBannerIndex by remember(attentionBannerEntries) { mutableStateOf(0) }
+    LaunchedEffect(attentionBannerEntries) {
+        attentionBannerIndex = 0
+        if (attentionBannerEntries.size <= 1) return@LaunchedEffect
+        while (true) {
+            delay(2400)
+            attentionBannerIndex = (attentionBannerIndex + 1) % attentionBannerEntries.size
+        }
+    }
+    val currentAttentionBanner = attentionBannerEntries
+        .takeIf { it.isNotEmpty() }
+        ?.get(attentionBannerIndex.coerceIn(0, (attentionBannerEntries.size - 1).coerceAtLeast(0)))
     val desiredPreviewTarget = selectedTable?.previewTarget()
     val selectedPreviewTarget = state.livePreviewTarget?.takeIf { it.tableId == selectedTable?.id }
     val transferState = state.transferState
@@ -744,22 +778,29 @@ LaunchedEffect(
                     .padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                state.message?.let {
-                    StatusBanner(
-                        text = it,
-                        tint = if (
-                            it.contains("opened", ignoreCase = true) ||
-                            it.contains("transferred", ignoreCase = true) ||
-                            it.contains("select target", ignoreCase = true)
-                        ) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.error
-                        },
-                    )
+                when {
+                    state.message != null -> {
+                        StatusBanner(
+                            text = state.message,
+                            tint = if (
+                                state.message.contains("opened", ignoreCase = true) ||
+                                state.message.contains("transferred", ignoreCase = true) ||
+                                state.message.contains("select target", ignoreCase = true)
+                            ) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.error
+                            },
+                        )
+                    }
+                    currentAttentionBanner != null -> {
+                        val (attentionLabel, attentionDisplayStatus) = currentAttentionBanner
+                        TableAttentionTickerBanner(
+                            tableLabel = attentionLabel,
+                            displayStatus = attentionDisplayStatus,
+                        )
+                    }
                 }
-
-
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1024,13 +1065,15 @@ private fun TableDetailsContent(
     val displayStatus = resolveTableDisplayStatus(
         physicalStatus = table.status,
         openBillCount = openCheckSummary?.count ?: 0,
+        attentionFlag = table.attentionFlag,
     )
+    val statusTick = rememberStatusTickPresentation(displayStatus)
     Column(
         modifier = Modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         KeyValueRow("Area", table.areaName)
-        KeyValueRow("Status", displayStatus.label)
+        KeyValueRow("Status", if (displayStatus.hasAnyAttention) statusTick.label else displayStatus.label)
         if (displayStatus.differsFromPhysical) {
             KeyValueRow("Physical status", displayStatus.physicalLabel)
         }
@@ -1453,7 +1496,9 @@ private fun TableGridCard(
     val displayStatus = resolveTableDisplayStatus(
         physicalStatus = table.status,
         openBillCount = openCheckSummary?.count ?: 0,
+        attentionFlag = table.attentionFlag,
     )
+    val statusTick = rememberStatusTickPresentation(displayStatus)
     val accent = when (displayStatus.kind) {
         TableDisplayStatusKind.OCCUPIED,
         TableDisplayStatusKind.OPEN_BILL,
@@ -1480,10 +1525,15 @@ private fun TableGridCard(
             .height(172.dp)
             .alpha(if (transferMode && !transferSource && !transferTargetMode) 0.76f else 1f)
             .border(
-                width = if (transferSource || transferTargetMode) 2.dp else 0.dp,
+                width = when {
+                    transferSource || transferTargetMode -> 2.dp
+                    statusTick.attentionVisible -> 2.dp
+                    else -> 0.dp
+                },
                 color = when {
                     transferSource -> MaterialTheme.colorScheme.primary
                     transferTargetMode -> MaterialTheme.colorScheme.secondary
+                    statusTick.attentionVisible -> (statusTick.chipTint ?: accent).copy(alpha = (0.58f * statusTick.pulseAlpha).coerceIn(0.58f, 0.84f))
                     else -> Color.Transparent
                 },
                 shape = RoundedCornerShape(24.dp),
@@ -1532,7 +1582,13 @@ private fun TableGridCard(
             }
 
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                MiniStatusChip(label = displayStatus.label, tint = accent)
+                MiniStatusChip(
+                    label = statusTick.label,
+                    tint = statusTick.chipTint ?: accent,
+                    textTint = statusTick.textTint ?: accent,
+                    emphasize = statusTick.attentionVisible,
+                    pulseAlpha = statusTick.pulseAlpha,
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Surface(
                         shape = RoundedCornerShape(16.dp),
@@ -1568,17 +1624,72 @@ private fun TableGridCard(
     }
 }
 
+
+@Composable
+private fun TableAttentionTickerBanner(
+    tableLabel: String,
+    displayStatus: TableDisplayStatus,
+) {
+    val statusTick = rememberStatusTickPresentation(displayStatus)
+    val bannerTint = statusTick.chipTint ?: when {
+        displayStatus.hasCheckAttention -> MaterialTheme.colorScheme.error
+        else -> Color(0xFFFFB23A)
+    }
+    val textTint = statusTick.textTint ?: bannerTint
+    val bannerLabel = when {
+        displayStatus.hasCheckAttention && statusTick.attentionVisible -> "CHECK TABLE"
+        displayStatus.hasServiceAttention && statusTick.attentionVisible -> "SERVE"
+        else -> displayStatus.label.uppercase()
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = bannerTint.copy(alpha = (0.16f * statusTick.pulseAlpha).coerceIn(0.16f, 0.24f)),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            bannerTint.copy(alpha = (0.56f * statusTick.pulseAlpha).coerceIn(0.56f, 0.84f)),
+        ),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = tableLabel,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = textTint,
+            )
+            Text(
+                text = bannerLabel,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Black,
+                color = textTint,
+            )
+        }
+    }
+}
+
 @Composable
 private fun MiniStatusChip(
     label: String,
     tint: Color,
+    textTint: Color = tint,
     emphasize: Boolean = false,
+    pulseAlpha: Float = 1f,
 ) {
     Surface(
         shape = RoundedCornerShape(999.dp),
-        color = tint.copy(alpha = if (emphasize) 0.24f else 0.14f),
+        color = tint.copy(alpha = ((if (emphasize) 0.26f else 0.14f) * pulseAlpha).coerceIn(0.14f, 0.34f)),
         border = if (emphasize) {
-            androidx.compose.foundation.BorderStroke(1.dp, tint.copy(alpha = 0.52f))
+            androidx.compose.foundation.BorderStroke(
+                1.dp,
+                tint.copy(alpha = (0.54f * pulseAlpha).coerceIn(0.54f, 0.82f)),
+            )
         } else {
             null
         },
@@ -1586,7 +1697,7 @@ private fun MiniStatusChip(
         Text(
             text = label,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-            color = tint,
+            color = textTint.copy(alpha = if (emphasize) 1f else 0.98f),
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
         )
