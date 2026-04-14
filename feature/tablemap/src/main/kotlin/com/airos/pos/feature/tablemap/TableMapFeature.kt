@@ -2,6 +2,9 @@ package com.airos.pos.feature.tablemap
 
 import android.content.Context
 import android.util.Log
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -20,6 +23,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -44,6 +48,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
@@ -109,8 +114,9 @@ private const val SIGNALING_PORT = 8000
 private const val PREVIEW_TAG = "TableLivePreview"
 private const val PREVIEW_SURFACE_ASPECT_RATIO = 4f / 3f
 private const val AREA_FILTER_ALL = "All"
-private const val TOP_TICKER_ROTATION_INTERVAL_MS = 2_400L
+private const val TOP_TICKER_SCROLL_PX_PER_SECOND = 77f
 private const val TRANSFERRED_MESSAGE_MAX_APPEARANCES = 2
+private const val TOP_TICKER_SEPARATOR = "✦"
 
 // Compose pointer event consumption helper.
 // Our current Compose version does not expose PointerInputChange.consume(), so we provide a local no-op.
@@ -434,7 +440,7 @@ class TableMapViewModel(
                         busy = false,
                         selectedTableId = targetSpotId,
                         transferState = null,
-                        message = "Transferred ${transfer.selectedSaleIds.size} bill(s) to ${targetTable.label}.",
+                        message = "Transferred ${transfer.selectedSaleIds.size} bill(s) ${transfer.sourceSpotLabel} -> ${targetTable.label}.",
                     )
                 }
             }.onFailure { error ->
@@ -697,27 +703,6 @@ fun TableMapScreen(
             addAll(attentionTickerEntries)
         }
     }
-    var tickerIndex by remember(tickerEntries) { mutableStateOf(0) }
-    LaunchedEffect(tickerEntries) {
-        tickerIndex = 0
-        if (tickerEntries.size <= 1) return@LaunchedEffect
-        while (true) {
-            delay(TOP_TICKER_ROTATION_INTERVAL_MS)
-            tickerIndex = (tickerIndex + 1) % tickerEntries.size
-        }
-    }
-    val currentTickerEntry = tickerEntries
-        .takeIf { it.isNotEmpty() }
-        ?.get(tickerIndex.coerceIn(0, (tickerEntries.size - 1).coerceAtLeast(0)))
-    LaunchedEffect(currentTickerEntry, transferredMessageAppearances) {
-        if (
-            currentTickerEntry?.kind == TableTickerEntryKind.TRANSFERRED &&
-            transferredMessageAppearances < TRANSFERRED_MESSAGE_MAX_APPEARANCES
-        ) {
-            delay(TOP_TICKER_ROTATION_INTERVAL_MS)
-            transferredMessageAppearances += 1
-        }
-    }
     val desiredPreviewTarget = selectedTable?.previewTarget()
     val selectedPreviewTarget = state.livePreviewTarget?.takeIf { it.tableId == selectedTable?.id }
     val transferState = state.transferState
@@ -849,8 +834,15 @@ LaunchedEffect(
                             },
                         )
                     }
-                    currentTickerEntry != null -> {
-                        TableTopTickerRibbon(entry = currentTickerEntry)
+                    tickerEntries.isNotEmpty() -> {
+                        TableTopTickerRibbon(
+                            entries = tickerEntries,
+                            onStreamCycleComplete = {
+                                if (showTransferredMessage) {
+                                    transferredMessageAppearances += 1
+                                }
+                            },
+                        )
                     }
                 }
 
@@ -1572,7 +1564,7 @@ private fun TableGridCard(
         attentionFlag = table.attentionFlag,
     )
     val statusTick = rememberStatusTickPresentation(displayStatus)
-    val attentionTint = statusTick.chipTint
+    val attentionTint = displayStatus.attentionVisualTint()
     val accent = when (displayStatus.kind) {
         TableDisplayStatusKind.OCCUPIED,
         TableDisplayStatusKind.OPEN_BILL,
@@ -1587,9 +1579,9 @@ private fun TableGridCard(
     }
 
     val cardColor = when {
+        attentionTint != null -> attentionTint.copy(alpha = if (selected) 0.20f else 0.14f)
         transferSource -> MaterialTheme.colorScheme.primaryContainer
         transferTargetMode -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.75f)
-        statusTick.attentionVisible && attentionTint != null -> attentionTint.copy(alpha = 0.18f)
         selected -> MaterialTheme.colorScheme.primaryContainer
         transferMode && !transferSource && !transferTargetMode -> MaterialTheme.colorScheme.surfaceVariant
         else -> MaterialTheme.colorScheme.surfaceVariant
@@ -1601,14 +1593,14 @@ private fun TableGridCard(
             .alpha(if (transferMode && !transferSource && !transferTargetMode) 0.76f else 1f)
             .border(
                 width = when {
+                    attentionTint != null -> 2.dp
                     transferSource || transferTargetMode -> 2.dp
-                    statusTick.attentionVisible -> 2.dp
                     else -> 0.dp
                 },
                 color = when {
+                    attentionTint != null -> attentionTint.copy(alpha = if (selected) 0.78f else 0.58f)
                     transferSource -> MaterialTheme.colorScheme.primary
                     transferTargetMode -> MaterialTheme.colorScheme.secondary
-                    statusTick.attentionVisible -> (statusTick.chipTint ?: accent).copy(alpha = 0.58f)
                     else -> Color.Transparent
                 },
                 shape = RoundedCornerShape(24.dp),
@@ -1652,16 +1644,16 @@ private fun TableGridCard(
                     )
                 }
                 if (mergedHint != null) {
-                    MiniStatusChip(label = mergedHint, tint = accent)
+                    MiniStatusChip(label = mergedHint, tint = attentionTint ?: accent)
                 }
             }
 
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 MiniStatusChip(
                     label = statusTick.label,
-                    tint = statusTick.chipTint ?: accent,
-                    textTint = statusTick.textTint ?: accent,
-                    emphasize = statusTick.attentionVisible,
+                    tint = attentionTint ?: accent,
+                    textTint = attentionTint ?: accent,
+                    emphasize = attentionTint != null,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Surface(
@@ -1690,7 +1682,7 @@ private fun TableGridCard(
                 if (openTotalLabel != null) {
                     MiniStatusChip(
                         label = openTotalLabel,
-                        tint = MaterialTheme.colorScheme.tertiary,
+                        tint = attentionTint ?: MaterialTheme.colorScheme.tertiary,
                     )
                 }
             }
@@ -1699,53 +1691,138 @@ private fun TableGridCard(
 }
 
 
+private fun TableTickerEntry.fullTickerMessage(): String {
+    val tableText = tableLabel.orEmpty()
+    return when (kind) {
+        TableTickerEntryKind.SERVE -> "SERVE $tableText"
+        TableTickerEntryKind.CHECK -> "CHECK $tableText"
+        TableTickerEntryKind.NEEDS_CLEANING -> "NEEDS CLEANING $tableText"
+        TableTickerEntryKind.TRANSFERRED -> message?.toTransferredTickerMessage() ?: "BILL TRANSFERRED"
+    }.trim()
+}
+
+private fun String.toTransferredTickerMessage(): String {
+    val normalized = trim().removeSuffix(".")
+    val detail = normalized
+        .replace(Regex("^transferred\\s+", RegexOption.IGNORE_CASE), "")
+        .replace(" -> ", " → ")
+    return "BILL TRANSFERRED ${detail.ifBlank { normalized }}".trim()
+}
+
+private fun TableTickerEntry.tickerColor(): Color {
+    return when (kind) {
+        TableTickerEntryKind.SERVE -> TableServiceAttentionColor
+        TableTickerEntryKind.CHECK -> TableCheckAttentionColor
+        TableTickerEntryKind.NEEDS_CLEANING -> TableMapVisualTokens.DirtyColor
+        TableTickerEntryKind.TRANSFERRED -> TableMapVisualTokens.AccentText.copy(alpha = 0.82f)
+    }
+}
+
 @Composable
 private fun TableTopTickerRibbon(
-    entry: TableTickerEntry,
+    entries: List<TableTickerEntry>,
+    onStreamCycleComplete: () -> Unit = {},
 ) {
-    val tint = when (entry.kind) {
-        TableTickerEntryKind.CHECK -> TableCheckAttentionColor
-        TableTickerEntryKind.SERVE -> TableServiceAttentionColor
-        TableTickerEntryKind.NEEDS_CLEANING -> TableMapVisualTokens.DirtyColor
-        TableTickerEntryKind.TRANSFERRED -> TableMapVisualTokens.AccentText
+    val scrollOffset = remember { Animatable(0f) }
+    var tickerViewportWidth by remember { mutableStateOf(0) }
+    var tickerGroupWidth by remember { mutableStateOf(0) }
+    val currentOnStreamCycleComplete by rememberUpdatedState(onStreamCycleComplete)
+    val repeatCount = remember(tickerViewportWidth, tickerGroupWidth) {
+        when {
+            tickerViewportWidth <= 0 || tickerGroupWidth <= 0 -> 2
+            else -> (tickerViewportWidth / tickerGroupWidth) + 3
+        }
     }
-    val label = when (entry.kind) {
-        TableTickerEntryKind.CHECK -> "CHECK"
-        TableTickerEntryKind.SERVE -> "SERVE"
-        TableTickerEntryKind.NEEDS_CLEANING -> "NEEDS CLEANING"
-        TableTickerEntryKind.TRANSFERRED -> "TRANSFERRED"
-    }
-    val detail = entry.message ?: entry.tableLabel
 
-    Box(
+    LaunchedEffect(entries, tickerGroupWidth) {
+        if (entries.isEmpty() || tickerGroupWidth <= 0) {
+            scrollOffset.snapTo(0f)
+            return@LaunchedEffect
+        }
+        val cycleDistance = tickerGroupWidth.toFloat()
+        val durationMillis = ((cycleDistance / TOP_TICKER_SCROLL_PX_PER_SECOND) * 1000f)
+            .roundToInt()
+            .coerceAtLeast(3_200)
+        while (true) {
+            scrollOffset.snapTo(0f)
+            scrollOffset.animateTo(
+                targetValue = cycleDistance,
+                animationSpec = tween(durationMillis = durationMillis, easing = LinearEasing),
+            )
+            currentOnStreamCycleComplete()
+        }
+    }
+
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(6.dp))
-            .background(tint.copy(alpha = 0.16f)),
+            .height(30.dp)
+            .clip(RoundedCornerShape(4.dp))
+            .background(TableMapVisualTokens.PanelAltColor.copy(alpha = 0.78f))
+            .border(
+                width = 1.dp,
+                color = TableMapVisualTokens.BorderColor,
+                shape = RoundedCornerShape(4.dp),
+            ),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 7.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .fillMaxHeight()
+                .clipToBounds()
+                .onGloballyPositioned { coords -> tickerViewportWidth = coords.size.width },
+            contentAlignment = Alignment.CenterStart,
         ) {
+            Row(
+                modifier = Modifier
+                    .wrapContentWidth(unbounded = true)
+                    .offset { IntOffset(-scrollOffset.value.roundToInt(), 0) },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                repeat(repeatCount) { groupIndex ->
+                    TableTickerSegmentGroup(
+                        entries = entries,
+                        modifier = if (groupIndex == 0) {
+                            Modifier.onGloballyPositioned { coords -> tickerGroupWidth = coords.size.width }
+                        } else {
+                            Modifier
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TableTickerSegmentGroup(
+    entries: List<TableTickerEntry>,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier.wrapContentWidth(unbounded = true),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        entries.forEach { entry ->
             Text(
-                text = label,
+                text = entry.fullTickerMessage(),
+                modifier = Modifier.padding(horizontal = 10.dp),
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Black,
-                color = tint,
+                color = entry.tickerColor(),
+                maxLines = 1,
+                softWrap = false,
             )
-            if (!detail.isNullOrBlank()) {
-                Text(
-                    text = detail,
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = TableMapVisualTokens.TextPrimary,
-                    maxLines = 1,
-                )
-            }
+            Text(
+                text = TOP_TICKER_SEPARATOR,
+                modifier = Modifier.padding(horizontal = 8.dp),
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = TableMapVisualTokens.TextMuted.copy(alpha = 0.74f),
+                maxLines = 1,
+                softWrap = false,
+            )
         }
     }
 }

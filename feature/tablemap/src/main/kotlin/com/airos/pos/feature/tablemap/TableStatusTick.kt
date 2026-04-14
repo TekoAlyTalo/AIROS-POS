@@ -15,7 +15,7 @@ private const val ATTENTION_TICK_INTERVAL_MS = 2_400L
 
 internal val TableCheckAttentionColor = Color(0xFFFF5353)
 internal val TableServiceAttentionColor = Color(0xFFFFB23A)
-internal val TableServiceAttentionTextColor = Color(0xFFFFD36A)
+internal val TableServiceAttentionTextColor = TableServiceAttentionColor
 
 internal data class StatusTickPresentation(
     val label: String,
@@ -74,5 +74,13 @@ private fun TableDisplayStatus.primaryTickLabel(): String {
         TableDisplayStatusKind.RESERVED,
         TableDisplayStatusKind.RESERVED_WITH_OPEN_BILL,
         -> "Reserved"
+    }
+}
+
+internal fun TableDisplayStatus.attentionVisualTint(): Color? {
+    return when {
+        hasCheckAttention -> TableCheckAttentionColor
+        hasServiceAttention -> TableServiceAttentionColor
+        else -> null
     }
 }
