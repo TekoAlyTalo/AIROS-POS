@@ -838,7 +838,7 @@ private fun FloorPlanTableNode(
         attentionFlag = table.attentionFlag,
     )
     val statusTick = rememberStatusTickPresentation(displayStatus)
-    val attentionTint = statusTick.chipTint
+    val attentionTint = displayStatus.attentionVisualTint()
     val accent = displayStatus.floorPlanAccent()
     val shape: Shape = if (isRound) CircleShape else RoundedCornerShape(if (isMerged) 28.dp else 22.dp)
 
@@ -853,17 +853,17 @@ private fun FloorPlanTableNode(
                 height = rect.height.toDp(density),
             ),
         shape = shape,
-        color = if (selected) Color(0xFF16272C) else FloorPlanTableSurface,
+        color = if (selected && attentionTint == null) Color(0xFF16272C) else FloorPlanTableSurface,
         border = BorderStroke(
             width = when {
                 dropHovered -> 3.dp
-                statusTick.attentionVisible && attentionTint != null -> 2.dp
+                attentionTint != null -> 2.dp
                 selected -> 2.dp
                 else -> 1.dp
             },
             color = when {
                 dropHovered -> FloorPlanSelectionColor
-                statusTick.attentionVisible && attentionTint != null -> attentionTint
+                attentionTint != null -> attentionTint
                 selected -> FloorPlanSelectionColor
                 else -> accent.copy(alpha = 0.56f)
             },
@@ -880,7 +880,7 @@ private fun FloorPlanTableNode(
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(
-                            (attentionTint ?: accent).copy(alpha = if (statusTick.attentionVisible) 0.30f else 0.24f),
+                            (attentionTint ?: accent).copy(alpha = if (attentionTint != null) 0.30f else 0.24f),
                             FloorPlanTableCore.copy(alpha = 0.98f),
                         ),
                     ),
@@ -902,14 +902,14 @@ private fun FloorPlanTableNode(
                 )
 
 
-                val tickTint = statusTick.chipTint ?: accent
-                val tickTextColor = statusTick.textTint ?: accent
+                val tickTint = attentionTint ?: accent
+                val tickTextColor = attentionTint ?: accent
                 Surface(
                     shape = RoundedCornerShape(999.dp),
                     color = tickTint.copy(
-                        alpha = if (statusTick.attentionVisible) 0.30f else 0.16f
+                        alpha = if (attentionTint != null) 0.30f else 0.16f
                     ),
-                    border = if (statusTick.attentionVisible) {
+                    border = if (attentionTint != null) {
                         BorderStroke(
                             1.dp,
                             tickTint.copy(alpha = 0.34f),
@@ -929,15 +929,16 @@ private fun FloorPlanTableNode(
 
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     if (openTotalLabel != null) {
+                        val totalTint = attentionTint ?: FloorPlanSelectionColor
                         Surface(
                             shape = RoundedCornerShape(999.dp),
-                            color = FloorPlanSelectionColor.copy(alpha = 0.13f),
+                            color = totalTint.copy(alpha = 0.13f),
                         ) {
                             Text(
                                 text = openTotalLabel,
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
                                 style = MaterialTheme.typography.labelSmall,
-                                color = FloorPlanSelectionColor,
+                                color = totalTint,
                                 fontWeight = FontWeight.SemiBold,
                                 textAlign = TextAlign.Center,
                             )
