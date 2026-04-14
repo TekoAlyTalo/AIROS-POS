@@ -109,6 +109,8 @@ private const val SIGNALING_PORT = 8000
 private const val PREVIEW_TAG = "TableLivePreview"
 private const val PREVIEW_SURFACE_ASPECT_RATIO = 4f / 3f
 private const val AREA_FILTER_ALL = "All"
+private const val TOP_TICKER_ROTATION_INTERVAL_MS = 2_400L
+private const val TRANSFERRED_MESSAGE_MAX_APPEARANCES = 2
 
 // Compose pointer event consumption helper.
 // Our current Compose version does not expose PointerInputChange.consume(), so we provide a local no-op.
@@ -146,6 +148,19 @@ private data class BillDragUiState(
     val sourceSpotId: String? = null,
     val hoveredTableId: String? = null,
 )
+
+private data class TableTickerEntry(
+    val tableLabel: String? = null,
+    val kind: TableTickerEntryKind,
+    val message: String? = null,
+)
+
+private enum class TableTickerEntryKind {
+    SERVE,
+    CHECK,
+    NEEDS_CLEANING,
+    TRANSFERRED,
+}
 
 data class TableLivePreviewTarget(
     val tableId: String,
@@ -628,7 +643,7 @@ fun TableMapScreen(
         state.openChecksBySpotId.mapValues { (_, summary) -> summary.count }
     }
     val selectedTable = visibleTables.firstOrNull { it.id == state.selectedTableId } ?: visibleTables.firstOrNull()
-    val attentionBannerEntries = remember(visibleTables, state.openChecksBySpotId, selectedTable?.id) {
+    val attentionTickerEntries = remember(visibleTables, state.openChecksBySpotId, selectedTable?.id) {
         val selectedId = selectedTable?.id
         visibleTables
             .sortedWith(compareByDescending<RestaurantTable> { it.id == selectedId }.thenBy { it.label })
@@ -638,7 +653,8 @@ fun TableMapScreen(
                     openBillCount = state.openChecksBySpotId[table.id]?.count ?: 0,
                     attentionFlag = table.attentionFlag,
                 )
-                if (!displayStatus.hasAnyAttention) {
+                val tickerKinds = displayStatus.tickerKinds()
+                if (tickerKinds.isEmpty()) {
                     emptyList()
                 } else {
                     table.label
@@ -646,22 +662,62 @@ fun TableMapScreen(
                         .map { it.trim() }
                         .filter { it.isNotBlank() }
                         .ifEmpty { listOf(table.label) }
-                        .map { label -> label to displayStatus }
+                        .flatMap { label ->
+                            tickerKinds.map { kind ->
+                                TableTickerEntry(
+                                    tableLabel = label,
+                                    kind = kind,
+                                )
+                            }
+                        }
                 }
             }
     }
-    var attentionBannerIndex by remember(attentionBannerEntries) { mutableStateOf(0) }
-    LaunchedEffect(attentionBannerEntries) {
-        attentionBannerIndex = 0
-        if (attentionBannerEntries.size <= 1) return@LaunchedEffect
-        while (true) {
-            delay(2400)
-            attentionBannerIndex = (attentionBannerIndex + 1) % attentionBannerEntries.size
+    val transferredMessage = state.message?.takeIf { it.isTransferredTableMapMessage() }
+    var transferredMessageKey by rememberSaveable { mutableStateOf<String?>(null) }
+    var transferredMessageAppearances by rememberSaveable { mutableStateOf(0) }
+    LaunchedEffect(transferredMessage) {
+        if (transferredMessage != transferredMessageKey) {
+            transferredMessageKey = transferredMessage
+            transferredMessageAppearances = 0
         }
     }
-    val currentAttentionBanner = attentionBannerEntries
+    val showTransferredMessage = transferredMessage != null &&
+        transferredMessageAppearances < TRANSFERRED_MESSAGE_MAX_APPEARANCES
+    val tickerEntries = remember(attentionTickerEntries, showTransferredMessage, transferredMessage) {
+        buildList {
+            if (showTransferredMessage) {
+                add(
+                    TableTickerEntry(
+                        kind = TableTickerEntryKind.TRANSFERRED,
+                        message = transferredMessage,
+                    ),
+                )
+            }
+            addAll(attentionTickerEntries)
+        }
+    }
+    var tickerIndex by remember(tickerEntries) { mutableStateOf(0) }
+    LaunchedEffect(tickerEntries) {
+        tickerIndex = 0
+        if (tickerEntries.size <= 1) return@LaunchedEffect
+        while (true) {
+            delay(TOP_TICKER_ROTATION_INTERVAL_MS)
+            tickerIndex = (tickerIndex + 1) % tickerEntries.size
+        }
+    }
+    val currentTickerEntry = tickerEntries
         .takeIf { it.isNotEmpty() }
-        ?.get(attentionBannerIndex.coerceIn(0, (attentionBannerEntries.size - 1).coerceAtLeast(0)))
+        ?.get(tickerIndex.coerceIn(0, (tickerEntries.size - 1).coerceAtLeast(0)))
+    LaunchedEffect(currentTickerEntry, transferredMessageAppearances) {
+        if (
+            currentTickerEntry?.kind == TableTickerEntryKind.TRANSFERRED &&
+            transferredMessageAppearances < TRANSFERRED_MESSAGE_MAX_APPEARANCES
+        ) {
+            delay(TOP_TICKER_ROTATION_INTERVAL_MS)
+            transferredMessageAppearances += 1
+        }
+    }
     val desiredPreviewTarget = selectedTable?.previewTarget()
     val selectedPreviewTarget = state.livePreviewTarget?.takeIf { it.tableId == selectedTable?.id }
     val transferState = state.transferState
@@ -755,6 +811,7 @@ LaunchedEffect(
         }
         visibleTables.firstOrNull()?.id?.let(onSelectTable)
     }
+    val nonTickerMessage = state.message?.takeUnless { it.isTransferredTableMapMessage() }
 
     Box(
         modifier = Modifier
@@ -779,13 +836,12 @@ LaunchedEffect(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 when {
-                    state.message != null -> {
+                    nonTickerMessage != null -> {
                         StatusBanner(
-                            text = state.message,
+                            text = nonTickerMessage,
                             tint = if (
-                                state.message.contains("opened", ignoreCase = true) ||
-                                state.message.contains("transferred", ignoreCase = true) ||
-                                state.message.contains("select target", ignoreCase = true)
+                                nonTickerMessage.contains("opened", ignoreCase = true) ||
+                                nonTickerMessage.contains("select target", ignoreCase = true)
                             ) {
                                 MaterialTheme.colorScheme.primary
                             } else {
@@ -793,12 +849,8 @@ LaunchedEffect(
                             },
                         )
                     }
-                    currentAttentionBanner != null -> {
-                        val (attentionLabel, attentionDisplayStatus) = currentAttentionBanner
-                        TableAttentionTickerBanner(
-                            tableLabel = attentionLabel,
-                            displayStatus = attentionDisplayStatus,
-                        )
+                    currentTickerEntry != null -> {
+                        TableTopTickerRibbon(entry = currentTickerEntry)
                     }
                 }
 
@@ -1058,6 +1110,7 @@ private fun TableDetailsContent(
     onBeginTransferTargetSelection: () -> Unit,
     onCancelTransferMode: () -> Unit,
     onOpenLivePreview: () -> Unit,
+    onAcknowledgeCheck: (() -> Unit)? = null,
     onBillDragStartInRoot: (selectedSaleCount: Int, positionInRoot: Offset) -> Unit = { _, _ -> },
     onBillDragMoveInRoot: (positionInRoot: Offset) -> Unit = {},
     onBillDragEnd: () -> Unit = {},
@@ -1076,6 +1129,14 @@ private fun TableDetailsContent(
         KeyValueRow("Status", if (displayStatus.hasAnyAttention) statusTick.label else displayStatus.label)
         if (displayStatus.differsFromPhysical) {
             KeyValueRow("Physical status", displayStatus.physicalLabel)
+        }
+        if (displayStatus.hasCheckAttention) {
+            OutlinedButton(
+                onClick = { onAcknowledgeCheck?.invoke() },
+                enabled = onAcknowledgeCheck != null,
+            ) {
+                Text("Acknowledge CHECK")
+            }
         }
         KeyValueRow("Seats", table.seats.toString())
         KeyValueRow("Guests", table.guestCount.toString())
@@ -1442,6 +1503,18 @@ private fun filterTablesForArea(
     return tables.filter { it.areaName.trim().ifBlank { "Unassigned" } == selectedAreaName }
 }
 
+private fun TableDisplayStatus.tickerKinds(): List<TableTickerEntryKind> {
+    return buildList {
+        if (hasCheckAttention) add(TableTickerEntryKind.CHECK)
+        if (hasServiceAttention) add(TableTickerEntryKind.SERVE)
+        if (kind == TableDisplayStatusKind.DIRTY) add(TableTickerEntryKind.NEEDS_CLEANING)
+    }
+}
+
+private fun String.isTransferredTableMapMessage(): Boolean {
+    return contains("transferred", ignoreCase = true)
+}
+
 @Composable
 private fun TableMapAreaSelector(
     areas: List<String>,
@@ -1499,6 +1572,7 @@ private fun TableGridCard(
         attentionFlag = table.attentionFlag,
     )
     val statusTick = rememberStatusTickPresentation(displayStatus)
+    val attentionTint = statusTick.chipTint
     val accent = when (displayStatus.kind) {
         TableDisplayStatusKind.OCCUPIED,
         TableDisplayStatusKind.OPEN_BILL,
@@ -1515,6 +1589,7 @@ private fun TableGridCard(
     val cardColor = when {
         transferSource -> MaterialTheme.colorScheme.primaryContainer
         transferTargetMode -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.75f)
+        statusTick.attentionVisible && attentionTint != null -> attentionTint.copy(alpha = 0.18f)
         selected -> MaterialTheme.colorScheme.primaryContainer
         transferMode && !transferSource && !transferTargetMode -> MaterialTheme.colorScheme.surfaceVariant
         else -> MaterialTheme.colorScheme.surfaceVariant
@@ -1533,7 +1608,7 @@ private fun TableGridCard(
                 color = when {
                     transferSource -> MaterialTheme.colorScheme.primary
                     transferTargetMode -> MaterialTheme.colorScheme.secondary
-                    statusTick.attentionVisible -> (statusTick.chipTint ?: accent).copy(alpha = (0.58f * statusTick.pulseAlpha).coerceIn(0.58f, 0.84f))
+                    statusTick.attentionVisible -> (statusTick.chipTint ?: accent).copy(alpha = 0.58f)
                     else -> Color.Transparent
                 },
                 shape = RoundedCornerShape(24.dp),
@@ -1587,7 +1662,6 @@ private fun TableGridCard(
                     tint = statusTick.chipTint ?: accent,
                     textTint = statusTick.textTint ?: accent,
                     emphasize = statusTick.attentionVisible,
-                    pulseAlpha = statusTick.pulseAlpha,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Surface(
@@ -1626,50 +1700,52 @@ private fun TableGridCard(
 
 
 @Composable
-private fun TableAttentionTickerBanner(
-    tableLabel: String,
-    displayStatus: TableDisplayStatus,
+private fun TableTopTickerRibbon(
+    entry: TableTickerEntry,
 ) {
-    val statusTick = rememberStatusTickPresentation(displayStatus)
-    val bannerTint = statusTick.chipTint ?: when {
-        displayStatus.hasCheckAttention -> MaterialTheme.colorScheme.error
-        else -> Color(0xFFFFB23A)
+    val tint = when (entry.kind) {
+        TableTickerEntryKind.CHECK -> TableCheckAttentionColor
+        TableTickerEntryKind.SERVE -> TableServiceAttentionColor
+        TableTickerEntryKind.NEEDS_CLEANING -> TableMapVisualTokens.DirtyColor
+        TableTickerEntryKind.TRANSFERRED -> TableMapVisualTokens.AccentText
     }
-    val textTint = statusTick.textTint ?: bannerTint
-    val bannerLabel = when {
-        displayStatus.hasCheckAttention && statusTick.attentionVisible -> "CHECK TABLE"
-        displayStatus.hasServiceAttention && statusTick.attentionVisible -> "SERVE"
-        else -> displayStatus.label.uppercase()
+    val label = when (entry.kind) {
+        TableTickerEntryKind.CHECK -> "CHECK"
+        TableTickerEntryKind.SERVE -> "SERVE"
+        TableTickerEntryKind.NEEDS_CLEANING -> "NEEDS CLEANING"
+        TableTickerEntryKind.TRANSFERRED -> "TRANSFERRED"
     }
+    val detail = entry.message ?: entry.tableLabel
 
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        color = bannerTint.copy(alpha = (0.16f * statusTick.pulseAlpha).coerceIn(0.16f, 0.24f)),
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            bannerTint.copy(alpha = (0.56f * statusTick.pulseAlpha).coerceIn(0.56f, 0.84f)),
-        ),
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(tint.copy(alpha = 0.16f)),
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
+                .padding(horizontal = 12.dp, vertical = 7.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = tableLabel,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold,
-                color = textTint,
-            )
-            Text(
-                text = bannerLabel,
+                text = label,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Black,
-                color = textTint,
+                color = tint,
             )
+            if (!detail.isNullOrBlank()) {
+                Text(
+                    text = detail,
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = TableMapVisualTokens.TextPrimary,
+                    maxLines = 1,
+                )
+            }
         }
     }
 }
@@ -1680,15 +1756,14 @@ private fun MiniStatusChip(
     tint: Color,
     textTint: Color = tint,
     emphasize: Boolean = false,
-    pulseAlpha: Float = 1f,
 ) {
     Surface(
         shape = RoundedCornerShape(999.dp),
-        color = tint.copy(alpha = ((if (emphasize) 0.26f else 0.14f) * pulseAlpha).coerceIn(0.14f, 0.34f)),
+        color = tint.copy(alpha = if (emphasize) 0.26f else 0.14f),
         border = if (emphasize) {
             androidx.compose.foundation.BorderStroke(
                 1.dp,
-                tint.copy(alpha = (0.54f * pulseAlpha).coerceIn(0.54f, 0.82f)),
+                tint.copy(alpha = 0.54f),
             )
         } else {
             null

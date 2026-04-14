@@ -62,6 +62,8 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.roundToInt
 
+private const val AUTHORITATIVE_BACKEND_TABLE_ID = "table-1"
+
 class FakePosStore {
     private val idCounter = AtomicInteger(100)
 
@@ -175,7 +177,10 @@ class FakeTableRepository(
     override suspend fun openTable(tableId: String, guestCount: Int, openedByStaffId: String): PosResult<RestaurantTable> {
         val table = store.floorMap.value.tables.firstOrNull { it.id == tableId }
             ?: return PosResult.Failure("Table not found.")
-        val updatedTable = table.copy(status = TableStatus.OCCUPIED, guestCount = guestCount)
+        val updatedTable = table.copy(
+            status = TableStatus.OCCUPIED,
+            guestCount = if (tableId.requiresBackendGuestTruth()) table.guestCount else guestCount,
+        )
         store.floorMap.value = store.floorMap.value.copy(
             tables = store.floorMap.value.tables.map { current -> if (current.id == tableId) updatedTable else current },
         )
@@ -220,7 +225,11 @@ class FakeTableRepository(
             tables = tables.map { spot ->
                 when {
                     fromSpotId != null && spot.id == fromSpotId ->
-                        spot.copy(status = TableStatus.AVAILABLE, activeTicketId = null, guestCount = 0)
+                        spot.copy(
+                            status = TableStatus.AVAILABLE,
+                            activeTicketId = null,
+                            guestCount = if (spot.id.requiresBackendGuestTruth()) spot.guestCount else 0,
+                        )
                     spot.id == toSpotId ->
                         spot.copy(status = TableStatus.OCCUPIED, activeTicketId = null)
                     else -> spot
@@ -364,7 +373,17 @@ class FakeTicketRepository(
         store.floorMap.value = store.floorMap.value.copy(
             tables = store.floorMap.value.tables.map { table ->
                 if (table.id == tableId) {
-                    table.copy(status = TableStatus.OCCUPIED, activeTicketId = ticket.id, guestCount = if (table.guestCount == 0) 2 else table.guestCount)
+                    table.copy(
+                        status = TableStatus.OCCUPIED,
+                        activeTicketId = ticket.id,
+                        guestCount = if (table.id.requiresBackendGuestTruth()) {
+                            table.guestCount
+                        } else if (table.guestCount == 0) {
+                            2
+                        } else {
+                            table.guestCount
+                        },
+                    )
                 } else {
                     table
                 }
@@ -455,7 +474,11 @@ class FakePaymentRepository(
             store.floorMap.value = store.floorMap.value.copy(
                 tables = store.floorMap.value.tables.map { table ->
                     if (table.activeTicketId == ticketId) {
-                        table.copy(status = TableStatus.AVAILABLE, activeTicketId = null, guestCount = 0)
+                        table.copy(
+                            status = TableStatus.AVAILABLE,
+                            activeTicketId = null,
+                            guestCount = if (table.id.requiresBackendGuestTruth()) table.guestCount else 0,
+                        )
                     } else {
                         table
                     }
@@ -687,7 +710,11 @@ class FakePaymentRepository(
             store.floorMap.value = store.floorMap.value.copy(
                 tables = store.floorMap.value.tables.map { table ->
                     if (table.id == resolvedTableId || table.activeTicketId == ticketId) {
-                        table.copy(status = TableStatus.AVAILABLE, activeTicketId = null, guestCount = 0)
+                        table.copy(
+                            status = TableStatus.AVAILABLE,
+                            activeTicketId = null,
+                            guestCount = if (table.id.requiresBackendGuestTruth()) table.guestCount else 0,
+                        )
                     } else {
                         table
                     }
@@ -852,3 +879,5 @@ private suspend fun enqueueSyncItem(
         ),
     )
 }
+
+private fun String.requiresBackendGuestTruth(): Boolean = this == AUTHORITATIVE_BACKEND_TABLE_ID

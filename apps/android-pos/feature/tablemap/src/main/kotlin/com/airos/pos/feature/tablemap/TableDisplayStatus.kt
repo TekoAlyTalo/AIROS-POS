@@ -27,7 +27,11 @@ internal data class TableDisplayStatus(
 
     val hasCheckAttention: Boolean
         get() = attentionFlag == TableAttentionFlag.CHECK_TABLE &&
-            kind in setOf(TableDisplayStatusKind.OCCUPIED, TableDisplayStatusKind.OPEN_BILL)
+            kind in setOf(
+                TableDisplayStatusKind.OCCUPIED,
+                TableDisplayStatusKind.OPEN_BILL,
+                TableDisplayStatusKind.DIRTY,
+            )
 
     val hasServiceAttention: Boolean
         get() = !hasCheckAttention &&
