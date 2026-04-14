@@ -1569,10 +1569,19 @@ private fun TableGridCard(
 }
 
 @Composable
-private fun MiniStatusChip(label: String, tint: Color) {
+private fun MiniStatusChip(
+    label: String,
+    tint: Color,
+    emphasize: Boolean = false,
+) {
     Surface(
         shape = RoundedCornerShape(999.dp),
-        color = tint.copy(alpha = 0.14f),
+        color = tint.copy(alpha = if (emphasize) 0.24f else 0.14f),
+        border = if (emphasize) {
+            androidx.compose.foundation.BorderStroke(1.dp, tint.copy(alpha = 0.52f))
+        } else {
+            null
+        },
     ) {
         Text(
             text = label,

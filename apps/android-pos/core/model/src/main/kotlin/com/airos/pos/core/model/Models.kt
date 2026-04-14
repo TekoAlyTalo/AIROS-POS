@@ -167,6 +167,16 @@ enum class TableStatus {
     RESERVED,
 }
 
+enum class TableAttentionFlag {
+    NONE,
+    CHECK_TABLE,
+}
+
+enum class TableTruthSource {
+    LOCAL,
+    BACKEND,
+}
+
 /**
  * Distinguishes the physical/functional type of a service spot.
  * Both types flow through the same assignment and ticket lifecycle —
@@ -197,6 +207,11 @@ data class RestaurantTable(
     val position: TablePosition = TablePosition(0, 0, 180, 120),
     val cameraId: String? = null,
     val cameraLabel: String? = null,
+    val attentionFlag: TableAttentionFlag = TableAttentionFlag.NONE,
+    val reviewAnchorTime: String? = null,
+    val reviewFrom: String? = null,
+    val reviewTo: String? = null,
+    val truthSource: TableTruthSource = TableTruthSource.LOCAL,
     /** Functional type of this service spot. Defaults to TABLE for backward compatibility. */
     val spotType: ServiceSpotType = ServiceSpotType.TABLE,
 )
