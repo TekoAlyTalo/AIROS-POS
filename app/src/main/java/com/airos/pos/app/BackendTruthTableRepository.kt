@@ -5,7 +5,9 @@ import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.model.FloorMap
 import com.airos.pos.core.model.PersistedOpenSale
 import com.airos.pos.core.model.RestaurantTable
+import com.airos.pos.core.model.TableAttentionFlag
 import com.airos.pos.core.model.TableStatus
+import com.airos.pos.core.model.TableTruthSource
 import com.airos.pos.domain.OpenSaleRepository
 import com.airos.pos.domain.TableRepository
 import java.io.BufferedReader
@@ -95,6 +97,7 @@ class BackendTruthTableRepository(
             openBillCount = table1Sales.size,
             openSaleIds = table1Sales.map { it.saleId },
             openTotalCents = table1Sales.sumOf { it.totalCents() },
+            oldestOpenSaleCreatedAtEpochMillis = table1Sales.minOfOrNull { it.createdAtEpochMillis },
         )
         if (published) {
             lastPublishedTable1ContextKey = contextKey
@@ -128,6 +131,7 @@ private class BackendTableTruthClient(
         openBillCount: Int,
         openSaleIds: List<String>,
         openTotalCents: Int,
+        oldestOpenSaleCreatedAtEpochMillis: Long?,
     ): Boolean = withContext(Dispatchers.IO) {
         val baseUrl = normalizedBaseUrl() ?: return@withContext false
         val urlString = "$baseUrl/tables/$backendTableId/open-bill-context"
@@ -140,6 +144,9 @@ private class BackendTableTruthClient(
             put("open_sale_ids", JSONArray().apply {
                 openSaleIds.forEach { put(it) }
             })
+            if (oldestOpenSaleCreatedAtEpochMillis != null) {
+                put("oldest_open_sale_created_at_epoch_ms", oldestOpenSaleCreatedAtEpochMillis)
+            }
             put("source", "android-pos")
         }
 
@@ -214,6 +221,10 @@ private class BackendTableTruthClient(
                 tableId = tableId,
                 currentPersons = item.optInt("current_persons", 0).coerceAtLeast(0),
                 state = item.optString("state", "READY"),
+                attentionFlag = parseAttentionFlag(item.optString("attention_flag", "NONE")),
+                reviewAnchorTime = item.optStringOrNull("review_anchor_time"),
+                reviewFrom = item.optStringOrNull("review_from"),
+                reviewTo = item.optStringOrNull("review_to"),
             )
         }
         return result
@@ -247,9 +258,14 @@ private data class BackendTableTruth(
     val tableId: Int,
     val currentPersons: Int,
     val state: String,
+    val attentionFlag: TableAttentionFlag,
+    val reviewAnchorTime: String?,
+    val reviewFrom: String?,
+    val reviewTo: String?,
 ) {
     val tableStatus: TableStatus
         get() = when (state.trim().uppercase()) {
+            "FREE" -> TableStatus.AVAILABLE
             "OCCUPIED" -> TableStatus.OCCUPIED
             "NEEDS_CLEANING", "DIRTY" -> TableStatus.DIRTY
             "RESERVED" -> TableStatus.RESERVED
@@ -261,7 +277,24 @@ private fun RestaurantTable.withBackendTruth(truth: BackendTableTruth): Restaura
     return copy(
         status = truth.tableStatus,
         guestCount = truth.currentPersons,
+        attentionFlag = truth.attentionFlag,
+        reviewAnchorTime = truth.reviewAnchorTime,
+        reviewFrom = truth.reviewFrom,
+        reviewTo = truth.reviewTo,
+        truthSource = TableTruthSource.BACKEND,
     )
+}
+
+private fun parseAttentionFlag(raw: String): TableAttentionFlag {
+    return when (raw.trim().uppercase()) {
+        "CHECK_TABLE" -> TableAttentionFlag.CHECK_TABLE
+        else -> TableAttentionFlag.NONE
+    }
+}
+
+private fun JSONObject.optStringOrNull(name: String): String? {
+    if (!has(name) || isNull(name)) return null
+    return optString(name).takeIf { it.isNotBlank() }
 }
 
 private fun PersistedOpenSale.totalCents(): Int {

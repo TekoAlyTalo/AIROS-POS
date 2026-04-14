@@ -900,10 +900,10 @@ private fun FloorPlanTableNode(
 
                 Surface(
                     shape = RoundedCornerShape(999.dp),
-                    color = accent.copy(alpha = 0.16f),
+                    color = accent.copy(alpha = if (statusTick.attentionVisible) 0.26f else 0.16f),
                 ) {
                     Text(
-                        text = statusLabel,
+                        text = statusTick.label,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                         style = MaterialTheme.typography.labelSmall,
                         color = accent,
