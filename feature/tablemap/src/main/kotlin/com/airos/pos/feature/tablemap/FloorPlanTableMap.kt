@@ -838,6 +838,7 @@ private fun FloorPlanTableNode(
         attentionFlag = table.attentionFlag,
     )
     val statusTick = rememberStatusTickPresentation(displayStatus)
+    val attentionTint = statusTick.chipTint
     val accent = displayStatus.floorPlanAccent()
     val shape: Shape = if (isRound) CircleShape else RoundedCornerShape(if (isMerged) 28.dp else 22.dp)
 
@@ -856,11 +857,13 @@ private fun FloorPlanTableNode(
         border = BorderStroke(
             width = when {
                 dropHovered -> 3.dp
+                statusTick.attentionVisible && attentionTint != null -> 2.dp
                 selected -> 2.dp
                 else -> 1.dp
             },
             color = when {
                 dropHovered -> FloorPlanSelectionColor
+                statusTick.attentionVisible && attentionTint != null -> attentionTint
                 selected -> FloorPlanSelectionColor
                 else -> accent.copy(alpha = 0.56f)
             },
@@ -877,7 +880,7 @@ private fun FloorPlanTableNode(
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(
-                            accent.copy(alpha = 0.24f),
+                            (attentionTint ?: accent).copy(alpha = if (statusTick.attentionVisible) 0.30f else 0.24f),
                             FloorPlanTableCore.copy(alpha = 0.98f),
                         ),
                     ),
@@ -904,13 +907,12 @@ private fun FloorPlanTableNode(
                 Surface(
                     shape = RoundedCornerShape(999.dp),
                     color = tickTint.copy(
-                        alpha = ((if (statusTick.attentionVisible) 0.30f else 0.16f) * statusTick.pulseAlpha)
-                            .coerceIn(0.16f, 0.52f)
+                        alpha = if (statusTick.attentionVisible) 0.30f else 0.16f
                     ),
                     border = if (statusTick.attentionVisible) {
                         BorderStroke(
                             1.dp,
-                            tickTint.copy(alpha = (0.34f * statusTick.pulseAlpha).coerceIn(0.34f, 0.74f)),
+                            tickTint.copy(alpha = 0.34f),
                         )
                     } else {
                         null
@@ -920,7 +922,7 @@ private fun FloorPlanTableNode(
                         text = statusTick.label,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                         style = MaterialTheme.typography.labelSmall,
-                        color = tickTextColor.copy(alpha = (0.96f * statusTick.pulseAlpha).coerceIn(0.96f, 1f)),
+                        color = tickTextColor.copy(alpha = 0.96f),
                         fontWeight = FontWeight.SemiBold,
                     )
                 }

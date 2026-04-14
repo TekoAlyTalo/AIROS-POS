@@ -54,7 +54,13 @@ class BackendTruthTableRepository(
                     if (table.id != TABLE1_POS_SPOT_ID) {
                         table
                     } else {
-                        backendTruthByTableId[TABLE1_BACKEND_TABLE_ID]?.let(table::withBackendTruth) ?: table
+                        backendTruthByTableId[TABLE1_BACKEND_TABLE_ID]?.let(table::withBackendTruth) ?: run {
+                            Log.w(
+                                "AIROS",
+                                "[BackendTruthTableRepository] Missing backend truth for $TABLE1_POS_SPOT_ID. POS will mark guest count unavailable instead of trusting fallback data.",
+                            )
+                            table
+                        }
                     }
                 },
             )
