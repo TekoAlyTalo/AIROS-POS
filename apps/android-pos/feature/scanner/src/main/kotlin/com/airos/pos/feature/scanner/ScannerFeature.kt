@@ -26,8 +26,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 data class ScannerUiState(
     val availability: DeviceConnectionState = DeviceConnectionState.UNAVAILABLE,
@@ -92,7 +94,17 @@ class ScannerViewModel(
             runCatching {
                 scannerService.prepareScanner()
                 setTorch(true)
-                scannerService.launchScannerUi()
+                // Odota että SunmiScannerProbe on saanut bindServicen kautta binder-kahvan
+                // ja päivittänyt availabilityn READY-tilaan. Ilman tätä cameraOnAndScan()
+                // voi kutsua ennen kuin binder on valmis ja probe vain loggaa
+                // "requested before scanner binder was ready" ja palaa hiljaa.
+                val ready = withTimeoutOrNull(SCANNER_READY_TIMEOUT_MS) {
+                    scannerService.availability.first { it != DeviceConnectionState.UNAVAILABLE }
+                }
+                if (ready == null) {
+                    throw ScannerNotReadyException()
+                }
+                scannerService.cameraOnAndScan()
             }.onSuccess {
                 mutableScanStatus.value = if (mutableIsMultiScanEnabled.value) {
                     "Scanner opened. Multiple scans is active."
@@ -102,10 +114,17 @@ class ScannerViewModel(
             }.onFailure { error: Throwable ->
                 runCatching { setTorch(false) }
                 mutableIsBusy.value = false
-                mutableScanStatus.value = "Scan start failed: ${error.message ?: "Unknown error"}"
+                mutableScanStatus.value = if (error is ScannerNotReadyException) {
+                    "Scanner not ready yet. Try again."
+                } else {
+                    "Scan start failed: ${error.message ?: "Unknown error"}"
+                }
             }
         }
     }
+
+    private class ScannerNotReadyException :
+        RuntimeException("Scanner binder did not become ready in time")
 
     fun stopScanning() {
         viewModelScope.launch {
@@ -135,6 +154,8 @@ class ScannerViewModel(
     }
 
     companion object {
+        private const val SCANNER_READY_TIMEOUT_MS = 2_000L
+
         fun factory(
             scannerService: ScannerService,
             setTorch: suspend (Boolean) -> Unit,
