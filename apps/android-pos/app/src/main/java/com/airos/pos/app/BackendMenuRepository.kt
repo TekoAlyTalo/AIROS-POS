@@ -37,6 +37,7 @@ import java.nio.charset.StandardCharsets
 class BackendMenuRepository(
     private val backendBaseUrlProvider: () -> String,
     private val menuCacheDao: BackendMenuCacheDao,
+    private val imageCache: ProductImageCache? = null,
     private val restaurantKeyProvider: () -> String = { "ravintola_default" },
     private val connectTimeoutMs: Int = 5_000,
     private val readTimeoutMs: Int = 10_000,
@@ -106,7 +107,13 @@ class BackendMenuRepository(
             }
 
             val subcategoryVisuals = fetchSubcategoryVisualMap(visualsUrlString, baseUrl)
-            val entities = parseMenuItemEntities(body, restaurantKey, baseUrl, subcategoryVisuals)
+            var entities = parseMenuItemEntities(body, restaurantKey, baseUrl, subcategoryVisuals)
+
+            // Download product and subcategory images to durable local cache.
+            if (imageCache != null) {
+                entities = cacheImages(entities)
+            }
+
             val now = System.currentTimeMillis()
             val metadata = MenuCacheMetadataEntity(
                 restaurantKey = restaurantKey,
@@ -114,6 +121,13 @@ class BackendMenuRepository(
                 itemCount = entities.size,
             )
             menuCacheDao.replaceAll(restaurantKey, entities, metadata)
+
+            // Prune images that are no longer referenced by any menu item.
+            if (imageCache != null) {
+                val activeUrls = entities.flatMap { listOfNotNull(it.imageUrl, it.subcategoryImageUrl) }.toSet()
+                imageCache.pruneUnused(activeUrls)
+            }
+
             log("synced ${entities.size} items to cache")
             MenuSyncResult.Fresh
         } catch (t: Throwable) {
@@ -128,6 +142,20 @@ class BackendMenuRepository(
 
         _syncState.value = result
         result
+    }
+
+    private suspend fun cacheImages(
+        entities: List<BackendMenuItemEntity>,
+    ): List<BackendMenuItemEntity> {
+        val cache = imageCache ?: return entities
+        return entities.map { entity ->
+            val cachedProduct = entity.imageUrl?.let { cache.ensureCached(it) }
+            val cachedSubcategory = entity.subcategoryImageUrl?.let { cache.ensureCached(it) }
+            entity.copy(
+                cachedImagePath = cachedProduct,
+                cachedSubcategoryImagePath = cachedSubcategory,
+            )
+        }
     }
 
     private suspend fun fallbackOrNoData(restaurantKey: String, reason: String): MenuSyncResult {
@@ -273,9 +301,9 @@ private fun BackendMenuItemEntity.toMenuItem() = MenuItem(
     priceCents = priceCents,
     taxRatePercent = taxRatePercent,
     barcode = barcode,
-    imageUrl = imageUrl,
+    imageUrl = cachedImagePath?.let { "file://$it" } ?: imageUrl,
     subcategory = subcategory,
-    subcategoryImageUrl = subcategoryImageUrl,
+    subcategoryImageUrl = cachedSubcategoryImagePath?.let { "file://$it" } ?: subcategoryImageUrl,
 )
 
 private fun subcategoryVisualKey(category: String?, subcategory: String?): String {

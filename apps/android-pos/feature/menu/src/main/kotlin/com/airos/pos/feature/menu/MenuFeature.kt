@@ -8,6 +8,7 @@ import coil.compose.SubcomposeAsyncImage
 import coil.compose.SubcomposeAsyncImageContent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -25,6 +26,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -52,11 +54,15 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import android.util.Log
@@ -92,6 +98,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.math.BigDecimal
 import java.math.RoundingMode
+import kotlin.math.roundToInt
 
 private val MenuShellColor = Color(0xFF0D151E)
 private val MenuPanelColor = Color(0xFF131E29)
@@ -138,6 +145,14 @@ data class MenuTicketLine(
     val discountPercent: Int? = null,
     val discountAmountCents: Int? = null,
 )
+
+private data class MenuProductDragUiState(
+    val item: MenuItem? = null,
+    val positionInRoot: Offset = Offset.Zero,
+    val overTicket: Boolean = false,
+) {
+    val active: Boolean get() = item != null
+}
 
 private object MenuTicketDraftStore {
     private val ticketLinesByTableId = mutableMapOf<String, List<MenuTicketLine>>()
@@ -826,11 +841,36 @@ fun MenuScreen(
     val pageSlots = List(gridConfig.itemsPerPage) { index -> activePageItems.getOrNull(index) }
     val totalTicketItems = state.ticketLines.sumOf { it.quantity }
     val ticketSubtotalCents = state.ticketLines.sumOf { it.totalCents() }
+    var menuScreenBoundsInRoot by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
+    var ticketPaneBoundsInRoot by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
+    var productDrag by remember { mutableStateOf(MenuProductDragUiState()) }
 
-    Row(
-        modifier = Modifier.fillMaxSize(),
-        horizontalArrangement = Arrangement.spacedBy(20.dp),
+    fun updateProductDrag(positionInRoot: Offset) {
+        val overTicket = ticketPaneBoundsInRoot?.contains(positionInRoot) == true
+        productDrag = productDrag.copy(
+            positionInRoot = positionInRoot,
+            overTicket = overTicket,
+        )
+    }
+
+    fun endProductDrag() {
+        val draggedItem = productDrag.item
+        val shouldDropToTicket = productDrag.overTicket
+        productDrag = MenuProductDragUiState()
+        if (draggedItem != null && shouldDropToTicket) {
+            onAddItemToTicket(draggedItem)
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .onGloballyPositioned { coords -> menuScreenBoundsInRoot = coords.boundsInRoot() },
     ) {
+        Row(
+            modifier = Modifier.fillMaxSize(),
+            horizontalArrangement = Arrangement.spacedBy(20.dp),
+        ) {
         Surface(
             modifier = Modifier.weight(1.55f),
             shape = RoundedCornerShape(28.dp),
@@ -897,6 +937,15 @@ fun MenuScreen(
                                 config = gridConfig,
                                 slots = pageSlots,
                                 onSelectItem = onAddItemToTicket,
+                                onStartItemDrag = { item, positionInRoot ->
+                                    productDrag = MenuProductDragUiState(
+                                        item = item,
+                                        positionInRoot = positionInRoot,
+                                        overTicket = ticketPaneBoundsInRoot?.contains(positionInRoot) == true,
+                                    )
+                                },
+                                onMoveItemDrag = { positionInRoot -> updateProductDrag(positionInRoot) },
+                                onEndItemDrag = { endProductDrag() },
                             )
                             PageRail(
                                 pageCount = pageCount,
@@ -914,6 +963,9 @@ fun MenuScreen(
         }
 
         TicketPane(
+            modifier = Modifier.onGloballyPositioned { coords -> ticketPaneBoundsInRoot = coords.boundsInRoot() },
+            isProductDropTargetActive = productDrag.active,
+            isProductDraggedOver = productDrag.overTicket,
             activeTableId = state.activeTableId,
             activeTableLabel = state.activeTableLabel,
             ticketLines = state.ticketLines,
@@ -937,6 +989,48 @@ fun MenuScreen(
             onCancelReceiptHandoff = onCancelReceiptHandoff,
             onOpenCashDrawer = onOpenCashDrawer,
         )
+    }
+
+        if (productDrag.active) {
+            val localPosition = menuScreenBoundsInRoot?.let { bounds ->
+                Offset(
+                    x = productDrag.positionInRoot.x - bounds.left,
+                    y = productDrag.positionInRoot.y - bounds.top,
+                )
+            } ?: productDrag.positionInRoot
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .offset {
+                        IntOffset(
+                            x = localPosition.x.roundToInt() - 64,
+                            y = localPosition.y.roundToInt() - 88,
+                        )
+                    },
+                shape = RoundedCornerShape(18.dp),
+                color = MenuPanelAccentColor.copy(alpha = 0.96f),
+                border = BorderStroke(1.dp, MenuAccentTextColor.copy(alpha = 0.55f)),
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        text = productDrag.item?.name ?: "",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MenuTextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = if (productDrag.overTicket) "Drop to receipt" else "Drag to receipt",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (productDrag.overTicket) MenuAccentTextColor else MenuTextSecondary,
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -995,6 +1089,9 @@ private fun ProductGrid(
     config: ProductGridConfig,
     slots: List<MenuItem?>,
     onSelectItem: (MenuItem) -> Unit,
+    onStartItemDrag: (MenuItem, Offset) -> Unit = { _, _ -> },
+    onMoveItemDrag: (Offset) -> Unit = {},
+    onEndItemDrag: () -> Unit = {},
 ) {
     Column(
         modifier = modifier
@@ -1021,6 +1118,9 @@ private fun ProductGrid(
                             ProductCard(
                                 item = item,
                                 onClick = { onSelectItem(item) },
+                                onDragStartInRoot = { positionInRoot -> onStartItemDrag(item, positionInRoot) },
+                                onDragMoveInRoot = onMoveItemDrag,
+                                onDragEnd = onEndItemDrag,
                             )
                         }
                     }
@@ -1124,10 +1224,31 @@ private fun SubcategoryCard(
 private fun ProductCard(
     item: MenuItem,
     onClick: () -> Unit,
+    onDragStartInRoot: (Offset) -> Unit = {},
+    onDragMoveInRoot: (Offset) -> Unit = {},
+    onDragEnd: () -> Unit = {},
 ) {
+    var originInRoot by remember { mutableStateOf(Offset.Zero) }
+    var dragPositionInRoot by remember { mutableStateOf(Offset.Zero) }
+
     Surface(
         modifier = Modifier
             .fillMaxSize()
+            .onGloballyPositioned { coords -> originInRoot = coords.positionInRoot() }
+            .pointerInput(item.id) {
+                detectDragGesturesAfterLongPress(
+                    onDragStart = { offset ->
+                        dragPositionInRoot = originInRoot + offset
+                        onDragStartInRoot(dragPositionInRoot)
+                    },
+                    onDrag = { _, dragAmount ->
+                        dragPositionInRoot += dragAmount
+                        onDragMoveInRoot(dragPositionInRoot)
+                    },
+                    onDragCancel = onDragEnd,
+                    onDragEnd = onDragEnd,
+                )
+            }
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(24.dp),
         color = MenuPanelColor,
@@ -1299,6 +1420,9 @@ private fun PageRail(
 
 @Composable
 private fun RowScope.TicketPane(
+    modifier: Modifier = Modifier,
+    isProductDropTargetActive: Boolean = false,
+    isProductDraggedOver: Boolean = false,
     activeTableId: String?,
     activeTableLabel: String?,
     ticketLines: List<MenuTicketLine>,
@@ -1352,10 +1476,17 @@ private fun RowScope.TicketPane(
     }
 
     Surface(
-        modifier = Modifier.weight(0.85f),
+        modifier = modifier.weight(0.85f),
         shape = RoundedCornerShape(28.dp),
-        color = MenuShellColor,
-        border = BorderStroke(1.dp, MenuBorderColor),
+        color = if (isProductDraggedOver) MenuPanelAccentColor.copy(alpha = 0.18f) else MenuShellColor,
+        border = BorderStroke(
+            1.dp,
+            when {
+                isProductDraggedOver -> MenuAccentTextColor.copy(alpha = 0.72f)
+                isProductDropTargetActive -> MenuAccentTextColor.copy(alpha = 0.32f)
+                else -> MenuBorderColor
+            },
+        ),
         contentColor = MenuTextPrimary,
     ) {
         Column(
@@ -1391,6 +1522,13 @@ private fun RowScope.TicketPane(
                         .height(1.dp)
                         .background(MenuBorderColor),
                 )
+                if (isProductDropTargetActive) {
+                    Text(
+                        text = if (isProductDraggedOver) "Drop product to add it to the receipt" else "Long-press and drag a product here",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (isProductDraggedOver) MenuAccentTextColor else MenuTextSecondary,
+                    )
+                }
             }
 
             Box(

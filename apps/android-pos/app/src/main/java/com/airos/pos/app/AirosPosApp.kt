@@ -94,6 +94,7 @@ import com.airos.pos.feature.tablemap.TableSaleOpenSource
 import com.airos.pos.feature.tablemap.TableTransferStage
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -1113,17 +1114,22 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                         }
                     }
                     LaunchedEffect(cameraScannerController, isMultiScanEnabled) {
+                        var blinkJob: Job? = null
+                        val effectScope = this
                         cameraScannerController.scanEvents.collect { event: ScanEvent ->
                             viewModel.onExternalScanEvent(event)
                             if (isMultiScanEnabled) {
-                                try {
-                                    cameraScannerController.setTorch(false)
-                                } catch (_: Throwable) {
-                                }
-                                kotlinx.coroutines.delay(500)
-                                try {
-                                    cameraScannerController.setTorch(true)
-                                } catch (_: Throwable) {
+                                blinkJob?.cancel()
+                                blinkJob = effectScope.launch {
+                                    try {
+                                        cameraScannerController.setTorch(false)
+                                    } catch (_: Throwable) {
+                                    }
+                                    kotlinx.coroutines.delay(500)
+                                    try {
+                                        cameraScannerController.setTorch(true)
+                                    } catch (_: Throwable) {
+                                    }
                                 }
                             } else {
                                 try {

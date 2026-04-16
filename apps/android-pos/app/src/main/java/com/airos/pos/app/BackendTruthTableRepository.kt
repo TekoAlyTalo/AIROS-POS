@@ -83,6 +83,17 @@ class BackendTruthTableRepository(
         return delegate.assignDraftToServiceSpot(fromSpotId, toSpotId, openedByStaffId)
     }
 
+    suspend fun acknowledgeCheckTable(tableId: String): Boolean {
+        if (tableId != TABLE1_POS_SPOT_ID) {
+            Log.w(
+                "AIROS",
+                "[BackendTruthTableRepository] CHECK acknowledge is currently supported only for $TABLE1_POS_SPOT_ID.",
+            )
+            return false
+        }
+        return client.postAcknowledgeCheck(TABLE1_BACKEND_TABLE_ID)
+    }
+
     private suspend fun publishTable1OpenBillContext(openSales: List<PersistedOpenSale>) {
         val table1Sales = openSales
             .filter { it.serviceSpotId == TABLE1_POS_SPOT_ID }
@@ -180,6 +191,37 @@ private class BackendTableTruthClient(
             true
         } catch (t: Throwable) {
             log("open-bill context post failed: ${t.javaClass.simpleName}: ${t.message.orEmpty()}")
+            false
+        } finally {
+            connection?.disconnect()
+        }
+    }
+
+
+    suspend fun postAcknowledgeCheck(
+        backendTableId: Int,
+    ): Boolean = withContext(Dispatchers.IO) {
+        val baseUrl = normalizedBaseUrl() ?: return@withContext false
+        val urlString = "$baseUrl/tables/$backendTableId/acknowledge-check"
+        var connection: HttpURLConnection? = null
+        try {
+            connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = connectTimeoutMs
+                readTimeout = readTimeoutMs
+                doInput = true
+                useCaches = false
+                setRequestProperty("Accept", "application/json")
+            }
+            val statusCode = connection.responseCode
+            readStream(if (statusCode in 200..299) connection.inputStream else connection.errorStream)
+            if (statusCode !in 200..299) {
+                log("acknowledge-check rejected status=$statusCode")
+                return@withContext false
+            }
+            true
+        } catch (t: Throwable) {
+            log("acknowledge-check failed: ${t.javaClass.simpleName}: ${t.message.orEmpty()}")
             false
         } finally {
             connection?.disconnect()
