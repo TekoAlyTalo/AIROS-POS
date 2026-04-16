@@ -7,6 +7,8 @@ import com.airos.pos.core.datastore.StaffUiPreferencesStore
 import com.airos.pos.core.model.TerminalSettings
 import com.airos.pos.device.camera.AndroidTorchService
 import com.airos.pos.device.camera.CameraPreviewService
+import com.airos.pos.device.camera.CameraScannerController
+import com.airos.pos.device.camera.CameraXMlKitScannerController
 import com.airos.pos.device.camera.SunmiCameraPreviewService
 import com.airos.pos.device.camera.TorchService
 import com.airos.pos.device.cashdrawer.CashDrawerService
@@ -61,6 +63,7 @@ interface AppContainer {
     val printerService: PrinterService
     val scannerService: ScannerService
     val cameraPreviewService: CameraPreviewService
+    val cameraScannerController: CameraScannerController
     val torchService: TorchService
     val cashDrawerService: CashDrawerService
     val deviceInfoService: DeviceInfoService
@@ -106,6 +109,7 @@ class DefaultAppContainer(
     override val printerService: PrinterService = SunmiPrinterService(appContext)
     override val scannerService: ScannerService = SunmiScannerService(appContext)
     override val cameraPreviewService: CameraPreviewService = SunmiCameraPreviewService(appContext)
+    override val cameraScannerController: CameraScannerController = CameraXMlKitScannerController(appContext)
     override val torchService: TorchService = AndroidTorchService(appContext)
     override val cashDrawerService: CashDrawerService = SunmiCashDrawerService(appContext)
     override val deviceInfoService: DeviceInfoService = androidDeviceInfoService

@@ -5,10 +5,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -31,7 +33,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-
 
 data class ScannerUiState(
     val availability: DeviceConnectionState = DeviceConnectionState.UNAVAILABLE,
@@ -156,75 +157,86 @@ fun ScannerScreen(
         supportingText = "Press Scan to open the camera preview with the light already on. Single scan stops after one read. Multiple scans keeps the preview active for the next code.",
         modifier = Modifier.fillMaxSize(),
     ) {
-        Text(
-            text = "Camera preview",
-            style = MaterialTheme.typography.titleSmall,
-        )
-        Box(
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .height(260.dp)
-                .background(Color.Black),
-            contentAlignment = Alignment.Center,
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            when {
-                !hasCameraPermission -> {
-                    Text(
-                        text = "Camera permission is required to show the scanner preview.",
-                        color = Color.White,
-                        modifier = Modifier.padding(16.dp),
-                    )
-                }
-                isPreviewVisible && previewContent != null -> previewContent()
-                else -> {
-                    Text(
-                        text = "Preview idle. Press Scan to start the camera.",
-                        color = Color.White,
-                        modifier = Modifier.padding(16.dp),
-                    )
-                }
-            }
-        }
-
-        KeyValueRow("Availability", state.availability.name)
-        KeyValueRow("Mode", if (isMultiScanEnabled) "Multiple scans" else "Single scan")
-        KeyValueRow("Last scan", lastPresentedValue ?: state.lastScan?.rawValue ?: "No scans yet")
-        KeyValueRow("Symbology", lastPresentedSymbology ?: state.lastScan?.symbology ?: "-")
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    text = "Multiple scans",
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                Text(
-                    text = "Default is single. Turn this on when you want the camera preview to stay active for the next code.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-            Switch(
-                checked = isMultiScanEnabled,
-                onCheckedChange = onMultiScanEnabledChange,
-                enabled = !isBusy,
-            )
-        }
-
-        scanStatus?.let { status ->
             Text(
-                text = status,
-                style = MaterialTheme.typography.bodyMedium,
+                text = "Camera preview",
+                style = MaterialTheme.typography.titleSmall,
             )
-        }
-
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = onScanWithLight, enabled = !isBusy) {
-                Text(if (isBusy) "Scanning..." else "Scan")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.62f)
+                        .aspectRatio(16f / 9f)
+                        .background(Color.Black),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    when {
+                        !hasCameraPermission -> {
+                            Text(
+                                text = "Camera permission is required to show the scanner preview.",
+                                color = Color.White,
+                                modifier = Modifier.padding(16.dp),
+                            )
+                        }
+                        isPreviewVisible && previewContent != null -> previewContent()
+                        else -> {
+                            Text(
+                                text = "Preview idle. Press Scan to start the camera.",
+                                color = Color.White,
+                                modifier = Modifier.padding(16.dp),
+                            )
+                        }
+                    }
+                }
             }
-            Button(onClick = onStopScanning) {
-                Text("Light off")
+
+            KeyValueRow("Mode", if (isMultiScanEnabled) "Multiple scans" else "Single scan")
+            KeyValueRow("Last scan", lastPresentedValue ?: state.lastScan?.rawValue ?: "No scans yet")
+            KeyValueRow("Symbology", lastPresentedSymbology ?: state.lastScan?.symbology ?: "-")
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = "Multiple scans",
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Text(
+                        text = "Default is single. Turn this on when you want the camera preview to stay active for the next code.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Switch(
+                    checked = isMultiScanEnabled,
+                    onCheckedChange = onMultiScanEnabledChange,
+                    enabled = !isBusy,
+                )
+            }
+
+            scanStatus?.let { status ->
+                Text(
+                    text = status,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button(onClick = onScanWithLight, enabled = !isBusy) {
+                    Text(if (isBusy) "Scanning..." else "Scan")
+                }
+                Button(onClick = onStopScanning) {
+                    Text("Light off")
+                }
             }
         }
     }

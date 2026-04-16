@@ -12,6 +12,7 @@ import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import android.view.View
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import com.airos.pos.core.model.ScanEvent
@@ -58,9 +59,11 @@ interface CameraScannerController {
     val scanEvents: Flow<ScanEvent>
     val bindingState: StateFlow<BindingState>
 
+    fun createPreviewView(context: Context): View
+
     suspend fun bindToLifecycle(
         lifecycleOwner: LifecycleOwner,
-        previewView: PreviewView,
+        previewView: View,
     )
 
     suspend fun unbind()
@@ -108,10 +111,21 @@ class CameraXMlKitScannerController(
     override val bindingState: StateFlow<CameraScannerController.BindingState> =
         bindingStateFlow.asStateFlow()
 
+    override fun createPreviewView(context: Context): View =
+        PreviewView(context).apply {
+            scaleType = PreviewView.ScaleType.FIT_CENTER
+        }
+
     override suspend fun bindToLifecycle(
         lifecycleOwner: LifecycleOwner,
-        previewView: PreviewView,
+        previewView: View,
     ) {
+        val typedPreviewView = previewView as? PreviewView
+        if (typedPreviewView == null) {
+            Log.w(TAG, "bindToLifecycle received a non-PreviewView host.")
+            bindingStateFlow.value = CameraScannerController.BindingState.ERROR
+            return
+        }
         val provider = runCatching { awaitCameraProvider() }
             .getOrElse { error ->
                 Log.w(TAG, "ProcessCameraProvider init failed.", error)
@@ -121,7 +135,7 @@ class CameraXMlKitScannerController(
 
         withContext(Dispatchers.Main) {
             val preview = Preview.Builder().build().also { useCase ->
-                useCase.setSurfaceProvider(previewView.surfaceProvider)
+                useCase.setSurfaceProvider(typedPreviewView.surfaceProvider)
             }
 
             val imageAnalysis = ImageAnalysis.Builder()
