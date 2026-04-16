@@ -942,8 +942,13 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                                     return@launch
                                 }
 
+                                val session = appContainer.authRepository.activeSession.value
                                 val acknowledged = withContext(Dispatchers.IO) {
-                                    backendTruthRepository.acknowledgeCheckTable(tableId)
+                                    backendTruthRepository.acknowledgeCheckTable(
+                                        tableId = tableId,
+                                        actorStaffId = session?.staffId,
+                                        actorDisplayName = session?.displayName,
+                                    )
                                 }
 
                                 Toast.makeText(
