@@ -104,6 +104,19 @@ class CameraXMlKitScannerController(
         )
     }
 
+    /**
+     * Latched codes: raw barcode value → consecutive absent-while-torch-stable frames.
+     * A code enters this map when it is first emitted. It stays latched (suppressed from
+     * re-emission) until [CONFIRM_GONE_FRAMES] consecutive frames confirm it is no longer
+     * visible under stable observation conditions.
+     */
+    private val latchedCodes = mutableMapOf<String, Int>()
+
+    /** Current torch state, updated by [setTorch]. */
+    @Volatile private var torchIsOn = false
+    /** Epoch ms when [setTorch](true) was last called. */
+    @Volatile private var torchOnSinceMs = 0L
+
     private var cameraProvider: ProcessCameraProvider? = null
     private var camera: Camera? = null
 
@@ -175,6 +188,9 @@ class CameraXMlKitScannerController(
         withContext(Dispatchers.Main) {
             cameraProvider?.unbindAll()
             camera = null
+            latchedCodes.clear()
+            torchIsOn = false
+            torchOnSinceMs = 0L
             bindingStateFlow.value = CameraScannerController.BindingState.UNBOUND
         }
     }
@@ -184,6 +200,10 @@ class CameraXMlKitScannerController(
             val cam = camera ?: return@withContext
             runCatching { cam.cameraControl.enableTorch(enabled) }
                 .onFailure { Log.w(TAG, "Failed to set CameraX torch enabled=$enabled", it) }
+            torchIsOn = enabled
+            if (enabled) {
+                torchOnSinceMs = System.currentTimeMillis()
+            }
         }
     }
 
@@ -203,15 +223,50 @@ class CameraXMlKitScannerController(
 
         barcodeScanner.process(inputImage)
             .addOnSuccessListener { barcodes ->
-                val barcode = barcodes.firstOrNull { !it.rawValue.isNullOrBlank() }
-                    ?: barcodes.firstOrNull { !it.displayValue.isNullOrBlank() }
-                if (barcode != null) {
-                    val rawValue = barcode.rawValue ?: barcode.displayValue ?: return@addOnSuccessListener
+                val now = System.currentTimeMillis()
+                val torchStable = torchIsOn && (now - torchOnSinceMs >= TORCH_RECOVERY_MS)
+
+                // Collect raw values detected in this frame.
+                val detectedInFrame = mutableSetOf<String>()
+                for (bc in barcodes) {
+                    val raw = bc.rawValue ?: bc.displayValue ?: continue
+                    if (raw.isBlank()) continue
+                    detectedInFrame.add(raw)
+                }
+
+                // Update latched codes' absence evidence.
+                // Iterate over a snapshot — the map is mutated inside the loop.
+                val goneCodes = mutableSetOf<String>()
+                for ((code, absentCount) in latchedCodes.entries.toList()) {
+                    if (code in detectedInFrame) {
+                        // Still visible — reset absence evidence.
+                        latchedCodes[code] = 0
+                    } else if (torchStable) {
+                        // Absent while torch is on and stable — genuine removal evidence.
+                        val newCount = absentCount + 1
+                        if (newCount >= CONFIRM_GONE_FRAMES) {
+                            goneCodes.add(code)
+                        } else {
+                            latchedCodes[code] = newCount
+                        }
+                    }
+                    // Torch not stable (off or recovering): skip — not evidence either way.
+                }
+                for (code in goneCodes) {
+                    latchedCodes.remove(code)
+                }
+
+                // Emit each detected code that is not currently latched.
+                for (bc in barcodes) {
+                    val raw = bc.rawValue ?: bc.displayValue ?: continue
+                    if (raw.isBlank()) continue
+                    if (raw in latchedCodes) continue
+                    latchedCodes[raw] = 0
                     scanEventsFlow.tryEmit(
                         ScanEvent(
-                            rawValue = rawValue,
-                            symbology = formatName(barcode.format),
-                            scannedAtEpochMillis = System.currentTimeMillis(),
+                            rawValue = raw,
+                            symbology = formatName(bc.format),
+                            scannedAtEpochMillis = now,
                         ),
                     )
                 }
@@ -257,5 +312,9 @@ class CameraXMlKitScannerController(
 
     private companion object {
         private const val TAG = "CameraXScannerCtrl"
+        /** Time (ms) after torch-on before camera exposure is considered stable. */
+        private const val TORCH_RECOVERY_MS = 1000L
+        /** Consecutive absent frames while torch is stable to confirm a code is gone. */
+        private const val CONFIRM_GONE_FRAMES = 8
     }
 }
