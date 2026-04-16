@@ -27,4 +27,8 @@ data class BackendMenuItemEntity(
     val subcategoryImageUrl: String?,
     /** Epoch millis when this row was written to the cache. */
     val cachedAt: Long,
+    /** Absolute file path to a locally cached copy of the product image. */
+    val cachedImagePath: String? = null,
+    /** Absolute file path to a locally cached copy of the subcategory image. */
+    val cachedSubcategoryImagePath: String? = null,
 )

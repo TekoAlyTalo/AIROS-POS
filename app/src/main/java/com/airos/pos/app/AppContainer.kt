@@ -97,9 +97,11 @@ class DefaultAppContainer(
         openSaleRepository = openSaleRepository,
         backendBaseUrlProvider = { currentLedgerBackendBaseUrl().orEmpty() },
     )
+    private val productImageCache: ProductImageCache = ProductImageCache(appContext)
     override val menuRepository: MenuRepository = BackendMenuRepository(
         backendBaseUrlProvider = { currentLedgerBackendBaseUrl().orEmpty() },
         menuCacheDao = database.backendMenuCacheDao(),
+        imageCache = productImageCache,
     )
     override val ticketRepository: TicketRepository = FakeTicketRepository(store, authRepository, syncQueueRepository)
     override val kitchenRepository: KitchenRepository = FakeKitchenRepository(store)

@@ -621,6 +621,7 @@ fun TableMapScreen(
     onOpenLivePreview: () -> Unit,
     onRetryLivePreview: () -> Unit,
     onCloseLivePreview: () -> Unit,
+    onAcknowledgeCheck: ((String) -> Unit)? = null,
 ) {
     val viewMode = state.viewMode.toTableMapViewMode()
     val floorPlanStyle = if (preferRichFloorPlanStyle) FloorPlanVisualStyle.RICH else FloorPlanVisualStyle.SIMPLE
@@ -986,6 +987,9 @@ LaunchedEffect(
                     onBeginTransferTargetSelection = onBeginTransferTargetSelection,
                     onCancelTransferMode = onCancelTransferMode,
                     onOpenLivePreview = onOpenLivePreview,
+                    onAcknowledgeCheck = onAcknowledgeCheck?.let { callback ->
+                        { callback(selectedTable.id) }
+                    },
                     onBillDragStartInRoot = { saleCount, positionInRoot ->
                         billDrag = BillDragUiState(
                             active = true,
@@ -1113,39 +1117,80 @@ private fun TableDetailsContent(
         attentionFlag = table.attentionFlag,
     )
     val statusTick = rememberStatusTickPresentation(displayStatus)
+    val mergedHint = mergedHintFor(table)
+    val transferForThisTable = transferState?.takeIf { it.sourceSpotId == table.id }
+    val billsScrollState = rememberScrollState()
+
     Column(
-        modifier = Modifier.verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier.fillMaxHeight(),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        KeyValueRow("Area", table.areaName)
-        KeyValueRow("Status", if (displayStatus.hasAnyAttention) statusTick.label else displayStatus.label)
-        if (displayStatus.differsFromPhysical) {
-            KeyValueRow("Physical status", displayStatus.physicalLabel)
-        }
-        if (displayStatus.hasCheckAttention) {
-            OutlinedButton(
-                onClick = { onAcknowledgeCheck?.invoke() },
-                enabled = onAcknowledgeCheck != null,
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("Acknowledge CHECK")
+                TableDetailsMetaChip(
+                    label = "Status",
+                    value = if (displayStatus.hasAnyAttention) statusTick.label else displayStatus.label,
+                    modifier = Modifier.weight(1f),
+                )
+                TableDetailsMetaChip(
+                    label = "Area",
+                    value = table.areaName,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                TableDetailsMetaChip(
+                    label = "Table",
+                    value = "${table.guestCount} guests · ${table.seats} seats",
+                    modifier = Modifier.weight(1f),
+                )
+                TableDetailsMetaChip(
+                    label = "Camera",
+                    value = table.cameraLabel ?: "Not assigned",
+                    modifier = Modifier.weight(1f),
+                )
+            }
+
+            if (displayStatus.differsFromPhysical || mergedHint != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    TableDetailsMetaChip(
+                        label = if (displayStatus.differsFromPhysical) "Physical" else "Merged",
+                        value = if (displayStatus.differsFromPhysical) displayStatus.physicalLabel else (mergedHint ?: "-"),
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+
+            if (displayStatus.hasCheckAttention) {
+                OutlinedButton(
+                    onClick = { onAcknowledgeCheck?.invoke() },
+                    enabled = onAcknowledgeCheck != null,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(42.dp),
+                ) {
+                    Text("Acknowledge CHECK")
+                }
             }
         }
-        KeyValueRow("Seats", table.seats.toString())
-        KeyValueRow("Guests", table.guestCount.toString())
-        KeyValueRow("Camera", table.cameraLabel ?: "Not assigned")
-        if (openCheckSummary != null) {
-            KeyValueRow("Open checks", openCheckSummary.count.toString())
-            KeyValueRow("Open total", formatOpenTotal(openCheckSummary.totalCents))
-        }
 
-        val mergedHint = mergedHintFor(table)
-        if (mergedHint != null) {
-            KeyValueRow("Merged", mergedHint)
-        }
-
-        val transferForThisTable = transferState?.takeIf { it.sourceSpotId == table.id }
         Surface(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f, fill = true),
             shape = RoundedCornerShape(24.dp),
             color = if (transferForThisTable != null) {
                 MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
@@ -1154,8 +1199,10 @@ private fun TableDetailsContent(
             },
         ) {
             Column(
-                modifier = Modifier.padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 if (transferForThisTable != null) {
                     Text(
@@ -1180,62 +1227,86 @@ private fun TableDetailsContent(
                     )
                 }
 
-                if (openSales.isEmpty() && transferForThisTable == null) {
-                    Text(
-                        text = "Ei avoimia laskuja.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Button(onClick = onOpenNewSale) {
-                        Text("Avaa uusi lasku")
-                    }
-                } else {
-                    openSales.forEach { sale ->
-                        val selectedSaleIds = transferForThisTable?.selectedSaleIds.orEmpty()
-                        val selectedForTransfer = sale.saleId in selectedSaleIds
-                        val selectionEnabled = transferForThisTable?.stage == TableTransferStage.SELECTING_BILLS
-                        val selectedSaleCount = if (selectedForTransfer) {
-                            selectedSaleIds.size
-                        } else {
-                            (selectedSaleIds + sale.saleId).size
-                        }.coerceAtLeast(1)
-                        val dragImmediately = transferForThisTable == null || selectedForTransfer || selectionEnabled
-                        OpenSaleActionRow(
-                            sale = sale,
-                            actionLabel = when {
-                                transferForThisTable == null -> "Napauta avataksesi"
-                                selectedForTransfer -> "Valittu"
-                                selectionEnabled -> "Napauta valitaksesi"
-                                else -> "Valittu"
-                            },
-                            selected = selectedForTransfer,
-                            dragImmediately = dragImmediately,
-                            onOpen = {
-                                if (transferForThisTable == null) {
-                                    onOpenSale(sale.saleId)
-                                } else if (selectionEnabled) {
-                                    onToggleTransferSale(sale.saleId)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f, fill = true),
+                ) {
+                    when {
+                        openSales.isEmpty() && transferForThisTable == null -> {
+                            Column(
+                                modifier = Modifier.align(Alignment.Center),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Text(
+                                    text = "Ei avoimia laskuja.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Button(onClick = onOpenNewSale) {
+                                    Text("Avaa uusi lasku")
                                 }
-                            },
-                            onLongPress = {
-                                if (transferForThisTable == null) {
-                                    onStartTransferForSale(sale.saleId)
-                                } else if (selectionEnabled && !selectedForTransfer) {
-                                    onToggleTransferSale(sale.saleId)
+                            }
+                        }
+
+                        else -> {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .verticalScroll(billsScrollState),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                openSales.forEach { sale ->
+                                    val selectedSaleIds = transferForThisTable?.selectedSaleIds.orEmpty()
+                                    val selectedForTransfer = sale.saleId in selectedSaleIds
+                                    val selectionEnabled = transferForThisTable?.stage == TableTransferStage.SELECTING_BILLS
+                                    val selectedSaleCount = if (selectedForTransfer) {
+                                        selectedSaleIds.size
+                                    } else {
+                                        (selectedSaleIds + sale.saleId).size
+                                    }.coerceAtLeast(1)
+                                    val dragImmediately = transferForThisTable == null || selectedForTransfer || selectionEnabled
+                                    OpenSaleActionRow(
+                                        sale = sale,
+                                        actionLabel = when {
+                                            transferForThisTable == null -> "Napauta avataksesi"
+                                            selectedForTransfer -> "Valittu"
+                                            selectionEnabled -> "Napauta valitaksesi"
+                                            else -> "Valittu"
+                                        },
+                                        selected = selectedForTransfer,
+                                        dragImmediately = dragImmediately,
+                                        onOpen = {
+                                            if (transferForThisTable == null) {
+                                                onOpenSale(sale.saleId)
+                                            } else if (selectionEnabled) {
+                                                onToggleTransferSale(sale.saleId)
+                                            }
+                                        },
+                                        onLongPress = {
+                                            if (transferForThisTable == null) {
+                                                onStartTransferForSale(sale.saleId)
+                                            } else if (selectionEnabled && !selectedForTransfer) {
+                                                onToggleTransferSale(sale.saleId)
+                                            }
+                                        },
+                                        onDragStartInRoot = { pos -> onBillDragStartInRoot(selectedSaleCount, pos) },
+                                        onDragInRoot = onBillDragMoveInRoot,
+                                        onDragEnd = onBillDragEnd,
+                                    )
                                 }
-                            },
-                            onDragStartInRoot = { pos -> onBillDragStartInRoot(selectedSaleCount, pos) },
-                            onDragInRoot = onBillDragMoveInRoot,
-                            onDragEnd = onBillDragEnd,
-                        )
+                            }
+                        }
                     }
                 }
 
                 if (transferForThisTable != null) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        OutlinedButton(onClick = onCancelTransferMode) {
-                            Text("Peruuta")
-                        }
+                    OutlinedButton(
+                        onClick = onCancelTransferMode,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Peruuta")
                     }
                 }
             }
@@ -1247,8 +1318,8 @@ private fun TableDetailsContent(
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
         ) {
             Column(
-                modifier = Modifier.padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1258,7 +1329,7 @@ private fun TableDetailsContent(
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(
                             text = "Mini live preview",
-                            style = MaterialTheme.typography.titleMedium,
+                            style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(
@@ -1272,13 +1343,14 @@ private fun TableDetailsContent(
 
                 val isMiniVisibleOwner = previewTarget != null && !isLivePreviewDialogVisible
                 Box(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(152.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     Box(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .aspectRatio(PREVIEW_SURFACE_ASPECT_RATIO)
+                            .fillMaxSize()
                             .clip(RoundedCornerShape(18.dp))
                             .background(MaterialTheme.colorScheme.surface),
                         contentAlignment = Alignment.Center,
@@ -1320,6 +1392,40 @@ private fun TableDetailsContent(
                     Text("Open live view")
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun TableDetailsMetaChip(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.62f),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.outline.copy(alpha = 0.18f),
+        ),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = value,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
         }
     }
 }
@@ -1424,7 +1530,7 @@ private fun OpenSaleActionRow(
         ),
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

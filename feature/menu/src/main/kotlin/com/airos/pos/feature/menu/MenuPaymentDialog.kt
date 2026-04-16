@@ -1,17 +1,23 @@
 package com.airos.pos.feature.menu
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -29,7 +35,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -47,6 +56,43 @@ private val PaymentDialogTextPrimary = Color(0xFFFBFEFF)
 private val PaymentDialogTextSecondary = Color(0xFFE8F0F6)
 private val PaymentDialogTextMuted = Color(0xFF9CB2C4)
 private val PaymentDialogAccentTextColor = Color(0xFF85F5E0)
+private val PaymentDialogUtilityBlue = Color(0xFF6FD3FF)
+private val PaymentDialogVoucherRed = Color(0xFFE06A6A)
+private val PaymentDialogCoinGold = Color(0xFFE5C56B)
+private val PaymentDialogCashGreen = Color(0xFF77D6B7)
+private val PaymentDialogCardBlue = Color(0xFF6FD3FF)
+private val PaymentDialogBrandLight = Color(0xFFF7F2E8)
+private val PaymentDialogBrandLightAlt = Color(0xFFF2EEE8)
+
+private enum class VoucherProviderUi(
+    val label: String,
+    val logoRes: Int,
+    val containerColor: Color,
+    val selectedContainerColor: Color,
+    val borderColor: Color,
+) {
+    SMARTUM(
+        label = "Smartum",
+        logoRes = R.drawable.pay_logo_smartum,
+        containerColor = PaymentDialogBrandLight,
+        selectedContainerColor = Color(0xFFF5E2B8),
+        borderColor = Color(0xFFC68D2D),
+    ),
+    EDENRED(
+        label = "Edenred",
+        logoRes = R.drawable.pay_logo_edenred,
+        containerColor = PaymentDialogBrandLightAlt,
+        selectedContainerColor = Color(0xFFF8DDD5),
+        borderColor = Color(0xFFE96B46),
+    ),
+    EPASSI(
+        label = "ePassi",
+        logoRes = R.drawable.pay_logo_epassi,
+        containerColor = PaymentDialogBrandLightAlt,
+        selectedContainerColor = Color(0xFFDDEFE7),
+        borderColor = Color(0xFF25A370),
+    ),
+}
 
 enum class MenuPaymentMode(
     val label: String,
@@ -112,6 +158,9 @@ fun MenuPaymentDialog(
     val splitPaidCents = splitCashCents + splitCardCents + splitVoucherCents
 
     val activeTarget = remember(activeInputTarget) { PaymentInputTarget.valueOf(activeInputTarget) }
+    var voucherProviderName by rememberSaveable { mutableStateOf(VoucherProviderUi.SMARTUM.name) }
+    val voucherProvider = remember(voucherProviderName) { VoucherProviderUi.valueOf(voucherProviderName) }
+
 
     val confirmEnabled = when (mode) {
         MenuPaymentMode.CASH -> finalTotalCents > 0 && (cashTenderedCents ?: 0) >= finalTotalCents
@@ -192,13 +241,13 @@ fun MenuPaymentDialog(
                         title = when (mode) {
                             MenuPaymentMode.CASH -> "Cash flow"
                             MenuPaymentMode.CARD -> "Card flow"
-                            MenuPaymentMode.VOUCHER -> "Voucher flow"
+                            MenuPaymentMode.VOUCHER -> "${voucherProvider.label} flow"
                             MenuPaymentMode.SPLIT_PAYMENT -> "Split payment flow"
                         },
                         message = when (mode) {
                             MenuPaymentMode.CASH -> "Enter received cash on the right. Change is calculated automatically."
                             MenuPaymentMode.CARD -> "Card uses the discounted total automatically. No drawer open unless cash is included."
-                            MenuPaymentMode.VOUCHER -> "Enter voucher amount on the right. Barcode field stays ready for the later scanner hookup."
+                            MenuPaymentMode.VOUCHER -> "Use the ${voucherProvider.label} button row above, enter the amount on the right, and keep the code field ready for the later scanner hookup."
                             MenuPaymentMode.SPLIT_PAYMENT -> "Build the payment on the right with cash, card, and voucher parts until the total is covered."
                         },
                     )
@@ -217,11 +266,11 @@ fun MenuPaymentDialog(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        PaymentDialogButton(
-                            label = when {
-                                discountMode == BillDiscountMode.PERCENT && discountInput.isNotBlank() -> "Discount % (${discountInput.trimStart('0').ifBlank { "0" }}%)"
-                                else -> "Discount %"
-                            },
+                        PaymentUtilityButton(
+                            label = "Discount %",
+                            selected = discountMode == BillDiscountMode.PERCENT,
+                            modifier = Modifier.weight(1f),
+                            icon = { DiscountPercentIcon(selected = discountMode == BillDiscountMode.PERCENT) },
                             onClick = {
                                 if (discountMode == BillDiscountMode.PERCENT) {
                                     discountModeName = BillDiscountMode.NONE.name
@@ -231,14 +280,12 @@ fun MenuPaymentDialog(
                                     activeInputTarget = PaymentInputTarget.DISCOUNT_PERCENT.name
                                 }
                             },
-                            primary = discountMode == BillDiscountMode.PERCENT,
-                            modifier = Modifier.weight(1f),
                         )
-                        PaymentDialogButton(
-                            label = when {
-                                discountMode == BillDiscountMode.AMOUNT && discountInput.isNotBlank() -> "Discount € (${discountInput.replace('.', ',')})"
-                                else -> "Discount €"
-                            },
+                        PaymentUtilityButton(
+                            label = "Discount €",
+                            selected = discountMode == BillDiscountMode.AMOUNT,
+                            modifier = Modifier.weight(1f),
+                            icon = { DiscountCoinsIcon(selected = discountMode == BillDiscountMode.AMOUNT) },
                             onClick = {
                                 if (discountMode == BillDiscountMode.AMOUNT) {
                                     discountModeName = BillDiscountMode.NONE.name
@@ -248,55 +295,73 @@ fun MenuPaymentDialog(
                                     activeInputTarget = PaymentInputTarget.DISCOUNT_AMOUNT.name
                                 }
                             },
-                            primary = discountMode == BillDiscountMode.AMOUNT,
-                            modifier = Modifier.weight(1f),
                         )
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        PaymentDialogButton(
-                            label = MenuPaymentMode.VOUCHER.label,
+                        PaymentUtilityButton(
+                            label = "Voucher",
+                            selected = mode == MenuPaymentMode.VOUCHER,
+                            modifier = Modifier.weight(1f),
+                            icon = { VoucherTicketIcon(selected = mode == MenuPaymentMode.VOUCHER) },
                             onClick = {
                                 mode = MenuPaymentMode.VOUCHER
                                 activeInputTarget = PaymentInputTarget.VOUCHER_AMOUNT.name
                             },
-                            primary = mode == MenuPaymentMode.VOUCHER,
-                            modifier = Modifier.weight(1f),
                         )
-                        PaymentDialogButton(
-                            label = MenuPaymentMode.SPLIT_PAYMENT.label,
+                        PaymentUtilityButton(
+                            label = "Split payment",
+                            selected = mode == MenuPaymentMode.SPLIT_PAYMENT,
+                            modifier = Modifier.weight(1f),
+                            icon = { SplitPaymentIcon(selected = mode == MenuPaymentMode.SPLIT_PAYMENT) },
                             onClick = {
                                 mode = MenuPaymentMode.SPLIT_PAYMENT
                                 activeInputTarget = PaymentInputTarget.SPLIT_CASH.name
                             },
-                            primary = mode == MenuPaymentMode.SPLIT_PAYMENT,
-                            modifier = Modifier.weight(1f),
                         )
                     }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        PaymentDialogButton(
+                        PaymentModeButton(
                             label = MenuPaymentMode.CASH.label,
+                            selected = mode == MenuPaymentMode.CASH,
+                            modifier = Modifier.weight(1f),
+                            icon = { CashTenderIcon() },
                             onClick = {
                                 mode = MenuPaymentMode.CASH
                                 activeInputTarget = PaymentInputTarget.CASH_RECEIVED.name
                             },
-                            primary = mode == MenuPaymentMode.CASH,
-                            modifier = Modifier.weight(1f),
                         )
-                        PaymentDialogButton(
+                        PaymentModeButton(
                             label = MenuPaymentMode.CARD.label,
+                            selected = mode == MenuPaymentMode.CARD,
+                            modifier = Modifier.weight(1f),
+                            icon = { CardTenderIcon() },
                             onClick = {
                                 mode = MenuPaymentMode.CARD
-                                activeInputTarget = PaymentInputTarget.DISCOUNT_AMOUNT.name
+                                activeInputTarget = PaymentInputTarget.SPLIT_CARD.name
                             },
-                            primary = mode == MenuPaymentMode.CARD,
-                            modifier = Modifier.weight(1f),
                         )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        VoucherProviderUi.values().forEach { provider ->
+                            PaymentBrandButton(
+                                label = provider.label,
+                                logoRes = provider.logoRes,
+                                selected = mode == MenuPaymentMode.VOUCHER && voucherProvider == provider,
+                                modifier = Modifier.weight(1f),
+                                containerColor = provider.containerColor,
+                                selectedContainerColor = provider.selectedContainerColor,
+                                borderColor = provider.borderColor,
+                                onClick = {
+                                    voucherProviderName = provider.name
+                                    mode = MenuPaymentMode.VOUCHER
+                                    activeInputTarget = PaymentInputTarget.VOUCHER_AMOUNT.name
+                                },
+                            )
+                        }
                     }
 
                     Surface(
@@ -348,16 +413,16 @@ fun MenuPaymentDialog(
 
                                     MenuPaymentMode.VOUCHER -> {
                                         PaymentInputSelector(
-                                            label = "Voucher amount",
+                                            label = "${voucherProvider.label} amount",
                                             value = voucherInput,
-                                            hint = "Voucher value is required",
+                                            hint = "${voucherProvider.label} value is required",
                                             selected = activeTarget == PaymentInputTarget.VOUCHER_AMOUNT,
                                             onClick = { activeInputTarget = PaymentInputTarget.VOUCHER_AMOUNT.name },
                                         )
                                         OutlinedTextField(
                                             value = voucherBarcodeInput,
                                             onValueChange = { voucherBarcodeInput = it },
-                                            label = { Text("Voucher barcode / code") },
+                                            label = { Text("${voucherProvider.label} barcode / code") },
                                             supportingText = { Text("Manual entry now. Scanner hookup can fill this later.") },
                                             modifier = Modifier.fillMaxWidth(),
                                             singleLine = true,
@@ -478,7 +543,7 @@ fun MenuPaymentDialog(
                             label = when (mode) {
                                 MenuPaymentMode.CASH -> "Finish cash payment"
                                 MenuPaymentMode.CARD -> "Finish card payment"
-                                MenuPaymentMode.VOUCHER -> "Finish voucher payment"
+                                MenuPaymentMode.VOUCHER -> "Finish ${voucherProvider.label} payment"
                                 MenuPaymentMode.SPLIT_PAYMENT -> "Finish split payment"
                             },
                             onClick = { onConfirm(result) },
@@ -900,6 +965,299 @@ private fun PaymentSummaryRow(
     }
 }
 
+
+@Composable
+private fun PaymentUtilityButton(
+    label: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    icon: @Composable () -> Unit,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = modifier
+            .defaultMinSize(minHeight = 58.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(16.dp),
+        color = if (selected) PaymentDialogPanelAltColor else PaymentDialogShellColor,
+        border = BorderStroke(1.dp, if (selected) PaymentDialogUtilityBlue.copy(alpha = 0.85f) else PaymentDialogBorderColor),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            icon()
+            Text(
+                text = label,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = PaymentDialogTextPrimary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PaymentModeButton(
+    label: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    icon: @Composable () -> Unit,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = modifier
+            .defaultMinSize(minHeight = 60.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(18.dp),
+        color = if (selected) MaterialTheme.colorScheme.primary else PaymentDialogShellColor,
+        border = BorderStroke(1.dp, if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.55f) else PaymentDialogBorderColor),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 18.dp, vertical = 14.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            icon()
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = if (selected) Color(0xFF092016) else PaymentDialogTextPrimary,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PaymentBrandButton(
+    label: String,
+    logoRes: Int,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    containerColor: Color,
+    selectedContainerColor: Color,
+    borderColor: Color,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = modifier
+            .defaultMinSize(minHeight = 62.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(18.dp),
+        color = if (selected) selectedContainerColor else containerColor,
+        border = BorderStroke(1.dp, borderColor.copy(alpha = if (selected) 0.95f else 0.7f)),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Image(
+                painter = painterResource(id = logoRes),
+                contentDescription = label,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(26.dp),
+                contentScale = ContentScale.Fit,
+            )
+        }
+    }
+}
+
+@Composable
+private fun DiscountPercentIcon(
+    selected: Boolean,
+) {
+    Surface(
+        shape = CircleShape,
+        color = if (selected) PaymentDialogUtilityBlue.copy(alpha = 0.18f) else Color(0xFF102131),
+        border = BorderStroke(1.dp, if (selected) PaymentDialogUtilityBlue else PaymentDialogBorderColor),
+    ) {
+        Box(
+            modifier = Modifier.size(28.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "%",
+                color = PaymentDialogUtilityBlue,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun DiscountCoinsIcon(
+    selected: Boolean,
+) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        repeat(2) { index ->
+            Box(
+                modifier = Modifier
+                    .size(if (index == 0) 14.dp else 12.dp)
+                    .clip(CircleShape)
+                    .background(if (selected) PaymentDialogCoinGold else PaymentDialogCoinGold.copy(alpha = 0.92f)),
+            )
+        }
+    }
+}
+
+@Composable
+private fun VoucherTicketIcon(
+    selected: Boolean,
+) {
+    Surface(
+        shape = RoundedCornerShape(7.dp),
+        color = if (selected) PaymentDialogVoucherRed.copy(alpha = 0.24f) else Color(0xFF152436),
+        border = BorderStroke(1.dp, if (selected) PaymentDialogVoucherRed else PaymentDialogBorderColor),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(width = 30.dp, height = 20.dp)
+                .padding(horizontal = 4.dp, vertical = 3.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(12.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(PaymentDialogVoucherRed),
+            )
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .height(12.dp)
+                    .align(Alignment.Center)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(Color.White.copy(alpha = 0.85f)),
+            )
+        }
+    }
+}
+
+@Composable
+private fun SplitPaymentIcon(
+    selected: Boolean,
+) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = if (selected) PaymentDialogUtilityBlue.copy(alpha = 0.18f) else Color(0xFF102131),
+        border = BorderStroke(1.dp, if (selected) PaymentDialogUtilityBlue else PaymentDialogBorderColor),
+    ) {
+        Box(
+            modifier = Modifier.size(width = 28.dp, height = 20.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "⇄",
+                color = PaymentDialogUtilityBlue,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun CashTenderIcon() {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = Color(0xFF0E2A20),
+        border = BorderStroke(1.dp, PaymentDialogCashGreen.copy(alpha = 0.75f)),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(width = 30.dp, height = 20.dp)
+                .padding(horizontal = 4.dp, vertical = 3.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(12.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(PaymentDialogCashGreen),
+            )
+            Box(
+                modifier = Modifier
+                    .size(5.dp)
+                    .align(Alignment.Center)
+                    .clip(CircleShape)
+                    .background(Color(0xFF0E2A20)),
+            )
+            Box(
+                modifier = Modifier
+                    .width(4.dp)
+                    .height(2.dp)
+                    .align(Alignment.CenterStart)
+                    .background(Color(0xFF0E2A20)),
+            )
+            Box(
+                modifier = Modifier
+                    .width(4.dp)
+                    .height(2.dp)
+                    .align(Alignment.CenterEnd)
+                    .background(Color(0xFF0E2A20)),
+            )
+        }
+    }
+}
+
+@Composable
+private fun CardTenderIcon() {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = Color(0xFF102131),
+        border = BorderStroke(1.dp, PaymentDialogCardBlue.copy(alpha = 0.75f)),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(width = 28.dp, height = 18.dp)
+                .padding(horizontal = 4.dp, vertical = 3.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(12.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(PaymentDialogCardBlue),
+            )
+            Box(
+                modifier = Modifier
+                    .width(4.dp)
+                    .height(4.dp)
+                    .align(Alignment.CenterStart)
+                    .clip(RoundedCornerShape(1.dp))
+                    .background(Color(0xFF102131)),
+            )
+            Box(
+                modifier = Modifier
+                    .width(8.dp)
+                    .height(2.dp)
+                    .align(Alignment.BottomEnd)
+                    .background(Color(0xFF102131)),
+            )
+        }
+    }
+}
+
 @Composable
 private fun PaymentDialogButton(
     label: String,
@@ -910,7 +1268,7 @@ private fun PaymentDialogButton(
 ) {
     Button(
         onClick = onClick,
-        modifier = modifier,
+        modifier = modifier.defaultMinSize(minHeight = 56.dp),
         enabled = enabled,
         shape = RoundedCornerShape(16.dp),
         colors = if (primary) {

@@ -310,6 +310,7 @@ internal fun FloorPlanTableMap(
     floorPlanViewport: StaffFloorPlanViewportPreference = StaffFloorPlanViewportPreference(),
     onFloorPlanViewportChange: (StaffFloorPlanViewportPreference) -> Unit = {},
     openTotalLabelsByTableId: Map<String, String> = emptyMap(),
+    openSaleTotalLabelsByTableId: Map<String, List<String>> = emptyMap(),
     openBillCountsByTableId: Map<String, Int> = emptyMap(),
     externalDragPosition: Offset? = null,
     externalDragSourceTableId: String? = null,
@@ -331,6 +332,7 @@ internal fun FloorPlanTableMap(
                 floorPlanViewport = floorPlanViewport,
                 onFloorPlanViewportChange = onFloorPlanViewportChange,
                 openTotalLabelsByTableId = openTotalLabelsByTableId,
+                openSaleTotalLabelsByTableId = openSaleTotalLabelsByTableId,
                 openBillCountsByTableId = openBillCountsByTableId,
                 externalDragPosition = externalDragPosition,
                 externalDragSourceTableId = externalDragSourceTableId,
@@ -350,6 +352,7 @@ internal fun FloorPlanTableMap(
                 floorPlanViewport = floorPlanViewport,
                 onFloorPlanViewportChange = onFloorPlanViewportChange,
                 openTotalLabelsByTableId = openTotalLabelsByTableId,
+                openSaleTotalLabelsByTableId = openSaleTotalLabelsByTableId,
                 openBillCountsByTableId = openBillCountsByTableId,
                 externalDragPosition = externalDragPosition,
                 externalDragSourceTableId = externalDragSourceTableId,
@@ -372,6 +375,7 @@ private fun SimpleFloorPlanTableMap(
     floorPlanViewport: StaffFloorPlanViewportPreference,
     onFloorPlanViewportChange: (StaffFloorPlanViewportPreference) -> Unit,
     openTotalLabelsByTableId: Map<String, String>,
+    openSaleTotalLabelsByTableId: Map<String, List<String>>,
     openBillCountsByTableId: Map<String, Int>,
     externalDragPosition: Offset? = null,
     externalDragSourceTableId: String? = null,
@@ -610,6 +614,7 @@ private fun SimpleFloorPlanTableMap(
                                 selected = placement.table.id == selectedTableId,
                                 dropHovered = placement.table.id == externalHoverTableId,
                                 openTotalLabel = openTotalLabelsByTableId[placement.table.id],
+                                openSaleTotalLabels = openSaleTotalLabelsByTableId[placement.table.id].orEmpty(),
                                 openBillCount = openBillCountsByTableId[placement.table.id] ?: 0,
                                 sample = false,
                             )
@@ -826,6 +831,7 @@ private fun FloorPlanTableNode(
     selected: Boolean,
     dropHovered: Boolean = false,
     openTotalLabel: String?,
+    openSaleTotalLabels: List<String>,
     openBillCount: Int,
     sample: Boolean = false,
 ) {
@@ -840,6 +846,7 @@ private fun FloorPlanTableNode(
     val statusTick = rememberStatusTickPresentation(displayStatus)
     val attentionTint = displayStatus.attentionVisualTint()
     val accent = displayStatus.floorPlanAccent()
+    val selectedTint = attentionTint ?: accent
     val shape: Shape = if (isRound) CircleShape else RoundedCornerShape(if (isMerged) 28.dp else 22.dp)
 
     Surface(
@@ -862,9 +869,9 @@ private fun FloorPlanTableNode(
                 else -> 1.dp
             },
             color = when {
-                dropHovered -> FloorPlanSelectionColor
                 attentionTint != null -> attentionTint
-                selected -> FloorPlanSelectionColor
+                selected -> selectedTint
+                dropHovered -> FloorPlanSelectionColor
                 else -> accent.copy(alpha = 0.56f)
             },
         ),
@@ -928,19 +935,17 @@ private fun FloorPlanTableNode(
                 }
 
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    if (openTotalLabel != null) {
-                        val totalTint = attentionTint ?: FloorPlanSelectionColor
-                        Surface(
-                            shape = RoundedCornerShape(999.dp),
-                            color = totalTint.copy(alpha = 0.13f),
-                        ) {
-                            Text(
-                                text = openTotalLabel,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = totalTint,
-                                fontWeight = FontWeight.SemiBold,
-                                textAlign = TextAlign.Center,
+                    when {
+                        openSaleTotalLabels.isNotEmpty() -> {
+                            FloorPlanOpenSaleAmountChips(
+                                labels = openSaleTotalLabels,
+                                maxVisible = if (rect.width < 150f) 1 else 2,
+                            )
+                        }
+                        openTotalLabel != null -> {
+                            FloorPlanOpenSaleAmountChips(
+                                labels = listOf(openTotalLabel),
+                                maxVisible = if (rect.width < 150f) 1 else 2,
                             )
                         }
                     }
@@ -960,6 +965,54 @@ private fun FloorPlanTableNode(
                         fontWeight = FontWeight.Medium,
                     )
                 }
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun FloorPlanOpenSaleAmountChips(
+    labels: List<String>,
+    maxVisible: Int,
+) {
+    val visibleLabels = labels.take(maxVisible)
+    val overflowCount = (labels.size - visibleLabels.size).coerceAtLeast(0)
+
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        visibleLabels.forEach { label ->
+            Surface(
+                shape = RoundedCornerShape(999.dp),
+                color = TableMapVisualTokens.ReservedColor.copy(alpha = 0.18f),
+                border = BorderStroke(1.dp, TableMapVisualTokens.ReservedColor.copy(alpha = 0.40f)),
+            ) {
+                Text(
+                    text = label,
+                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TableMapVisualTokens.TextSecondary,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
+        if (overflowCount > 0) {
+            Surface(
+                shape = RoundedCornerShape(999.dp),
+                color = TableMapVisualTokens.PanelAltColor.copy(alpha = 0.94f),
+                border = BorderStroke(1.dp, TableMapVisualTokens.BorderColor.copy(alpha = 0.95f)),
+            ) {
+                Text(
+                    text = "..more..",
+                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TableMapVisualTokens.TextSecondary,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center,
+                )
             }
         }
     }
