@@ -83,7 +83,11 @@ class BackendTruthTableRepository(
         return delegate.assignDraftToServiceSpot(fromSpotId, toSpotId, openedByStaffId)
     }
 
-    suspend fun acknowledgeCheckTable(tableId: String): Boolean {
+    suspend fun acknowledgeCheckTable(
+        tableId: String,
+        actorStaffId: String? = null,
+        actorDisplayName: String? = null,
+    ): Boolean {
         if (tableId != TABLE1_POS_SPOT_ID) {
             Log.w(
                 "AIROS",
@@ -91,7 +95,11 @@ class BackendTruthTableRepository(
             )
             return false
         }
-        return client.postAcknowledgeCheck(TABLE1_BACKEND_TABLE_ID)
+        return client.postAcknowledgeCheck(
+            backendTableId = TABLE1_BACKEND_TABLE_ID,
+            actorStaffId = actorStaffId,
+            actorDisplayName = actorDisplayName,
+        )
     }
 
     private suspend fun publishTable1OpenBillContext(openSales: List<PersistedOpenSale>) {
@@ -200,19 +208,31 @@ private class BackendTableTruthClient(
 
     suspend fun postAcknowledgeCheck(
         backendTableId: Int,
+        actorStaffId: String? = null,
+        actorDisplayName: String? = null,
     ): Boolean = withContext(Dispatchers.IO) {
         val baseUrl = normalizedBaseUrl() ?: return@withContext false
         val urlString = "$baseUrl/tables/$backendTableId/acknowledge-check"
+        val payload = JSONObject().apply {
+            if (actorStaffId != null) put("actor_staff_id", actorStaffId)
+            if (actorDisplayName != null) put("actor_display_name", actorDisplayName)
+            put("source", "android-pos")
+        }
         var connection: HttpURLConnection? = null
         try {
+            val bytes = payload.toString().toByteArray(StandardCharsets.UTF_8)
             connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 connectTimeout = connectTimeoutMs
                 readTimeout = readTimeoutMs
                 doInput = true
+                doOutput = true
                 useCaches = false
                 setRequestProperty("Accept", "application/json")
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                setRequestProperty("Content-Length", bytes.size.toString())
             }
+            connection.outputStream.use { it.write(bytes) }
             val statusCode = connection.responseCode
             readStream(if (statusCode in 200..299) connection.inputStream else connection.errorStream)
             if (statusCode !in 200..299) {
