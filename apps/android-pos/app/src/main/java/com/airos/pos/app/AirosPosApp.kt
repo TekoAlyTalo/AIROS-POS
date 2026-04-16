@@ -1,7 +1,9 @@
 package com.airos.pos.app
 
+import android.Manifest
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.net.Uri
@@ -52,8 +54,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -63,6 +67,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.airos.pos.core.common.PosResult
+import com.airos.pos.core.model.DeviceConnectionState
 import com.airos.pos.core.model.ManagerOverrideReason
 import com.airos.pos.core.model.ScanEvent
 import com.airos.pos.core.model.TerminalSettings
@@ -87,6 +92,7 @@ import com.airos.pos.feature.tablemap.TableMapScreen
 import com.airos.pos.feature.tablemap.TableMapViewModel
 import com.airos.pos.feature.tablemap.TableSaleOpenSource
 import com.airos.pos.feature.tablemap.TableTransferStage
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
@@ -857,6 +863,7 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                 }
 
                 composable(Routes.TableMap) {
+                    val context = LocalContext.current
                     val viewModel: TableMapViewModel = viewModel(
                         key = "tablemap-$currentStaffId",
                         factory = TableMapViewModel.factory(
@@ -918,6 +925,37 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                         onOpenLivePreview = viewModel::openLivePreview,
                         onRetryLivePreview = viewModel::retryLivePreview,
                         onCloseLivePreview = viewModel::closeLivePreview,
+                        onAcknowledgeCheck = { tableId ->
+                            scope.launch {
+                                val backendTruthRepository = appContainer.tableRepository as? BackendTruthTableRepository
+                                if (backendTruthRepository == null) {
+                                    Log.w(
+                                        "AIROS",
+                                        "[AirosPosApp] CHECK acknowledge requested but tableRepository is not BackendTruthTableRepository.",
+                                    )
+                                    Toast.makeText(
+                                        context,
+                                        "CHECK acknowledge is not available in this build.",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                    return@launch
+                                }
+
+                                val acknowledged = withContext(Dispatchers.IO) {
+                                    backendTruthRepository.acknowledgeCheckTable(tableId)
+                                }
+
+                                Toast.makeText(
+                                    context,
+                                    if (acknowledged) {
+                                        "CHECK acknowledged"
+                                    } else {
+                                        "CHECK acknowledge failed"
+                                    },
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                        },
                     )
                 }
 
@@ -1026,10 +1064,7 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
 
                 composable(Routes.Scanner) {
                     val viewModel: ScannerViewModel = viewModel(
-                        factory = ScannerViewModel.factory(
-                            scannerService = appContainer.scannerService,
-                            setTorch = appContainer.torchService::setTorch,
-                        ),
+                        factory = ScannerViewModel.factory(),
                     )
                     val state by viewModel.uiState.collectAsState()
                     val lastPresentedValue by viewModel.lastPresentedValue.collectAsState()
@@ -1037,6 +1072,117 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                     val scanStatus by viewModel.scanStatus.collectAsState()
                     val isMultiScanEnabled by viewModel.isMultiScanEnabled.collectAsState()
                     val isBusy by viewModel.isBusy.collectAsState()
+                    val isPreviewVisible by viewModel.isPreviewVisible.collectAsState()
+                    val context = LocalContext.current
+                    val lifecycleOwner = LocalLifecycleOwner.current
+                    val cameraScannerController = appContainer.cameraScannerController
+                    val previewHostView = androidx.compose.runtime.remember(context) {
+                        cameraScannerController.createPreviewView(context)
+                    }
+                    var hasCameraPermission by rememberSaveable {
+                        mutableStateOf(
+                            ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.CAMERA,
+                            ) == PackageManager.PERMISSION_GRANTED,
+                        )
+                    }
+                    var pendingScanStart by rememberSaveable { mutableStateOf(false) }
+                    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+                        contract = ActivityResultContracts.RequestPermission(),
+                    ) { granted: Boolean ->
+                        hasCameraPermission = granted
+                        if (granted) {
+                            if (pendingScanStart) {
+                                viewModel.scanWithLight()
+                            }
+                        } else {
+                            viewModel.onCameraPermissionDenied()
+                        }
+                        pendingScanStart = false
+                    }
+
+                    LaunchedEffect(cameraScannerController) {
+                        cameraScannerController.bindingState.collect { bindingState: com.airos.pos.device.camera.CameraScannerController.BindingState ->
+                            val availability = when (bindingState) {
+                                com.airos.pos.device.camera.CameraScannerController.BindingState.BOUND -> DeviceConnectionState.READY
+                                com.airos.pos.device.camera.CameraScannerController.BindingState.UNBOUND -> DeviceConnectionState.UNAVAILABLE
+                                com.airos.pos.device.camera.CameraScannerController.BindingState.ERROR -> DeviceConnectionState.UNAVAILABLE
+                            }
+                            viewModel.onPreviewAvailabilityChanged(availability)
+                        }
+                    }
+                    LaunchedEffect(cameraScannerController, isMultiScanEnabled) {
+                        cameraScannerController.scanEvents.collect { event: ScanEvent ->
+                            viewModel.onExternalScanEvent(event)
+                            if (isMultiScanEnabled) {
+                                try {
+                                    cameraScannerController.setTorch(false)
+                                } catch (_: Throwable) {
+                                }
+                                kotlinx.coroutines.delay(500)
+                                try {
+                                    cameraScannerController.setTorch(true)
+                                } catch (_: Throwable) {
+                                }
+                            } else {
+                                try {
+                                    cameraScannerController.setTorch(false)
+                                } catch (_: Throwable) {
+                                }
+                                try {
+                                    cameraScannerController.unbind()
+                                } catch (_: Throwable) {
+                                }
+                            }
+                        }
+                    }
+                    LaunchedEffect(isPreviewVisible, hasCameraPermission, lifecycleOwner, cameraScannerController) {
+                        if (isPreviewVisible) {
+                            if (!hasCameraPermission) {
+                                viewModel.onCameraPermissionDenied()
+                            } else {
+                                try {
+                                    cameraScannerController.bindToLifecycle(lifecycleOwner, previewHostView)
+                                    cameraScannerController.setTorch(true)
+                                    viewModel.onPreviewSessionStarted()
+                                } catch (error: Throwable) {
+                                    try {
+                                        cameraScannerController.setTorch(false)
+                                    } catch (_: Throwable) {
+                                    }
+                                    try {
+                                        cameraScannerController.unbind()
+                                    } catch (_: Throwable) {
+                                    }
+                                    viewModel.onPreviewSessionFailed(error.message)
+                                }
+                            }
+                        } else {
+                            try {
+                                cameraScannerController.setTorch(false)
+                            } catch (_: Throwable) {
+                            }
+                            try {
+                                cameraScannerController.unbind()
+                            } catch (_: Throwable) {
+                            }
+                        }
+                    }
+                    androidx.compose.runtime.DisposableEffect(cameraScannerController) {
+                        onDispose {
+                            scope.launch {
+                                try {
+                                    cameraScannerController.setTorch(false)
+                                } catch (_: Throwable) {
+                                }
+                                try {
+                                    cameraScannerController.unbind()
+                                } catch (_: Throwable) {
+                                }
+                            }
+                        }
+                    }
                     ScannerScreen(
                         state = state,
                         lastPresentedValue = lastPresentedValue,
@@ -1044,9 +1190,36 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                         scanStatus = scanStatus,
                         isMultiScanEnabled = isMultiScanEnabled,
                         isBusy = isBusy,
+                        isPreviewVisible = isPreviewVisible,
+                        hasCameraPermission = hasCameraPermission,
+                        previewContent = {
+                            AndroidView(
+                                modifier = Modifier.fillMaxSize(),
+                                factory = { previewHostView },
+                            )
+                        },
                         onMultiScanEnabledChange = viewModel::setMultiScanEnabled,
-                        onScanWithLight = viewModel::scanWithLight,
-                        onStopScanning = viewModel::stopScanning,
+                        onScanWithLight = {
+                            if (hasCameraPermission) {
+                                viewModel.scanWithLight()
+                            } else {
+                                pendingScanStart = true
+                                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                            }
+                        },
+                        onStopScanning = {
+                            scope.launch {
+                                try {
+                                    cameraScannerController.setTorch(false)
+                                } catch (_: Throwable) {
+                                }
+                                try {
+                                    cameraScannerController.unbind()
+                                } catch (_: Throwable) {
+                                }
+                            }
+                            viewModel.stopScanning()
+                        },
                     )
                 }
 
