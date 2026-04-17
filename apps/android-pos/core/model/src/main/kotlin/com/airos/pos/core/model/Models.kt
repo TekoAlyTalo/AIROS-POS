@@ -322,6 +322,19 @@ data class PosShift(
     val closedAtEpochMillis: Long? = null,
 )
 
+data class AttendanceEntry(
+    val staffId: String,
+    val staffName: String,
+    val status: String,
+    val startedAt: String,
+    val durationMinutes: Double,
+)
+
+data class WorktimeAttendanceSnapshot(
+    val currentlyOnSite: List<AttendanceEntry> = emptyList(),
+    val clockedInToday: List<AttendanceEntry> = emptyList(),
+)
+
 enum class PaymentMethod {
     CASH,
     CARD,
@@ -582,4 +595,5 @@ data class TerminalSettings(
     val offlineModeEnabled: Boolean,
     val nfcDirectLoginEnabled: Boolean = false,
     val preferredPrinterId: String? = null,
+    val defaultOpeningFloatCents: Int = 5000,
 )

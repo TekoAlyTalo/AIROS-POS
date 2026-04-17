@@ -52,6 +52,7 @@ data class SettingsUiState(
     val settings: TerminalSettings? = null,
     val terminalNameInput: String = "",
     val edgeBaseUrlInput: String = "",
+    val defaultOpeningFloatInput: String = "",
     val queueDepth: Int = 0,
     val deviceProfile: DeviceProfile? = null,
     val nfcStaffRows: List<SettingsNfcStaffRow> = emptyList(),
@@ -95,6 +96,11 @@ class SettingsViewModel(
                         settings = settings,
                         terminalNameInput = if (current.terminalNameInput.isBlank()) settings.terminalName else current.terminalNameInput,
                         edgeBaseUrlInput = if (current.edgeBaseUrlInput.isBlank()) settings.edgeBaseUrl else current.edgeBaseUrlInput,
+                        defaultOpeningFloatInput = if (current.defaultOpeningFloatInput.isBlank()) {
+                            centsToEuroInput(settings.defaultOpeningFloatCents)
+                        } else {
+                            current.defaultOpeningFloatInput
+                        },
                     )
                 }
             }
@@ -141,10 +147,25 @@ class SettingsViewModel(
         mutableState.update { it.copy(edgeBaseUrlInput = value) }
     }
 
+    fun updateDefaultOpeningFloatInput(value: String) {
+        mutableState.update { it.copy(defaultOpeningFloatInput = value) }
+    }
+
     fun saveSettings() {
+        val floatCents = euroInputToCents(mutableState.value.defaultOpeningFloatInput)
+        if (floatCents == null) {
+            mutableState.update {
+                it.copy(
+                    message = "Default opening float: enter a valid euro amount (e.g. 50,00).",
+                    messageIsError = true,
+                )
+            }
+            return
+        }
         viewModelScope.launch {
             settingsRepository.updateTerminalName(mutableState.value.terminalNameInput)
             settingsRepository.updateEdgeBaseUrl(mutableState.value.edgeBaseUrlInput)
+            settingsRepository.updateDefaultOpeningFloatCents(floatCents)
             mutableState.update {
                 it.copy(
                     message = "Settings saved locally.",
@@ -406,6 +427,7 @@ fun SettingsScreen(
     state: SettingsUiState,
     onTerminalNameChanged: (String) -> Unit,
     onEdgeBaseUrlChanged: (String) -> Unit,
+    onDefaultOpeningFloatChanged: (String) -> Unit,
     onSaveSettings: () -> Unit,
     onOfflineModeChanged: (Boolean) -> Unit,
     onNfcDirectLoginChanged: (Boolean) -> Unit,
@@ -451,6 +473,13 @@ fun SettingsScreen(
                 value = state.edgeBaseUrlInput,
                 onValueChange = onEdgeBaseUrlChanged,
                 label = { Text("Edge base URL") },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = state.defaultOpeningFloatInput,
+                onValueChange = onDefaultOpeningFloatChanged,
+                label = { Text("Default opening float (\u20AC)") },
+                supportingText = { Text("Prefilled on Shift when opening a new shift. Staff can still change the actual amount.") },
                 modifier = Modifier.fillMaxWidth(),
             )
             Row(
@@ -699,4 +728,30 @@ private fun CustomerNfcEnrollmentCard(
             }
         }
     }
+}
+
+private fun euroInputToCents(input: String): Int? {
+    val trimmed = input.trim()
+    if (trimmed.isEmpty()) return null
+    val normalized = trimmed.replace(',', '.')
+    if (normalized.count { it == '.' } > 1) return null
+    val parts = normalized.split('.')
+    val integerPart = parts[0].toLongOrNull() ?: return null
+    if (integerPart < 0) return null
+    val fractionCents = if (parts.size == 2) {
+        val frac = parts[1]
+        if (frac.length > 2 || frac.isEmpty()) return null
+        frac.padEnd(2, '0').toIntOrNull() ?: return null
+    } else {
+        0
+    }
+    val totalCents = integerPart * 100 + fractionCents
+    if (totalCents > Int.MAX_VALUE) return null
+    return totalCents.toInt()
+}
+
+private fun centsToEuroInput(cents: Int): String {
+    val euros = cents / 100
+    val remainder = cents % 100
+    return "$euros,${remainder.toString().padStart(2, '0')}"
 }

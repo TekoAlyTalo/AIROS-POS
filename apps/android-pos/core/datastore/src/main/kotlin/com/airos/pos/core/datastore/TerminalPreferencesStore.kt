@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.airos.pos.core.model.TerminalSettings
@@ -30,6 +31,7 @@ class TerminalPreferencesStore(
         val offlineMode = booleanPreferencesKey("offline_mode")
         val nfcDirectLogin = booleanPreferencesKey("nfc_direct_login")
         val preferredPrinterId = stringPreferencesKey("preferred_printer_id")
+        val defaultOpeningFloatCents = intPreferencesKey("default_opening_float_cents")
     }
 
     val settings: Flow<TerminalSettings> = context.terminalPreferencesDataStore.data
@@ -47,6 +49,7 @@ class TerminalPreferencesStore(
                 offlineModeEnabled = preferences[Keys.offlineMode] ?: true,
                 nfcDirectLoginEnabled = preferences[Keys.nfcDirectLogin] ?: false,
                 preferredPrinterId = preferences[Keys.preferredPrinterId],
+                defaultOpeningFloatCents = preferences[Keys.defaultOpeningFloatCents] ?: 5000,
             )
         }
 
@@ -64,6 +67,10 @@ class TerminalPreferencesStore(
 
     suspend fun setNfcDirectLoginEnabled(enabled: Boolean) {
         context.terminalPreferencesDataStore.edit { it[Keys.nfcDirectLogin] = enabled }
+    }
+
+    suspend fun updateDefaultOpeningFloatCents(cents: Int) {
+        context.terminalPreferencesDataStore.edit { it[Keys.defaultOpeningFloatCents] = cents }
     }
 
     suspend fun updatePreferredPrinter(id: String?) {

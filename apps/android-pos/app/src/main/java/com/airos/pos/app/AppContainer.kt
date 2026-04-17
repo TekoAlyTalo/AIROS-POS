@@ -68,6 +68,7 @@ interface AppContainer {
     val cashDrawerService: CashDrawerService
     val deviceInfoService: DeviceInfoService
     val customerDisplayService: CustomerDisplayService
+    val worktimeAttendanceClient: WorktimeAttendanceClient
 }
 
 class DefaultAppContainer(
@@ -120,6 +121,9 @@ class DefaultAppContainer(
             context = appContext,
             deviceInfoService = androidDeviceInfoService,
         )
+    override val worktimeAttendanceClient: WorktimeAttendanceClient = WorktimeAttendanceClient(
+        backendBaseUrlProvider = { currentLedgerBackendBaseUrl().orEmpty() },
+    )
 
     init {
         runBlocking {

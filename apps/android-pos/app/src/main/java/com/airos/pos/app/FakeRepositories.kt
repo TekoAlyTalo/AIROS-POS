@@ -828,6 +828,10 @@ class DataStoreSettingsRepository(
     override suspend fun setNfcDirectLoginEnabled(enabled: Boolean) {
         preferencesStore.setNfcDirectLoginEnabled(enabled)
     }
+
+    override suspend fun updateDefaultOpeningFloatCents(cents: Int) {
+        preferencesStore.updateDefaultOpeningFloatCents(cents)
+    }
 }
 
 

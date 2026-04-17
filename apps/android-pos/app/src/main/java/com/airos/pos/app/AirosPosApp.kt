@@ -44,6 +44,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -69,6 +70,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.model.DeviceConnectionState
+import com.airos.pos.core.model.WorktimeAttendanceSnapshot
 import com.airos.pos.core.model.ManagerOverrideReason
 import com.airos.pos.core.model.ScanEvent
 import com.airos.pos.core.model.TerminalSettings
@@ -348,6 +350,7 @@ fun AirosPosApp(
         SignedInApp(
             appContainer = appContainer,
             currentStaffId = session!!.staffId,
+            currentStaffName = session!!.displayName,
         )
         MenuSyncBanner(syncState = syncState)
     }
@@ -394,10 +397,18 @@ private fun MenuSyncBanner(syncState: MenuSyncResult?) {
 private fun SignedInApp(
     appContainer: AppContainer,
     currentStaffId: String,
+    currentStaffName: String,
 ) {
     val navController = rememberNavController()
     val scope = rememberCoroutineScope()
     var useRichFloorPlanStyle by rememberSaveable { mutableStateOf(false) }
+    val terminalSettings by appContainer.settingsRepository.observeSettings().collectAsState(
+        initial = TerminalSettings(
+            terminalName = "",
+            edgeBaseUrl = "",
+            offlineModeEnabled = true,
+        ),
+    )
 
     Row(
         modifier = Modifier
@@ -425,27 +436,68 @@ private fun SignedInApp(
                     .padding(horizontal = 8.dp, vertical = 8.dp),
             ) {
                 composable(Routes.Shift) {
-                    val viewModel: ShiftViewModel = viewModel(factory = ShiftViewModel.factory(appContainer.shiftRepository))
+                    val viewModel: ShiftViewModel = viewModel(
+                        factory = ShiftViewModel.factory(
+                            shiftRepository = appContainer.shiftRepository,
+                            defaultOpeningFloatCents = terminalSettings.defaultOpeningFloatCents,
+                        ),
+                    )
                     val state by viewModel.uiState.collectAsState()
-                    Column(
-                        modifier = Modifier.fillMaxSize(),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        TemporaryFloorPlanStyleCard(
-                            useRichStyle = useRichFloorPlanStyle,
-                            onStyleChange = { useRichFloorPlanStyle = it },
-                        )
-                        Box(modifier = Modifier.weight(1f, fill = true)) {
-                            ShiftScreen(
-                                state = state,
-                                currentStaffId = currentStaffId,
-                                onOpeningFloatChanged = viewModel::updateOpeningFloat,
-                                onCountedCashChanged = viewModel::updateCountedCash,
-                                onOpenShift = viewModel::openShift,
-                                onCloseShift = viewModel::closeShift,
-                            )
-                        }
-                    }
+                    val attendance by appContainer.worktimeAttendanceClient.observeAttendance().collectAsState(
+                        initial = WorktimeAttendanceSnapshot(),
+                    )
+                    val attendanceScope = rememberCoroutineScope()
+                    var attendanceBusy by remember { mutableStateOf(false) }
+                    var attendanceMessage by remember { mutableStateOf<String?>(null) }
+                    var clockedInOverride by remember { mutableStateOf<Boolean?>(null) }
+
+                    // Reset optimistic override once the attendance poll catches up.
+                    LaunchedEffect(attendance) { clockedInOverride = null }
+
+                    val myEntry = attendance.currentlyOnSite.find { it.staffId == currentStaffId }
+                    val isClockedIn = clockedInOverride ?: (myEntry != null)
+
+                    ShiftScreen(
+                        state = state,
+                        currentStaffId = currentStaffId,
+                        onOpeningFloatChanged = viewModel::updateOpeningFloat,
+                        onCountedCashChanged = viewModel::updateCountedCash,
+                        onOpenShift = viewModel::openShift,
+                        onCloseShift = viewModel::closeShift,
+                        attendance = attendance,
+                        isClockedIn = isClockedIn,
+                        myAttendanceEntry = myEntry,
+                        attendanceBusy = attendanceBusy,
+                        attendanceMessage = attendanceMessage,
+                        onClockIn = {
+                            attendanceScope.launch {
+                                attendanceBusy = true
+                                attendanceMessage = null
+                                when (val r = appContainer.worktimeAttendanceClient.clockIn(currentStaffId, currentStaffName)) {
+                                    is PosResult.Success -> {
+                                        clockedInOverride = true
+                                        attendanceMessage = null
+                                    }
+                                    is PosResult.Failure -> attendanceMessage = r.message
+                                }
+                                attendanceBusy = false
+                            }
+                        },
+                        onClockOut = {
+                            attendanceScope.launch {
+                                attendanceBusy = true
+                                attendanceMessage = null
+                                when (val r = appContainer.worktimeAttendanceClient.clockOut(currentStaffId)) {
+                                    is PosResult.Success -> {
+                                        clockedInOverride = false
+                                        attendanceMessage = null
+                                    }
+                                    is PosResult.Failure -> attendanceMessage = r.message
+                                }
+                                attendanceBusy = false
+                            }
+                        },
+                    )
                 }
 
                 composable(Routes.Diagnostics) {
@@ -1277,6 +1329,7 @@ private fun SignedInApp(
                         state = state,
                         onTerminalNameChanged = viewModel::updateTerminalNameInput,
                         onEdgeBaseUrlChanged = viewModel::updateEdgeBaseUrlInput,
+                        onDefaultOpeningFloatChanged = viewModel::updateDefaultOpeningFloatInput,
                         onSaveSettings = viewModel::saveSettings,
                         onOfflineModeChanged = viewModel::setOfflineMode,
                         onNfcDirectLoginChanged = viewModel::setNfcDirectLoginEnabled,

@@ -119,6 +119,7 @@ interface SettingsRepository {
     suspend fun updateEdgeBaseUrl(value: String)
     suspend fun setOfflineMode(enabled: Boolean)
     suspend fun setNfcDirectLoginEnabled(enabled: Boolean)
+    suspend fun updateDefaultOpeningFloatCents(cents: Int)
 }
 
 interface StaffUiPreferencesRepository {
