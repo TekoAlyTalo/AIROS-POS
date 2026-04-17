@@ -12,9 +12,11 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.airos.pos.core.model.TerminalSettings
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import java.io.IOException
 import java.net.URI
+import java.util.UUID
 
 private val Context.terminalPreferencesDataStore: DataStore<Preferences> by preferencesDataStore(name = "terminal_preferences")
 private const val DEFAULT_EDGE_BASE_URL = "http://192.168.8.158:8000/"
@@ -32,6 +34,7 @@ class TerminalPreferencesStore(
         val nfcDirectLogin = booleanPreferencesKey("nfc_direct_login")
         val preferredPrinterId = stringPreferencesKey("preferred_printer_id")
         val defaultOpeningFloatCents = intPreferencesKey("default_opening_float_cents")
+        val terminalInstallationId = stringPreferencesKey("terminal_installation_id")
     }
 
     val settings: Flow<TerminalSettings> = context.terminalPreferencesDataStore.data
@@ -81,6 +84,23 @@ class TerminalPreferencesStore(
                 it[Keys.preferredPrinterId] = id
             }
         }
+    }
+
+    // Stable per-install technical terminal identifier. Generated once on first
+    // access and persisted; NEVER derived from the mutable user-facing terminal
+    // name. Required so attendance sync metadata and terminal-sequence numbering
+    // remain consistent across terminal renames.
+    suspend fun terminalInstallationId(): String {
+        val existing = context.terminalPreferencesDataStore.data.first()[Keys.terminalInstallationId]
+        if (!existing.isNullOrBlank()) return existing
+        val generated = UUID.randomUUID().toString()
+        context.terminalPreferencesDataStore.edit { prefs ->
+            val current = prefs[Keys.terminalInstallationId]
+            if (current.isNullOrBlank()) {
+                prefs[Keys.terminalInstallationId] = generated
+            }
+        }
+        return context.terminalPreferencesDataStore.data.first()[Keys.terminalInstallationId] ?: generated
     }
 
     private fun normalizeEdgeBaseUrl(value: String): String {

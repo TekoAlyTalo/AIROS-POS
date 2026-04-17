@@ -5,6 +5,7 @@ import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.model.AttendanceEntry
 import com.airos.pos.core.model.WorktimeAttendanceSnapshot
 import java.io.BufferedReader
+import java.io.IOException
 import java.io.InputStream
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
@@ -44,6 +45,20 @@ data class WorktimeAttendanceSyncEvent(
     val source: String,
     val terminalSequenceNumber: Long,
 )
+
+// Classified outcome of attempting to deliver a single attendance event to the backend.
+// - Delivered: server accepted the event (new authoritative state will be available on next refresh).
+// - ConflictReconciled: server had already recorded this effective state (idempotent — treat as success).
+// - TransientFailure: network/offline condition; safe to retry soon.
+// - RetriableServerFailure: backend 5xx / indeterminate state; retry later.
+// - NonRetriableFailure: contract / schema / business rejection that will not self-heal on retry.
+sealed class AttendanceSyncOutcome {
+    object Delivered : AttendanceSyncOutcome()
+    object ConflictReconciled : AttendanceSyncOutcome()
+    data class TransientFailure(val message: String) : AttendanceSyncOutcome()
+    data class RetriableServerFailure(val message: String) : AttendanceSyncOutcome()
+    data class NonRetriableFailure(val message: String) : AttendanceSyncOutcome()
+}
 
 class WorktimeAttendanceClient(
     private val backendBaseUrlProvider: () -> String,
@@ -114,31 +129,26 @@ class WorktimeAttendanceClient(
         }
     }
 
-    suspend fun clockIn(staffId: String, staffName: String): PosResult<Unit> = withContext(Dispatchers.IO) {
+    suspend fun syncAttendanceEvent(event: WorktimeAttendanceSyncEvent): AttendanceSyncOutcome = withContext(Dispatchers.IO) {
         val baseUrl = backendBaseUrlProvider().trim().trimEnd('/')
-        if (baseUrl.isBlank()) return@withContext PosResult.Failure("No backend URL configured")
-        postClockIn(baseUrl, staffId, staffName, event = null)
+        if (baseUrl.isBlank()) {
+            return@withContext AttendanceSyncOutcome.NonRetriableFailure("No backend URL configured")
+        }
+        when (val primary = postAttendanceEventSync(baseUrl, event)) {
+            is PrimaryEndpointResult.Final -> primary.outcome
+            PrimaryEndpointResult.FallbackToLegacy -> postLegacyAttendanceAction(baseUrl, event)
+        }
     }
 
-    suspend fun syncAttendanceEvent(event: WorktimeAttendanceSyncEvent): PosResult<Unit> = withContext(Dispatchers.IO) {
-        val baseUrl = backendBaseUrlProvider().trim().trimEnd('/')
-        if (baseUrl.isBlank()) return@withContext PosResult.Failure("No backend URL configured")
-        when (val syncResult = postAttendanceEventSync(baseUrl, event)) {
-            is PosResult.Success -> {
-                if (syncResult.value) {
-                    PosResult.Success(Unit)
-                } else {
-                    postLegacyAttendanceAction(baseUrl, event)
-                }
-            }
-            is PosResult.Failure -> syncResult
-        }
+    private sealed class PrimaryEndpointResult {
+        data class Final(val outcome: AttendanceSyncOutcome) : PrimaryEndpointResult()
+        object FallbackToLegacy : PrimaryEndpointResult()
     }
 
     private fun postAttendanceEventSync(
         baseUrl: String,
         event: WorktimeAttendanceSyncEvent,
-    ): PosResult<Boolean> {
+    ): PrimaryEndpointResult {
         val urlString = "$baseUrl/api/worktime/events/sync"
         var connection: HttpURLConnection? = null
         return try {
@@ -160,34 +170,39 @@ class WorktimeAttendanceClient(
             }
             val statusCode = connection.responseCode
             val body = readStream(if (statusCode in 200..299) connection.inputStream else connection.errorStream)
-            if (statusCode in 200..299) {
-                PosResult.Success(true)
-            } else if (statusCode == 404 || statusCode == 405 || statusCode == 409) {
-                Log.d("AIROS", "[WorktimeAttendanceClient] event sync endpoint unavailable/conflict status=$statusCode body=$body")
-                PosResult.Success(false)
-            } else {
-                Log.d("AIROS", "[WorktimeAttendanceClient] event sync failed status=$statusCode body=$body")
-                PosResult.Failure("Attendance sync failed (HTTP $statusCode)")
+            when {
+                statusCode in 200..299 -> PrimaryEndpointResult.Final(AttendanceSyncOutcome.Delivered)
+                statusCode == 404 || statusCode == 405 || statusCode == 409 -> {
+                    // Primary endpoint absent or conflicting — fall back to legacy clock-in/clock-out
+                    // where 409 can be authoritatively reconciled against the active-session snapshot.
+                    Log.d("AIROS", "[WorktimeAttendanceClient] event sync endpoint unavailable/conflict status=$statusCode body=$body")
+                    PrimaryEndpointResult.FallbackToLegacy
+                }
+                statusCode in 500..599 -> {
+                    Log.d("AIROS", "[WorktimeAttendanceClient] event sync server error status=$statusCode body=$body")
+                    PrimaryEndpointResult.Final(AttendanceSyncOutcome.RetriableServerFailure("Attendance sync server error (HTTP $statusCode)"))
+                }
+                else -> {
+                    Log.d("AIROS", "[WorktimeAttendanceClient] event sync non-retriable status=$statusCode body=$body")
+                    PrimaryEndpointResult.Final(AttendanceSyncOutcome.NonRetriableFailure("Attendance sync rejected (HTTP $statusCode)"))
+                }
             }
+        } catch (t: IOException) {
+            Log.d("AIROS", "[WorktimeAttendanceClient] event sync transient: ${t.javaClass.simpleName}: ${t.message.orEmpty()}")
+            PrimaryEndpointResult.Final(AttendanceSyncOutcome.TransientFailure("Attendance sync offline: ${t.message.orEmpty()}"))
         } catch (t: Throwable) {
             Log.d("AIROS", "[WorktimeAttendanceClient] event sync error: ${t.javaClass.simpleName}: ${t.message.orEmpty()}")
-            PosResult.Failure("Attendance sync failed: ${t.message.orEmpty()}")
+            PrimaryEndpointResult.Final(AttendanceSyncOutcome.NonRetriableFailure("Attendance sync failed: ${t.message.orEmpty()}"))
         } finally {
             connection?.disconnect()
         }
     }
 
-    suspend fun clockOut(staffId: String): PosResult<Unit> = withContext(Dispatchers.IO) {
-        val baseUrl = backendBaseUrlProvider().trim().trimEnd('/')
-        if (baseUrl.isBlank()) return@withContext PosResult.Failure("No backend URL configured")
-        postClockOut(baseUrl, staffId, event = null)
-    }
-
-    private fun postLegacyAttendanceAction(baseUrl: String, event: WorktimeAttendanceSyncEvent): PosResult<Unit> {
+    private fun postLegacyAttendanceAction(baseUrl: String, event: WorktimeAttendanceSyncEvent): AttendanceSyncOutcome {
         return when (event.action) {
             "clock_in" -> postClockIn(baseUrl, event.staffId, event.staffName, event)
             "clock_out" -> postClockOut(baseUrl, event.staffId, event)
-            else -> PosResult.Failure("Unsupported attendance action: ${event.action}")
+            else -> AttendanceSyncOutcome.NonRetriableFailure("Unsupported attendance action: ${event.action}")
         }
     }
 
@@ -196,7 +211,7 @@ class WorktimeAttendanceClient(
         staffId: String,
         staffName: String,
         event: WorktimeAttendanceSyncEvent?,
-    ): PosResult<Unit> {
+    ): AttendanceSyncOutcome {
         val urlString = "$baseUrl/api/worktime/clock-in"
         var connection: HttpURLConnection? = null
         try {
@@ -222,7 +237,7 @@ class WorktimeAttendanceClient(
             val statusCode = connection.responseCode
             val body = readStream(if (statusCode in 200..299) connection.inputStream else connection.errorStream)
             if (statusCode in 200..299) {
-                return PosResult.Success(Unit)
+                return AttendanceSyncOutcome.Delivered
             }
             if (statusCode == 409) {
                 return when (val activeSession = fetchActiveSessionForStaff(baseUrl, staffId, event?.restaurantKey)) {
@@ -233,23 +248,30 @@ class WorktimeAttendanceClient(
                                 "AIROS",
                                 "[WorktimeAttendanceClient] clock-in conflict resolved by active session id=${session.sessionId}",
                             )
-                            PosResult.Success(Unit)
+                            AttendanceSyncOutcome.ConflictReconciled
                         } else {
                             Log.d("AIROS", "[WorktimeAttendanceClient] clock-in conflict but no active session body=$body")
-                            PosResult.Failure("Clock in status could not be confirmed")
+                            AttendanceSyncOutcome.RetriableServerFailure("Clock in status could not be confirmed")
                         }
                     }
                     is PosResult.Failure -> {
                         Log.d("AIROS", "[WorktimeAttendanceClient] clock-in conflict refresh failed: ${activeSession.message}")
-                        PosResult.Failure("Clock in status could not be confirmed")
+                        AttendanceSyncOutcome.TransientFailure("Clock in status could not be confirmed")
                     }
                 }
             }
-            Log.d("AIROS", "[WorktimeAttendanceClient] clock-in failed status=$statusCode body=$body")
-            return PosResult.Failure("Clock in failed (HTTP $statusCode)")
+            if (statusCode in 500..599) {
+                Log.d("AIROS", "[WorktimeAttendanceClient] clock-in server error status=$statusCode body=$body")
+                return AttendanceSyncOutcome.RetriableServerFailure("Clock in server error (HTTP $statusCode)")
+            }
+            Log.d("AIROS", "[WorktimeAttendanceClient] clock-in rejected status=$statusCode body=$body")
+            return AttendanceSyncOutcome.NonRetriableFailure("Clock in rejected (HTTP $statusCode)")
+        } catch (t: IOException) {
+            Log.d("AIROS", "[WorktimeAttendanceClient] clock-in transient: ${t.javaClass.simpleName}: ${t.message.orEmpty()}")
+            return AttendanceSyncOutcome.TransientFailure("Clock in offline: ${t.message.orEmpty()}")
         } catch (t: Throwable) {
             Log.d("AIROS", "[WorktimeAttendanceClient] clock-in error: ${t.javaClass.simpleName}: ${t.message.orEmpty()}")
-            return PosResult.Failure("Clock in failed: ${t.message.orEmpty()}")
+            return AttendanceSyncOutcome.NonRetriableFailure("Clock in failed: ${t.message.orEmpty()}")
         } finally {
             connection?.disconnect()
         }
@@ -259,11 +281,11 @@ class WorktimeAttendanceClient(
         baseUrl: String,
         staffId: String,
         event: WorktimeAttendanceSyncEvent?,
-    ): PosResult<Unit> {
+    ): AttendanceSyncOutcome {
         val activeSession = when (val result = fetchActiveSessionForStaff(baseUrl, staffId, event?.restaurantKey)) {
             is PosResult.Success -> result.value
-            is PosResult.Failure -> return PosResult.Failure(result.message)
-        } ?: return PosResult.Success(Unit)
+            is PosResult.Failure -> return AttendanceSyncOutcome.TransientFailure(result.message)
+        } ?: return AttendanceSyncOutcome.ConflictReconciled
         val sessionId = activeSession.sessionId
         val urlString = "$baseUrl/api/worktime/$sessionId/clock-out"
         var connection: HttpURLConnection? = null
@@ -286,34 +308,43 @@ class WorktimeAttendanceClient(
             }
             val statusCode = connection.responseCode
             val body = readStream(if (statusCode in 200..299) connection.inputStream else connection.errorStream)
-            if (statusCode in 200..299) {
-                PosResult.Success(Unit)
-            } else if (statusCode == 404 || statusCode == 409) {
-                when (val refreshedSession = fetchActiveSessionForStaff(baseUrl, staffId, event?.restaurantKey)) {
-                    is PosResult.Success -> {
-                        if (refreshedSession.value == null) {
-                            Log.d(
-                                "AIROS",
-                                "[WorktimeAttendanceClient] clock-out conflict resolved by no active session for staffId=$staffId",
-                            )
-                            PosResult.Success(Unit)
-                        } else {
-                            Log.d("AIROS", "[WorktimeAttendanceClient] clock-out conflict still active body=$body")
-                            PosResult.Failure("Clock out did not complete; active session is still open")
+            when {
+                statusCode in 200..299 -> AttendanceSyncOutcome.Delivered
+                statusCode == 404 || statusCode == 409 -> {
+                    when (val refreshedSession = fetchActiveSessionForStaff(baseUrl, staffId, event?.restaurantKey)) {
+                        is PosResult.Success -> {
+                            if (refreshedSession.value == null) {
+                                Log.d(
+                                    "AIROS",
+                                    "[WorktimeAttendanceClient] clock-out conflict resolved by no active session for staffId=$staffId",
+                                )
+                                AttendanceSyncOutcome.ConflictReconciled
+                            } else {
+                                Log.d("AIROS", "[WorktimeAttendanceClient] clock-out conflict still active body=$body")
+                                AttendanceSyncOutcome.RetriableServerFailure("Clock out did not complete; active session is still open")
+                            }
+                        }
+                        is PosResult.Failure -> {
+                            Log.d("AIROS", "[WorktimeAttendanceClient] clock-out conflict refresh failed: ${refreshedSession.message}")
+                            AttendanceSyncOutcome.TransientFailure("Clock out status could not be confirmed")
                         }
                     }
-                    is PosResult.Failure -> {
-                        Log.d("AIROS", "[WorktimeAttendanceClient] clock-out conflict refresh failed: ${refreshedSession.message}")
-                        PosResult.Failure("Clock out status could not be confirmed")
-                    }
                 }
-            } else {
-                Log.d("AIROS", "[WorktimeAttendanceClient] clock-out failed status=$statusCode body=$body")
-                PosResult.Failure("Clock out failed (HTTP $statusCode)")
+                statusCode in 500..599 -> {
+                    Log.d("AIROS", "[WorktimeAttendanceClient] clock-out server error status=$statusCode body=$body")
+                    AttendanceSyncOutcome.RetriableServerFailure("Clock out server error (HTTP $statusCode)")
+                }
+                else -> {
+                    Log.d("AIROS", "[WorktimeAttendanceClient] clock-out rejected status=$statusCode body=$body")
+                    AttendanceSyncOutcome.NonRetriableFailure("Clock out rejected (HTTP $statusCode)")
+                }
             }
+        } catch (t: IOException) {
+            Log.d("AIROS", "[WorktimeAttendanceClient] clock-out transient: ${t.javaClass.simpleName}: ${t.message.orEmpty()}")
+            AttendanceSyncOutcome.TransientFailure("Clock out offline: ${t.message.orEmpty()}")
         } catch (t: Throwable) {
             Log.d("AIROS", "[WorktimeAttendanceClient] clock-out error: ${t.javaClass.simpleName}: ${t.message.orEmpty()}")
-                PosResult.Failure("Clock out failed: ${t.message.orEmpty()}")
+            AttendanceSyncOutcome.NonRetriableFailure("Clock out failed: ${t.message.orEmpty()}")
         } finally {
             connection?.disconnect()
         }

@@ -117,6 +117,9 @@ interface AttendanceDao {
     @Query("UPDATE attendance_events SET syncStatus = 'failed', syncBatchId = :syncBatchId, updatedAtEpochMillis = :updatedAtEpochMillis, lastError = :lastError WHERE eventId = :eventId")
     suspend fun markEventFailed(eventId: String, syncBatchId: String, updatedAtEpochMillis: Long, lastError: String)
 
+    @Query("UPDATE attendance_events SET syncStatus = 'blocked', syncBatchId = :syncBatchId, updatedAtEpochMillis = :updatedAtEpochMillis, lastError = :lastError WHERE eventId = :eventId")
+    suspend fun markEventBlocked(eventId: String, syncBatchId: String, updatedAtEpochMillis: Long, lastError: String)
+
     @Query("SELECT * FROM attendance_sync_metadata WHERE metadataKey = :metadataKey LIMIT 1")
     fun observeSyncMetadata(metadataKey: String): Flow<AttendanceSyncMetadataLocalEntity?>
 

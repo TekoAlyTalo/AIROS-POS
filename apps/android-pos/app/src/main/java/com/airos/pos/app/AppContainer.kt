@@ -40,6 +40,7 @@ import com.airos.pos.domain.TableRepository
 import com.airos.pos.domain.TicketRepository
 import com.airos.pos.sync.InMemorySyncQueueRepository
 import com.airos.pos.sync.SyncCoordinator
+import android.util.Log
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 
@@ -84,6 +85,14 @@ class DefaultAppContainer(
 
     override val database: AirosPosDatabase = AirosPosDatabase.build(appContext)
     override val terminalPreferencesStore: TerminalPreferencesStore = TerminalPreferencesStore(appContext)
+
+    // Stable technical terminal identifier — persisted once per install. Drives
+    // attendance sync metadata key + terminal sequence numbering. Intentionally
+    // decoupled from the mutable user-facing terminal name.
+    private val terminalInstallationId: String = runBlocking {
+        terminalPreferencesStore.terminalInstallationId()
+    }
+
     private val staffUiPreferencesStore: StaffUiPreferencesStore = StaffUiPreferencesStore(appContext)
     override val syncQueueRepository: SyncQueueRepository = InMemorySyncQueueRepository()
     override val syncCoordinator: SyncCoordinator = SyncCoordinator(syncQueueRepository)
@@ -128,7 +137,7 @@ class DefaultAppContainer(
     override val worktimeAttendanceRepository: WorktimeAttendanceRepository = WorktimeAttendanceRepository(
         database = database,
         client = worktimeAttendanceClient,
-        ownerAccountIdProvider = { null },
+        ownerAccountIdProvider = { currentOwnerAccountId() },
         restaurantKeyProvider = { currentRestaurantKey() },
         terminalIdProvider = { currentTerminalId() },
     )
@@ -137,6 +146,19 @@ class DefaultAppContainer(
         runBlocking {
             roomNfcIdentityRepository.seedLegacyStaffEnrollmentsIfEmpty(
                 buildLegacyStaffEnrollmentDefaults(SampleData.localAuthStaffRecords()),
+            )
+        }
+        Log.i(
+            "AIROS",
+            "[AppContainer] Attendance scope wiring: terminalInstallationId=$terminalInstallationId " +
+                "restaurantKey=${currentRestaurantKey()} ownerAccountIdSourceAvailable=false",
+        )
+        if (currentOwnerAccountId() == null) {
+            Log.w(
+                "AIROS",
+                "[AppContainer] Attendance scope BLOCKER: no owner_account_id source wired. " +
+                    "AuthRepository does not yet expose owner/account identity. " +
+                    "Attendance sync will omit owner_account_id until a real source is wired.",
             )
         }
     }
@@ -162,11 +184,16 @@ class DefaultAppContainer(
         return value.ifBlank { null }
     }
 
-    private fun currentTerminalId(): String? {
-        // For now we reuse terminal name as the stable terminal identifier until a dedicated
-        // device/terminal id is introduced in settings or device registration.
-        return currentTerminalName()
+    private fun currentTerminalId(): String {
+        // Stable technical id — see [terminalInstallationId]. Independent of the
+        // user-facing terminal name so renames cannot break sync continuity.
+        return terminalInstallationId
     }
+
+    // Placeholder until AuthRepository exposes owner/account identity. The init
+    // block logs a blocker so the missing source is visible in logs rather than
+    // being silently treated as a real null.
+    private fun currentOwnerAccountId(): String? = null
 
     private fun currentRestaurantKey(): String = "ravintola_default"
 

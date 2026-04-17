@@ -50,6 +50,14 @@ private const val AttendanceSyncStateIdle = "idle"
 private const val AttendanceSyncStateQueued = "queued"
 private const val AttendanceSyncStateSyncing = "syncing"
 private const val AttendanceSyncStateOffline = "offline"
+// Upload succeeded but authoritative active-session refresh for at least one touched
+// staff failed — we have not yet confirmed the backend view matches the local effective
+// state. Distinct from idle so observers can see that reconciliation is outstanding.
+private const val AttendanceSyncStateReconciling = "reconciling"
+// One or more events were rejected by the backend with a non-retriable contract/schema
+// failure and have been parked (syncStatus = 'blocked'). They will NOT be retried until
+// intervention — keeping them in a retry loop would be noise, not progress.
+private const val AttendanceSyncStateContractBlocked = "contract_blocked"
 private const val OfflineSyncNotice = "Offline, syncing later"
 private const val DefaultRestaurantKey = "ravintola_default"
 private const val DefaultTerminalId = "android-pos-terminal"
@@ -121,7 +129,16 @@ class WorktimeAttendanceRepository(
     suspend fun syncAndRefreshCurrentUser(staffId: String, staffName: String): PosResult<Unit> {
         val scope = currentScope()
         syncPendingNow()
-        return refreshActiveSessionFromBackend(scope, staffId, staffName, markErrors = true)
+        return when (val result = refreshActiveSessionFromBackend(scope, staffId, staffName)) {
+            is PosResult.Success -> {
+                markSyncIdleIfSettled(scope)
+                PosResult.Success(Unit)
+            }
+            is PosResult.Failure -> {
+                markSyncUnavailable(scope, OfflineSyncNotice)
+                PosResult.Failure(result.message)
+            }
+        }
     }
 
     suspend fun syncPendingNow(): PosResult<Unit> = syncMutex.withLock {
@@ -140,33 +157,62 @@ class WorktimeAttendanceRepository(
 
         while (pendingEvents.isNotEmpty()) {
             for (event in pendingEvents) {
-                val now = System.currentTimeMillis()
-                attendanceDao.markEventSyncing(event.eventId, batchId, now)
-                when (val result = client.syncAttendanceEvent(event.toSyncEvent())) {
-                    is PosResult.Success -> {
+                val startedAt = System.currentTimeMillis()
+                attendanceDao.markEventSyncing(event.eventId, batchId, startedAt)
+                when (val outcome = client.syncAttendanceEvent(event.toSyncEvent())) {
+                    AttendanceSyncOutcome.Delivered,
+                    AttendanceSyncOutcome.ConflictReconciled -> {
                         attendanceDao.markEventSynced(event.eventId, batchId, System.currentTimeMillis())
                         touchedStaff[event.staffId] = event.staffName
                         syncedAnyEvent = true
                     }
-                    is PosResult.Failure -> {
-                        attendanceDao.markEventFailed(event.eventId, batchId, System.currentTimeMillis(), result.message)
+                    is AttendanceSyncOutcome.TransientFailure -> {
+                        attendanceDao.markEventFailed(event.eventId, batchId, System.currentTimeMillis(), outcome.message)
                         markSyncUnavailable(scope, OfflineSyncNotice, batchId)
                         return@withLock PosResult.Failure(OfflineSyncNotice)
+                    }
+                    is AttendanceSyncOutcome.RetriableServerFailure -> {
+                        attendanceDao.markEventFailed(event.eventId, batchId, System.currentTimeMillis(), outcome.message)
+                        markSyncUnavailable(scope, OfflineSyncNotice, batchId)
+                        return@withLock PosResult.Failure(OfflineSyncNotice)
+                    }
+                    is AttendanceSyncOutcome.NonRetriableFailure -> {
+                        // Park this event out of the retry pool so it will not be resubmitted
+                        // forever. Surface the fact via contract_blocked so the metadata state
+                        // reflects that there is parked data needing attention.
+                        attendanceDao.markEventBlocked(event.eventId, batchId, System.currentTimeMillis(), outcome.message)
+                        markSyncState(scope, AttendanceSyncStateContractBlocked, batchId, outcome.message)
+                        return@withLock PosResult.Failure(outcome.message)
                     }
                 }
             }
             pendingEvents = attendanceDao.pendingEvents(scope.metadataKey, limit = 25)
         }
 
-        if (syncedAnyEvent) {
-            markSyncSuccess(scope, batchStartedAt, batchId)
-        } else {
+        if (!syncedAnyEvent) {
             markSyncIdleIfSettled(scope)
+            return@withLock PosResult.Success(Unit)
         }
+
+        // Upload phase finished; enter reconciliation. We only mark the sync fully
+        // settled once the authoritative active-session view has been refreshed for
+        // every touched staff. A refresh failure keeps us in 'reconciling' so observers
+        // can see that server truth has not yet been confirmed.
+        markSyncState(scope, AttendanceSyncStateReconciling, batchId, lastError = null)
+        var reconciliationError: String? = null
         touchedStaff.forEach { (staffId, staffName) ->
-            refreshActiveSessionFromBackend(scope, staffId, staffName, markErrors = false)
+            when (val result = refreshActiveSessionFromBackend(scope, staffId, staffName)) {
+                is PosResult.Success -> Unit
+                is PosResult.Failure -> if (reconciliationError == null) reconciliationError = result.message
+            }
         }
-        PosResult.Success(Unit)
+        if (reconciliationError == null) {
+            markSyncSuccess(scope, batchStartedAt, batchId)
+            PosResult.Success(Unit)
+        } else {
+            markSyncState(scope, AttendanceSyncStateReconciling, batchId, reconciliationError)
+            PosResult.Failure(reconciliationError ?: OfflineSyncNotice)
+        }
     }
 
     private suspend fun appendLocalEvent(
@@ -233,11 +279,14 @@ class WorktimeAttendanceRepository(
         }
     }
 
+    // Fetch the authoritative active-session snapshot for one staff and mirror it into
+    // local state. Intentionally does NOT flip the sync metadata state — the caller is
+    // responsible for deciding what "refresh failed" or "refresh succeeded" means in
+    // the context of the wider sync lifecycle (upload vs. idle refresh vs. reconciling).
     private suspend fun refreshActiveSessionFromBackend(
         scope: AttendanceScope,
         staffId: String,
         staffName: String,
-        markErrors: Boolean,
     ): PosResult<Unit> {
         return when (val result = client.fetchActiveSessionForStaff(staffId, scope.restaurantKey)) {
             is PosResult.Success -> {
@@ -261,15 +310,9 @@ class WorktimeAttendanceRepository(
                         ),
                     )
                 }
-                markSyncIdleIfSettled(scope)
                 PosResult.Success(Unit)
             }
-            is PosResult.Failure -> {
-                if (markErrors) {
-                    markSyncUnavailable(scope, OfflineSyncNotice)
-                }
-                PosResult.Failure(OfflineSyncNotice)
-            }
+            is PosResult.Failure -> PosResult.Failure(result.message)
         }
     }
 
@@ -315,6 +358,11 @@ class WorktimeAttendanceRepository(
 
     private suspend fun markSyncIdleIfSettled(scope: AttendanceScope) {
         val metadata = attendanceDao.loadSyncMetadata(scope.metadataKey) ?: return
+        // contract_blocked is sticky — parked events remain parked until explicit
+        // intervention, so we must not silently clear that state just because the
+        // retry queue happens to be empty (blocked events are excluded from the
+        // retry pool by design).
+        if (metadata.syncState == AttendanceSyncStateContractBlocked) return
         val pending = attendanceDao.pendingEvents(scope.metadataKey, limit = 1)
         if (pending.isEmpty() && metadata.syncState != AttendanceSyncStateIdle) {
             attendanceDao.upsertSyncMetadata(
