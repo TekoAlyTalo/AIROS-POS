@@ -157,7 +157,9 @@ fun ShiftScreen(
     attendance: WorktimeAttendanceSnapshot = WorktimeAttendanceSnapshot(),
     isClockedIn: Boolean = false,
     myAttendanceEntry: AttendanceEntry? = null,
+    attendanceStateLoading: Boolean = false,
     attendanceBusy: Boolean = false,
+    attendanceNoticeMessage: String? = null,
     attendanceMessage: String? = null,
     onClockIn: () -> Unit = {},
     onClockOut: () -> Unit = {},
@@ -206,13 +208,21 @@ fun ShiftScreen(
                     text = "Attendance",
                     style = MaterialTheme.typography.titleMedium,
                 )
+                attendanceNoticeMessage?.let { StatusBanner(text = it, tint = MaterialTheme.colorScheme.primary) }
                 attendanceMessage?.let { StatusBanner(text = it, tint = MaterialTheme.colorScheme.error) }
-                if (isClockedIn && myAttendanceEntry != null) {
-                    val hours = (myAttendanceEntry.durationMinutes / 60).toInt()
-                    val mins = (myAttendanceEntry.durationMinutes % 60).toInt()
-                    val duration = if (hours > 0) "${hours}h ${mins}min" else "${mins}min"
+                if (attendanceStateLoading) {
                     Text(
-                        text = "You are clocked in ($duration)",
+                        text = if (attendanceMessage == null) "Checking attendance..." else "Attendance status unavailable.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                } else if (isClockedIn) {
+                    val duration = myAttendanceEntry?.let { entry ->
+                        val hours = (entry.durationMinutes / 60).toInt()
+                        val mins = (entry.durationMinutes % 60).toInt()
+                        if (hours > 0) "${hours}h ${mins}min" else "${mins}min"
+                    }
+                    Text(
+                        text = duration?.let { "You are clocked in ($it)" } ?: "You are clocked in.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     OutlinedButton(

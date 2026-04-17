@@ -5,6 +5,9 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Upsert
+import com.airos.pos.core.database.entity.AttendanceActiveSessionLocalEntity
+import com.airos.pos.core.database.entity.AttendanceEventLocalEntity
+import com.airos.pos.core.database.entity.AttendanceSyncMetadataLocalEntity
 import com.airos.pos.core.database.entity.MenuItemLocalEntity
 import com.airos.pos.core.database.entity.OpenSaleEntity
 import com.airos.pos.core.database.entity.OpenSaleLineEntity
@@ -77,6 +80,51 @@ interface SyncQueueDao {
 
     @Upsert
     suspend fun upsert(item: SyncQueueLocalEntity)
+}
+
+@Dao
+interface AttendanceDao {
+    @Query("SELECT * FROM attendance_active_sessions WHERE sessionKey = :sessionKey LIMIT 1")
+    fun observeActiveSession(sessionKey: String): Flow<AttendanceActiveSessionLocalEntity?>
+
+    @Query("SELECT * FROM attendance_active_sessions WHERE sessionKey = :sessionKey LIMIT 1")
+    suspend fun loadActiveSession(sessionKey: String): AttendanceActiveSessionLocalEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertActiveSession(entity: AttendanceActiveSessionLocalEntity)
+
+    @Query("DELETE FROM attendance_active_sessions WHERE sessionKey = :sessionKey")
+    suspend fun deleteActiveSession(sessionKey: String)
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertEvent(entity: AttendanceEventLocalEntity)
+
+    @Query("SELECT COALESCE(MAX(terminalSequenceNumber), 0) FROM attendance_events WHERE metadataKey = :metadataKey")
+    suspend fun maxTerminalSequence(metadataKey: String): Long
+
+    @Query("SELECT * FROM attendance_events WHERE metadataKey = :metadataKey AND syncStatus IN ('queued', 'syncing', 'failed') ORDER BY terminalSequenceNumber ASC LIMIT :limit")
+    suspend fun pendingEvents(metadataKey: String, limit: Int): List<AttendanceEventLocalEntity>
+
+    @Query("SELECT COUNT(*) FROM attendance_events WHERE metadataKey = :metadataKey AND syncStatus IN ('queued', 'syncing', 'failed')")
+    fun observeUnresolvedEventCount(metadataKey: String): Flow<Int>
+
+    @Query("UPDATE attendance_events SET syncStatus = 'syncing', syncBatchId = :syncBatchId, updatedAtEpochMillis = :updatedAtEpochMillis, lastError = NULL WHERE eventId = :eventId")
+    suspend fun markEventSyncing(eventId: String, syncBatchId: String, updatedAtEpochMillis: Long)
+
+    @Query("UPDATE attendance_events SET syncStatus = 'synced', syncBatchId = :syncBatchId, updatedAtEpochMillis = :updatedAtEpochMillis, lastError = NULL WHERE eventId = :eventId")
+    suspend fun markEventSynced(eventId: String, syncBatchId: String, updatedAtEpochMillis: Long)
+
+    @Query("UPDATE attendance_events SET syncStatus = 'failed', syncBatchId = :syncBatchId, updatedAtEpochMillis = :updatedAtEpochMillis, lastError = :lastError WHERE eventId = :eventId")
+    suspend fun markEventFailed(eventId: String, syncBatchId: String, updatedAtEpochMillis: Long, lastError: String)
+
+    @Query("SELECT * FROM attendance_sync_metadata WHERE metadataKey = :metadataKey LIMIT 1")
+    fun observeSyncMetadata(metadataKey: String): Flow<AttendanceSyncMetadataLocalEntity?>
+
+    @Query("SELECT * FROM attendance_sync_metadata WHERE metadataKey = :metadataKey LIMIT 1")
+    suspend fun loadSyncMetadata(metadataKey: String): AttendanceSyncMetadataLocalEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertSyncMetadata(entity: AttendanceSyncMetadataLocalEntity)
 }
 
 @Dao

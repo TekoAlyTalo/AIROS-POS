@@ -1,6 +1,7 @@
 package com.airos.pos.core.database.entity
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
 @Entity(tableName = "staff_members")
@@ -88,4 +89,64 @@ data class SyncQueueLocalEntity(
     val createdAtEpochMillis: Long,
     val updatedAtEpochMillis: Long,
     val lastError: String?,
+)
+
+@Entity(
+    tableName = "attendance_events",
+    indices = [
+        Index(value = ["metadataKey", "terminalSequenceNumber"], unique = true),
+        Index(value = ["metadataKey", "syncStatus", "terminalSequenceNumber"]),
+        Index(value = ["restaurantKey", "staffId", "occurredAtEpochMillis"]),
+    ],
+)
+data class AttendanceEventLocalEntity(
+    @PrimaryKey val eventId: String,
+    val metadataKey: String,
+    val ownerAccountId: String?,
+    val restaurantKey: String,
+    val terminalId: String,
+    val staffId: String,
+    val staffName: String,
+    val action: String,
+    val occurredAtEpochMillis: Long,
+    val source: String,
+    val syncStatus: String,
+    val terminalSequenceNumber: Long,
+    val createdAtEpochMillis: Long,
+    val updatedAtEpochMillis: Long,
+    val syncBatchId: String?,
+    val lastError: String?,
+)
+
+@Entity(
+    tableName = "attendance_active_sessions",
+    indices = [
+        Index(value = ["restaurantKey", "staffId"]),
+    ],
+)
+data class AttendanceActiveSessionLocalEntity(
+    @PrimaryKey val sessionKey: String,
+    val ownerAccountId: String?,
+    val restaurantKey: String,
+    val staffId: String,
+    val staffName: String,
+    val status: String,
+    val startedAtIso: String,
+    val startedAtEpochMillis: Long,
+    val serverSessionId: Int?,
+    val updatedAtEpochMillis: Long,
+)
+
+@Entity(tableName = "attendance_sync_metadata")
+data class AttendanceSyncMetadataLocalEntity(
+    @PrimaryKey val metadataKey: String,
+    val ownerAccountId: String?,
+    val restaurantKey: String,
+    val terminalId: String,
+    val lastSuccessfulSyncAtEpochMillis: Long?,
+    val lastSeenTerminalSequence: Long,
+    val lastSyncBatchId: String?,
+    val lastError: String?,
+    val syncState: String,
+    val updatedAtEpochMillis: Long,
 )

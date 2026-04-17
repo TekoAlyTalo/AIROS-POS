@@ -6,6 +6,7 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.airos.pos.core.database.dao.AttendanceDao
 import com.airos.pos.core.database.dao.BackendMenuCacheDao
 import com.airos.pos.core.database.dao.MenuItemDao
 import com.airos.pos.core.database.dao.NfcIdentityDao
@@ -16,6 +17,9 @@ import com.airos.pos.core.database.dao.SyncQueueDao
 import com.airos.pos.core.database.dao.TableDao
 import com.airos.pos.core.database.dao.TicketDao
 import com.airos.pos.core.database.entity.BackendMenuItemEntity
+import com.airos.pos.core.database.entity.AttendanceActiveSessionLocalEntity
+import com.airos.pos.core.database.entity.AttendanceEventLocalEntity
+import com.airos.pos.core.database.entity.AttendanceSyncMetadataLocalEntity
 import com.airos.pos.core.database.entity.MenuCacheMetadataEntity
 import com.airos.pos.core.database.entity.MenuItemLocalEntity
 import com.airos.pos.core.database.entity.NfcIdentityEnrollmentEntity
@@ -46,8 +50,11 @@ import com.airos.pos.core.database.entity.TicketLocalEntity
         NfcReceiptHandoffEntity::class,
         OpenSaleEntity::class,
         OpenSaleLineEntity::class,
+        AttendanceEventLocalEntity::class,
+        AttendanceActiveSessionLocalEntity::class,
+        AttendanceSyncMetadataLocalEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = false,
 )
 abstract class AirosPosDatabase : RoomDatabase() {
@@ -60,6 +67,7 @@ abstract class AirosPosDatabase : RoomDatabase() {
     abstract fun backendMenuCacheDao(): BackendMenuCacheDao
     abstract fun nfcIdentityDao(): NfcIdentityDao
     abstract fun openSaleDao(): OpenSaleDao
+    abstract fun attendanceDao(): AttendanceDao
 
     companion object {
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -269,12 +277,106 @@ abstract class AirosPosDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `attendance_events` (
+                        `eventId` TEXT NOT NULL,
+                        `metadataKey` TEXT NOT NULL,
+                        `ownerAccountId` TEXT,
+                        `restaurantKey` TEXT NOT NULL,
+                        `terminalId` TEXT NOT NULL,
+                        `staffId` TEXT NOT NULL,
+                        `staffName` TEXT NOT NULL,
+                        `action` TEXT NOT NULL,
+                        `occurredAtEpochMillis` INTEGER NOT NULL,
+                        `source` TEXT NOT NULL,
+                        `syncStatus` TEXT NOT NULL,
+                        `terminalSequenceNumber` INTEGER NOT NULL,
+                        `createdAtEpochMillis` INTEGER NOT NULL,
+                        `updatedAtEpochMillis` INTEGER NOT NULL,
+                        `syncBatchId` TEXT,
+                        `lastError` TEXT,
+                        PRIMARY KEY(`eventId`)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS `index_attendance_events_metadataKey_terminalSequenceNumber`
+                    ON `attendance_events` (`metadataKey`, `terminalSequenceNumber`)
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `index_attendance_events_metadataKey_syncStatus_terminalSequenceNumber`
+                    ON `attendance_events` (`metadataKey`, `syncStatus`, `terminalSequenceNumber`)
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `index_attendance_events_restaurantKey_staffId_occurredAtEpochMillis`
+                    ON `attendance_events` (`restaurantKey`, `staffId`, `occurredAtEpochMillis`)
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `attendance_active_sessions` (
+                        `sessionKey` TEXT NOT NULL,
+                        `ownerAccountId` TEXT,
+                        `restaurantKey` TEXT NOT NULL,
+                        `staffId` TEXT NOT NULL,
+                        `staffName` TEXT NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `startedAtIso` TEXT NOT NULL,
+                        `startedAtEpochMillis` INTEGER NOT NULL,
+                        `serverSessionId` INTEGER,
+                        `updatedAtEpochMillis` INTEGER NOT NULL,
+                        PRIMARY KEY(`sessionKey`)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `index_attendance_active_sessions_restaurantKey_staffId`
+                    ON `attendance_active_sessions` (`restaurantKey`, `staffId`)
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `attendance_sync_metadata` (
+                        `metadataKey` TEXT NOT NULL,
+                        `ownerAccountId` TEXT,
+                        `restaurantKey` TEXT NOT NULL,
+                        `terminalId` TEXT NOT NULL,
+                        `lastSuccessfulSyncAtEpochMillis` INTEGER,
+                        `lastSeenTerminalSequence` INTEGER NOT NULL,
+                        `lastSyncBatchId` TEXT,
+                        `lastError` TEXT,
+                        `syncState` TEXT NOT NULL,
+                        `updatedAtEpochMillis` INTEGER NOT NULL,
+                        PRIMARY KEY(`metadataKey`)
+                    )
+                    """.trimIndent(),
+                )
+            }
+        }
+
         fun build(context: Context): AirosPosDatabase {
             return Room.databaseBuilder(
                 context,
                 AirosPosDatabase::class.java,
                 "airos-pos.db",
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7).build()
+            ).addMigrations(
+                MIGRATION_1_2,
+                MIGRATION_2_3,
+                MIGRATION_3_4,
+                MIGRATION_4_5,
+                MIGRATION_5_6,
+                MIGRATION_6_7,
+                MIGRATION_7_8,
+            ).build()
         }
     }
 }

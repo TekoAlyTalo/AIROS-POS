@@ -69,6 +69,7 @@ interface AppContainer {
     val deviceInfoService: DeviceInfoService
     val customerDisplayService: CustomerDisplayService
     val worktimeAttendanceClient: WorktimeAttendanceClient
+    val worktimeAttendanceRepository: WorktimeAttendanceRepository
 }
 
 class DefaultAppContainer(
@@ -124,6 +125,13 @@ class DefaultAppContainer(
     override val worktimeAttendanceClient: WorktimeAttendanceClient = WorktimeAttendanceClient(
         backendBaseUrlProvider = { currentLedgerBackendBaseUrl().orEmpty() },
     )
+    override val worktimeAttendanceRepository: WorktimeAttendanceRepository = WorktimeAttendanceRepository(
+        database = database,
+        client = worktimeAttendanceClient,
+        ownerAccountIdProvider = { null },
+        restaurantKeyProvider = { currentRestaurantKey() },
+        terminalIdProvider = { currentTerminalId() },
+    )
 
     init {
         runBlocking {
@@ -159,6 +167,8 @@ class DefaultAppContainer(
         // device/terminal id is introduced in settings or device registration.
         return currentTerminalName()
     }
+
+    private fun currentRestaurantKey(): String = "ravintola_default"
 
     private fun currentCashierStaffId(): String? = authRepository.activeSession.value?.staffId
 

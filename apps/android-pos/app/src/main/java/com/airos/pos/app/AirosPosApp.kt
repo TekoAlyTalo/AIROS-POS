@@ -69,6 +69,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.airos.pos.core.common.PosResult
+import com.airos.pos.core.model.AttendanceEntry
 import com.airos.pos.core.model.DeviceConnectionState
 import com.airos.pos.core.model.WorktimeAttendanceSnapshot
 import com.airos.pos.core.model.ManagerOverrideReason
@@ -443,19 +444,33 @@ private fun SignedInApp(
                         ),
                     )
                     val state by viewModel.uiState.collectAsState()
-                    val attendance by appContainer.worktimeAttendanceClient.observeAttendance().collectAsState(
+                    val attendanceRepository = appContainer.worktimeAttendanceRepository
+                    val attendance by attendanceRepository.observeAttendance().collectAsState(
                         initial = WorktimeAttendanceSnapshot(),
+                    )
+                    val currentAttendance by attendanceRepository.observeCurrentUserState(currentStaffId).collectAsState(
+                        initial = WorktimeEffectiveAttendanceState(),
                     )
                     val attendanceScope = rememberCoroutineScope()
                     var attendanceBusy by remember { mutableStateOf(false) }
                     var attendanceMessage by remember { mutableStateOf<String?>(null) }
-                    var clockedInOverride by remember { mutableStateOf<Boolean?>(null) }
 
-                    // Reset optimistic override once the attendance poll catches up.
-                    LaunchedEffect(attendance) { clockedInOverride = null }
+                    LaunchedEffect(attendanceRepository, currentStaffId, currentStaffName) {
+                        attendanceRepository.syncAndRefreshCurrentUser(currentStaffId, currentStaffName)
+                    }
 
-                    val myEntry = attendance.currentlyOnSite.find { it.staffId == currentStaffId }
-                    val isClockedIn = clockedInOverride ?: (myEntry != null)
+                    val polledMyEntry = attendance.currentlyOnSite.find { it.staffId == currentStaffId }
+                    val myEntry = currentAttendance.activeSession?.toAttendanceEntry(
+                        fallbackStaffName = currentStaffName,
+                        fallbackDurationMinutes = polledMyEntry?.durationMinutes ?: 0.0,
+                    )
+                    val isClockedIn = currentAttendance.activeSession != null
+                    val attendanceNoticeMessage = when {
+                        currentAttendance.unresolvedEventCount > 0 &&
+                            currentAttendance.syncMetadata.syncState == "syncing" -> "Syncing attendance..."
+                        currentAttendance.unresolvedEventCount > 0 -> "Offline, syncing later"
+                        else -> null
+                    }
 
                     ShiftScreen(
                         state = state,
@@ -467,34 +482,36 @@ private fun SignedInApp(
                         attendance = attendance,
                         isClockedIn = isClockedIn,
                         myAttendanceEntry = myEntry,
+                        attendanceStateLoading = false,
                         attendanceBusy = attendanceBusy,
+                        attendanceNoticeMessage = attendanceNoticeMessage,
                         attendanceMessage = attendanceMessage,
                         onClockIn = {
                             attendanceScope.launch {
                                 attendanceBusy = true
                                 attendanceMessage = null
-                                when (val r = appContainer.worktimeAttendanceClient.clockIn(currentStaffId, currentStaffName)) {
-                                    is PosResult.Success -> {
-                                        clockedInOverride = true
-                                        attendanceMessage = null
+                                try {
+                                    when (val result = attendanceRepository.clockIn(currentStaffId, currentStaffName)) {
+                                        is PosResult.Success -> attendanceMessage = null
+                                        is PosResult.Failure -> attendanceMessage = result.message
                                     }
-                                    is PosResult.Failure -> attendanceMessage = r.message
+                                } finally {
+                                    attendanceBusy = false
                                 }
-                                attendanceBusy = false
                             }
                         },
                         onClockOut = {
                             attendanceScope.launch {
                                 attendanceBusy = true
                                 attendanceMessage = null
-                                when (val r = appContainer.worktimeAttendanceClient.clockOut(currentStaffId)) {
-                                    is PosResult.Success -> {
-                                        clockedInOverride = false
-                                        attendanceMessage = null
+                                try {
+                                    when (val result = attendanceRepository.clockOut(currentStaffId, currentStaffName)) {
+                                        is PosResult.Success -> attendanceMessage = null
+                                        is PosResult.Failure -> attendanceMessage = result.message
                                     }
-                                    is PosResult.Failure -> attendanceMessage = r.message
+                                } finally {
+                                    attendanceBusy = false
                                 }
-                                attendanceBusy = false
                             }
                         },
                     )
@@ -1396,6 +1413,27 @@ private fun SignedInApp(
             }
         }
     }
+}
+
+
+private fun WorktimeActiveSession.toAttendanceEntry(
+    fallbackStaffName: String,
+    fallbackDurationMinutes: Double,
+): AttendanceEntry {
+    val effectiveDurationMinutes = if (fallbackDurationMinutes > 0.0) {
+        fallbackDurationMinutes
+    } else {
+        startedAtEpochMillis?.let { startedAt ->
+            maxOf(0.0, (System.currentTimeMillis() - startedAt).toDouble() / 60_000.0)
+        } ?: 0.0
+    }
+    return AttendanceEntry(
+        staffId = staffId,
+        staffName = staffName.ifBlank { fallbackStaffName },
+        status = status,
+        startedAt = startedAt,
+        durationMinutes = effectiveDurationMinutes,
+    )
 }
 
 
