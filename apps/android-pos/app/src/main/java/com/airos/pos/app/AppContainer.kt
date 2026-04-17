@@ -113,6 +113,7 @@ class DefaultAppContainer(
         backendBaseUrlProvider = { currentLedgerBackendBaseUrl().orEmpty() },
         menuCacheDao = database.backendMenuCacheDao(),
         imageCache = productImageCache,
+        restaurantKeyProvider = { currentRestaurantKey() },
     )
     override val ticketRepository: TicketRepository = FakeTicketRepository(store, authRepository, syncQueueRepository)
     override val kitchenRepository: KitchenRepository = FakeKitchenRepository(store)
@@ -151,14 +152,16 @@ class DefaultAppContainer(
         Log.i(
             "AIROS",
             "[AppContainer] Attendance scope wiring: terminalInstallationId=$terminalInstallationId " +
-                "restaurantKey=${currentRestaurantKey()} ownerAccountIdSourceAvailable=false",
+                "restaurantKey=${currentRestaurantKey()} restaurantKeySource=terminal_preferences " +
+                "ownerAccountIdSourceAvailable=false",
         )
         if (currentOwnerAccountId() == null) {
             Log.w(
                 "AIROS",
                 "[AppContainer] Attendance scope BLOCKER: no owner_account_id source wired. " +
-                    "AuthRepository does not yet expose owner/account identity. " +
-                    "Attendance sync will omit owner_account_id until a real source is wired.",
+                    "Neither AuthRepository (Android) nor ravintola_backend currently model " +
+                    "owner/account identity. Attendance sync will omit owner_account_id until " +
+                    "a real source is introduced on both sides.",
             )
         }
     }
@@ -190,12 +193,20 @@ class DefaultAppContainer(
         return terminalInstallationId
     }
 
-    // Placeholder until AuthRepository exposes owner/account identity. The init
-    // block logs a blocker so the missing source is visible in logs rather than
-    // being silently treated as a real null.
+    // Placeholder until AuthRepository exposes owner/account identity. Neither the
+    // Android auth layer nor the ravintola_backend schema models owner/account yet,
+    // so there is no honest source to wire here. The init block logs a blocker so
+    // the missing source stays visible in logs rather than being silently treated
+    // as a real null.
     private fun currentOwnerAccountId(): String? = null
 
-    private fun currentRestaurantKey(): String = "ravintola_default"
+    // Restaurant scope is now sourced from persisted terminal preferences (DataStore)
+    // so attendance sync metadata and menu fetch use the same single source of truth.
+    // Default preserved ("ravintola_default") so existing installs continue unchanged.
+    private fun currentRestaurantKey(): String {
+        val value = currentTerminalSettings().restaurantKey.trim()
+        return value.ifBlank { "ravintola_default" }
+    }
 
     private fun currentCashierStaffId(): String? = authRepository.activeSession.value?.staffId
 

@@ -596,4 +596,8 @@ data class TerminalSettings(
     val nfcDirectLoginEnabled: Boolean = false,
     val preferredPrinterId: String? = null,
     val defaultOpeningFloatCents: Int = 5000,
+    // Restaurant scope key. Shared by attendance sync, menu fetch, and anything else
+    // that needs restaurant-scoped API calls. Persisted in DataStore so attendance
+    // sync metadata and menu cache scoping agree on a single source of truth.
+    val restaurantKey: String = "ravintola_default",
 )

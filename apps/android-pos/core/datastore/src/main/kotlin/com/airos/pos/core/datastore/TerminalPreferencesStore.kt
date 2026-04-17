@@ -23,6 +23,10 @@ private const val DEFAULT_EDGE_BASE_URL = "http://192.168.8.158:8000/"
 private const val LEGACY_EMULATOR_HOST = "10.0.2.2"
 private const val PHYSICAL_EDGE_HOST = "192.168.8.158"
 private const val DEFAULT_EDGE_PORT = 8000
+// Default restaurant scope used by attendance sync + menu fetch when no persisted
+// override is present. Kept identical to the value hardcoded in BackendMenuRepository
+// before this wiring pass so current deployments continue to behave the same way.
+internal const val DEFAULT_RESTAURANT_KEY = "ravintola_default"
 
 class TerminalPreferencesStore(
     private val context: Context,
@@ -35,6 +39,7 @@ class TerminalPreferencesStore(
         val preferredPrinterId = stringPreferencesKey("preferred_printer_id")
         val defaultOpeningFloatCents = intPreferencesKey("default_opening_float_cents")
         val terminalInstallationId = stringPreferencesKey("terminal_installation_id")
+        val restaurantKey = stringPreferencesKey("restaurant_key")
     }
 
     val settings: Flow<TerminalSettings> = context.terminalPreferencesDataStore.data
@@ -53,6 +58,7 @@ class TerminalPreferencesStore(
                 nfcDirectLoginEnabled = preferences[Keys.nfcDirectLogin] ?: false,
                 preferredPrinterId = preferences[Keys.preferredPrinterId],
                 defaultOpeningFloatCents = preferences[Keys.defaultOpeningFloatCents] ?: 5000,
+                restaurantKey = preferences[Keys.restaurantKey]?.trim()?.ifBlank { null } ?: DEFAULT_RESTAURANT_KEY,
             )
         }
 
@@ -82,6 +88,21 @@ class TerminalPreferencesStore(
                 it.remove(Keys.preferredPrinterId)
             } else {
                 it[Keys.preferredPrinterId] = id
+            }
+        }
+    }
+
+    // Update the persisted restaurant scope key. Attendance sync metadata is keyed
+    // on this value, so changing it at runtime will start a fresh per-restaurant
+    // sync lineage rather than corrupt the existing one. Blank / whitespace values
+    // fall back to DEFAULT_RESTAURANT_KEY on read.
+    suspend fun updateRestaurantKey(value: String) {
+        val normalized = value.trim()
+        context.terminalPreferencesDataStore.edit { prefs ->
+            if (normalized.isBlank()) {
+                prefs.remove(Keys.restaurantKey)
+            } else {
+                prefs[Keys.restaurantKey] = normalized
             }
         }
     }
