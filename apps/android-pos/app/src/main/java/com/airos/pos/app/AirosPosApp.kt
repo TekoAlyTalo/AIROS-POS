@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.List
@@ -86,6 +87,7 @@ import com.airos.pos.feature.scanner.ScannerScreen
 import com.airos.pos.feature.scanner.ScannerViewModel
 import com.airos.pos.feature.settings.SettingsScreen
 import com.airos.pos.feature.settings.SettingsViewModel
+import com.airos.pos.feature.shift.DeviceDiagnosticsScreen
 import com.airos.pos.feature.shift.ShiftScreen
 import com.airos.pos.feature.shift.ShiftViewModel
 import com.airos.pos.feature.tablemap.TableMapScreen
@@ -123,6 +125,7 @@ private object Routes {
     const val MenuPattern = "menu?tableId={tableId}&tableLabel={tableLabel}&saleId={saleId}"
     const val Kitchen = "kitchen"
     const val Scanner = "scanner"
+    const val Diagnostics = "diagnostics"
     const val Settings = "settings"
     const val PaymentPattern = "payment/{ticketId}"
     const val RefundPattern = "refund/{ticketId}"
@@ -180,6 +183,13 @@ private val mainRailDestinations = listOf(
         icon = Icons.Filled.Tune,
         iconContainerColor = Color(0xFF3B2E23),
         iconTint = Color(0xFFFFD8A8),
+    ),
+    RailDestination(
+        route = Routes.Diagnostics,
+        label = "Devices",
+        icon = Icons.Filled.Build,
+        iconContainerColor = Color(0xFF2E3B23),
+        iconTint = Color(0xFFD8FFB8),
     ),
     RailDestination(
         route = Routes.Settings,
@@ -417,6 +427,28 @@ private fun SignedInApp(
                 composable(Routes.Shift) {
                     val viewModel: ShiftViewModel = viewModel(factory = ShiftViewModel.factory(appContainer.shiftRepository))
                     val state by viewModel.uiState.collectAsState()
+                    Column(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        TemporaryFloorPlanStyleCard(
+                            useRichStyle = useRichFloorPlanStyle,
+                            onStyleChange = { useRichFloorPlanStyle = it },
+                        )
+                        Box(modifier = Modifier.weight(1f, fill = true)) {
+                            ShiftScreen(
+                                state = state,
+                                currentStaffId = currentStaffId,
+                                onOpeningFloatChanged = viewModel::updateOpeningFloat,
+                                onCountedCashChanged = viewModel::updateCountedCash,
+                                onOpenShift = viewModel::openShift,
+                                onCloseShift = viewModel::closeShift,
+                            )
+                        }
+                    }
+                }
+
+                composable(Routes.Diagnostics) {
                     val context = LocalContext.current
                     var customerDisplayProbeStatus by rememberSaveable { mutableStateOf<String?>(null) }
                     var isCustomerDisplayProbeFailure by rememberSaveable { mutableStateOf(false) }
@@ -521,7 +553,7 @@ private fun SignedInApp(
                             isScannerProbeFailure = true
                         }
                     }
-val scannerAvailability by appContainer.scannerService.availability.collectAsState()
+                    val scannerAvailability by appContainer.scannerService.availability.collectAsState()
                     val scannerDiagnosticEvents by appContainer.scannerService.diagnosticEvents.collectAsState()
                     LaunchedEffect(appContainer.scannerService) {
                         appContainer.scannerService.scanEvents.collect { event: ScanEvent ->
@@ -530,28 +562,13 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                             isScannerProbeFailure = false
                         }
                     }
-                    Column(
-                        modifier = Modifier.fillMaxSize(),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        TemporaryFloorPlanStyleCard(
-                            useRichStyle = useRichFloorPlanStyle,
-                            onStyleChange = { useRichFloorPlanStyle = it },
-                        )
-                        Box(modifier = Modifier.weight(1f, fill = true)) {
-                            ShiftScreen(
-                                state = state,
-                                currentStaffId = currentStaffId,
-                                onOpeningFloatChanged = viewModel::updateOpeningFloat,
-                                onCountedCashChanged = viewModel::updateCountedCash,
-                                onOpenShift = viewModel::openShift,
-                                onCloseShift = viewModel::closeShift,
-                                customerDisplayProbeStatus = customerDisplayProbeStatus,
-                                isCustomerDisplayProbeFailure = isCustomerDisplayProbeFailure,
-                                onRunCustomerDisplayProbe = {
+                    DeviceDiagnosticsScreen(
+                        customerDisplayProbeStatus = customerDisplayProbeStatus,
+                        isCustomerDisplayProbeFailure = isCustomerDisplayProbeFailure,
+                        onRunCustomerDisplayProbe = {
                             Log.i(
                                 CustomerDisplayLogTag,
-                                "Manual customer-display probe trigger pressed from Shift screen. availabilityBefore=${appContainer.customerDisplayService.availability}",
+                                "Manual customer-display probe trigger pressed. availabilityBefore=${appContainer.customerDisplayService.availability}",
                             )
                             customerDisplayProbeStatus = "Customer display probe started..."
                             isCustomerDisplayProbeFailure = false
@@ -562,7 +579,7 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                             ).show()
                             scope.launch {
                                 val report = withContext(Dispatchers.IO) {
-                                    appContainer.customerDisplayService.probeCapability(trigger = "shift-manual")
+                                    appContainer.customerDisplayService.probeCapability(trigger = "diagnostics-manual")
                                 }
                                 val availability = appContainer.customerDisplayService.availability
                                 val statusMessage = if (report.sendSucceeded) {
@@ -594,273 +611,270 @@ val scannerAvailability by appContainer.scannerService.availability.collectAsSta
                                 ).show()
                             }
                         },
-                                receiptPrinterProbeStatus = receiptPrinterProbeStatus,
-                                isReceiptPrinterProbeFailure = isReceiptPrinterProbeFailure,
-                                onRunReceiptPrinterProbe = {
-                                    receiptPrinterProbeStatus = "Receipt printer probe started..."
-                                    isReceiptPrinterProbeFailure = false
-                                    Toast.makeText(
-                                        context,
-                                        "Receipt printer probe started",
-                                        Toast.LENGTH_SHORT,
-                                    ).show()
-                                    scope.launch {
-                                        val result = withContext(Dispatchers.IO) {
-                                            appContainer.printerService.printDiagnosticReceipt()
-                                        }
-                                        val statusMessage = when (result) {
-                                            is com.airos.pos.core.common.PosResult.Success<*> -> "Receipt printer probe succeeded."
-                                            is com.airos.pos.core.common.PosResult.Failure -> "Receipt printer probe failed: ${result.message}"
-                                        }
-                                        isReceiptPrinterProbeFailure = result is com.airos.pos.core.common.PosResult.Failure
-                                        receiptPrinterProbeStatus = statusMessage
-                                        Toast.makeText(
-                                            context,
-                                            if (result is com.airos.pos.core.common.PosResult.Success<*>) "Receipt printer probe succeeded" else "Receipt printer probe failed",
-                                            Toast.LENGTH_LONG,
-                                        ).show()
+                        receiptPrinterProbeStatus = receiptPrinterProbeStatus,
+                        isReceiptPrinterProbeFailure = isReceiptPrinterProbeFailure,
+                        onRunReceiptPrinterProbe = {
+                            receiptPrinterProbeStatus = "Receipt printer probe started..."
+                            isReceiptPrinterProbeFailure = false
+                            Toast.makeText(
+                                context,
+                                "Receipt printer probe started",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                            scope.launch {
+                                val result = withContext(Dispatchers.IO) {
+                                    appContainer.printerService.printDiagnosticReceipt()
+                                }
+                                val statusMessage = when (result) {
+                                    is com.airos.pos.core.common.PosResult.Success<*> -> "Receipt printer probe succeeded."
+                                    is com.airos.pos.core.common.PosResult.Failure -> "Receipt printer probe failed: ${result.message}"
+                                }
+                                isReceiptPrinterProbeFailure = result is com.airos.pos.core.common.PosResult.Failure
+                                receiptPrinterProbeStatus = statusMessage
+                                Toast.makeText(
+                                    context,
+                                    if (result is com.airos.pos.core.common.PosResult.Success<*>) "Receipt printer probe succeeded" else "Receipt printer probe failed",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                            }
+                        },
+                        scannerProbeStatus = scannerProbeStatus,
+                        isScannerProbeFailure = isScannerProbeFailure,
+                        scannerAvailabilityLabel = scannerAvailability.name,
+                        lastScannerValue = lastScannerValue,
+                        scannerDiagnosticEvents = scannerDiagnosticEvents,
+                        onPrepareScanner = {
+                            scannerProbeStatus = "Scanner prepared. Binder + broadcast are now standing by."
+                            isScannerProbeFailure = false
+                            Toast.makeText(
+                                context,
+                                "Preparing scanner",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                            scope.launch {
+                                runCatching {
+                                    withContext(Dispatchers.IO) {
+                                        appContainer.scannerService.start()
                                     }
-                                },
-                                scannerProbeStatus = scannerProbeStatus,
-                                isScannerProbeFailure = isScannerProbeFailure,
-                                scannerAvailabilityLabel = scannerAvailability.name,
-                                lastScannerValue = lastScannerValue,
-                                scannerDiagnosticEvents = scannerDiagnosticEvents,
-                                onPrepareScanner = {
-                                    scannerProbeStatus = "Scanner prepared. Binder + broadcast are now standing by."
-                                    isScannerProbeFailure = false
-                                    Toast.makeText(
-                                        context,
-                                        "Preparing scanner",
-                                        Toast.LENGTH_SHORT,
-                                    ).show()
-                                    scope.launch {
-                                        runCatching {
-                                            withContext(Dispatchers.IO) {
-                                                appContainer.scannerService.start()
-                                            }
-                                        }.onFailure { error ->
-                                            isScannerProbeFailure = true
-                                            scannerProbeStatus = "Prepare scanner failed: ${error.message ?: "Unknown error"}"
-                                        }
+                                }.onFailure { error ->
+                                    isScannerProbeFailure = true
+                                    scannerProbeStatus = "Prepare scanner failed: ${error.message ?: "Unknown error"}"
+                                }
+                            }
+                        },
+                        onTriggerScanner = {
+                            scannerProbeStatus = "Trigger scan requested through binder transaction 2 (aidl scan)."
+                            isScannerProbeFailure = false
+                            Toast.makeText(
+                                context,
+                                "Trigger scan",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                            scope.launch {
+                                runCatching {
+                                    withContext(Dispatchers.IO) {
+                                        appContainer.scannerService.triggerScan()
                                     }
-                                },
-                                onTriggerScanner = {
-                                    scannerProbeStatus = "Trigger scan requested through binder transaction 2 (aidl scan)."
-                                    isScannerProbeFailure = false
-                                    Toast.makeText(
-                                        context,
-                                        "Trigger scan",
-                                        Toast.LENGTH_SHORT,
-                                    ).show()
-                                    scope.launch {
-                                        runCatching {
-                                            withContext(Dispatchers.IO) {
-                                                appContainer.scannerService.triggerScan()
-                                            }
-                                        }.onFailure { error ->
-                                            isScannerProbeFailure = true
-                                            scannerProbeStatus = "Trigger scan failed: ${error.message ?: "Unknown error"}"
-                                        }
+                                }.onFailure { error ->
+                                    isScannerProbeFailure = true
+                                    scannerProbeStatus = "Trigger scan failed: ${error.message ?: "Unknown error"}"
+                                }
+                            }
+                        },
+                        onCameraOnAndScan = {
+                            scannerProbeStatus = "Camera on + scan requested through binder transactions 11 then 2."
+                            isScannerProbeFailure = false
+                            Toast.makeText(
+                                context,
+                                "Camera on + scan",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                            scope.launch {
+                                runCatching {
+                                    withContext(Dispatchers.IO) {
+                                        appContainer.scannerService.cameraOnAndScan()
                                     }
-                                },
-                                onCameraOnAndScan = {
-                                    scannerProbeStatus = "Camera on + scan requested through binder transactions 11 then 2."
-                                    isScannerProbeFailure = false
-                                    Toast.makeText(
-                                        context,
-                                        "Camera on + scan",
-                                        Toast.LENGTH_SHORT,
-                                    ).show()
-                                    scope.launch {
-                                        runCatching {
-                                            withContext(Dispatchers.IO) {
-                                                appContainer.scannerService.cameraOnAndScan()
-                                            }
-                                        }.onFailure { error ->
-                                            isScannerProbeFailure = true
-                                            scannerProbeStatus = "Camera on + scan failed: ${error.message ?: "Unknown error"}"
-                                        }
+                                }.onFailure { error ->
+                                    isScannerProbeFailure = true
+                                    scannerProbeStatus = "Camera on + scan failed: ${error.message ?: "Unknown error"}"
+                                }
+                            }
+                        },
+                        onTriggerKeyDown = {
+                            scannerProbeStatus = "Key down sent through binder transaction 1."
+                            isScannerProbeFailure = false
+                            Toast.makeText(
+                                context,
+                                "Key down",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                            scope.launch {
+                                runCatching {
+                                    withContext(Dispatchers.IO) {
+                                        appContainer.scannerService.keyDown()
                                     }
-                                },
-                                onTriggerKeyDown = {
-                                    scannerProbeStatus = "Key down sent through binder transaction 1."
-                                    isScannerProbeFailure = false
-                                    Toast.makeText(
-                                        context,
-                                        "Key down",
-                                        Toast.LENGTH_SHORT,
-                                    ).show()
-                                    scope.launch {
-                                        runCatching {
-                                            withContext(Dispatchers.IO) {
-                                                appContainer.scannerService.keyDown()
-                                            }
-                                        }.onFailure { error ->
-                                            isScannerProbeFailure = true
-                                            scannerProbeStatus = "Key down failed: ${error.message ?: "Unknown error"}"
-                                        }
+                                }.onFailure { error ->
+                                    isScannerProbeFailure = true
+                                    scannerProbeStatus = "Key down failed: ${error.message ?: "Unknown error"}"
+                                }
+                            }
+                        },
+                        onTriggerKeyUp = {
+                            scannerProbeStatus = "Key up sent through binder transaction 1."
+                            isScannerProbeFailure = false
+                            Toast.makeText(
+                                context,
+                                "Key up",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                            scope.launch {
+                                runCatching {
+                                    withContext(Dispatchers.IO) {
+                                        appContainer.scannerService.keyUp()
                                     }
-                                },
-                                onTriggerKeyUp = {
-                                    scannerProbeStatus = "Key up sent through binder transaction 1."
-                                    isScannerProbeFailure = false
-                                    Toast.makeText(
-                                        context,
-                                        "Key up",
-                                        Toast.LENGTH_SHORT,
-                                    ).show()
-                                    scope.launch {
-                                        runCatching {
-                                            withContext(Dispatchers.IO) {
-                                                appContainer.scannerService.keyUp()
-                                            }
-                                        }.onFailure { error ->
-                                            isScannerProbeFailure = true
-                                            scannerProbeStatus = "Key up failed: ${error.message ?: "Unknown error"}"
-                                        }
+                                }.onFailure { error ->
+                                    isScannerProbeFailure = true
+                                    scannerProbeStatus = "Key up failed: ${error.message ?: "Unknown error"}"
+                                }
+                            }
+                        },
+                        onStopScannerProbe = {
+                            scannerProbeStatus = "Stop scanner requested through binder transaction 3."
+                            isScannerProbeFailure = false
+                            Toast.makeText(
+                                context,
+                                "Stop scanner",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                            scope.launch {
+                                runCatching {
+                                    withContext(Dispatchers.IO) {
+                                        appContainer.scannerService.stopScanner()
                                     }
-                                },
-                                onStopScannerProbe = {
-                                    scannerProbeStatus = "Stop scanner requested through binder transaction 3."
-                                    isScannerProbeFailure = false
-                                    Toast.makeText(
-                                        context,
-                                        "Stop scanner",
-                                        Toast.LENGTH_SHORT,
-                                    ).show()
-                                    scope.launch {
-                                        runCatching {
-                                            withContext(Dispatchers.IO) {
-                                                appContainer.scannerService.stopScanner()
-                                            }
-                                        }.onFailure { error ->
-                                            isScannerProbeFailure = true
-                                            scannerProbeStatus = "Stop scanner failed: ${error.message ?: "Unknown error"}"
-                                        }
-                                    }
-                                },
-                                onLaunchScannerUi = {
-                                     scannerProbeStatus = "Launching Sunmi scanner UI (for result)."
-                                     isScannerProbeFailure = false
-                                     Log.i(SunmiUiResultLogTag, "Launching Sunmi scanner UI (for result). activityPresent=${activity != null}")
-                                     Toast.makeText(
-                                         context,
-                                         "Launch Sunmi UI",
-                                         Toast.LENGTH_SHORT,
-                                     ).show()
+                                }.onFailure { error ->
+                                    isScannerProbeFailure = true
+                                    scannerProbeStatus = "Stop scanner failed: ${error.message ?: "Unknown error"}"
+                                }
+                            }
+                        },
+                        onLaunchScannerUi = {
+                            scannerProbeStatus = "Launching Sunmi scanner UI (for result)."
+                            isScannerProbeFailure = false
+                            Log.i(SunmiUiResultLogTag, "Launching Sunmi scanner UI (for result). activityPresent=${activity != null}")
+                            Toast.makeText(
+                                context,
+                                "Launch Sunmi UI",
+                                Toast.LENGTH_SHORT,
+                            ).show()
 
-                                     val intent = Intent("com.sunmi.scanner.qrscanner")
-                                     intent.putExtra("IS_OPEN_LIGHT", true)
-                                     scope.launch {
-                                         if (activity != null) {
-                                             sunmiScannerUiLauncher.launch(intent)
-                                         } else {
-                                             // Fallback: launch via service (uses NEW_TASK, no Activity result).
-                                             runCatching {
-                                                 withContext(Dispatchers.IO) {
-                                                     appContainer.scannerService.launchScannerUi()
-                                                 }
-                                             }.onFailure { error ->
-                                                 isScannerProbeFailure = true
-                                                 scannerProbeStatus = "Launch Sunmi scanner UI failed: ${error.message ?: "Unknown error"}"
-                                             }
-                                         }
-                                     }
-                                },
-                                onOpenScannerSettings = {
-                                    scannerProbeStatus = "Opening Sunmi scanner settings."
-                                    isScannerProbeFailure = false
-                                    Toast.makeText(
-                                        context,
-                                        "Scanner settings",
-                                        Toast.LENGTH_SHORT,
-                                    ).show()
-                                    scope.launch {
-                                        runCatching {
-                                            withContext(Dispatchers.IO) {
-                                                appContainer.scannerService.openScannerSettings()
-                                            }
-                                        }.onFailure { error ->
-                                            isScannerProbeFailure = true
-                                            scannerProbeStatus = "Open scanner settings failed: ${error.message ?: "Unknown error"}"
+                            val intent = Intent("com.sunmi.scanner.qrscanner")
+                            intent.putExtra("IS_OPEN_LIGHT", true)
+                            scope.launch {
+                                if (activity != null) {
+                                    sunmiScannerUiLauncher.launch(intent)
+                                } else {
+                                    runCatching {
+                                        withContext(Dispatchers.IO) {
+                                            appContainer.scannerService.launchScannerUi()
                                         }
+                                    }.onFailure { error ->
+                                        isScannerProbeFailure = true
+                                        scannerProbeStatus = "Launch Sunmi scanner UI failed: ${error.message ?: "Unknown error"}"
                                     }
-                                },
-                                onOpenScannerDeviceSettings = {
-                                    scannerProbeStatus = "Opening Sunmi scanner device settings."
-                                    isScannerProbeFailure = false
-                                    Toast.makeText(
-                                        context,
-                                        "Device settings",
-                                        Toast.LENGTH_SHORT,
-                                    ).show()
-                                    scope.launch {
-                                        runCatching {
-                                            withContext(Dispatchers.IO) {
-                                                appContainer.scannerService.openScannerDeviceSettings()
-                                            }
-                                        }.onFailure { error ->
-                                            isScannerProbeFailure = true
-                                            scannerProbeStatus = "Open scanner device settings failed: ${error.message ?: "Unknown error"}"
-                                        }
+                                }
+                            }
+                        },
+                        onOpenScannerSettings = {
+                            scannerProbeStatus = "Opening Sunmi scanner settings."
+                            isScannerProbeFailure = false
+                            Toast.makeText(
+                                context,
+                                "Scanner settings",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                            scope.launch {
+                                runCatching {
+                                    withContext(Dispatchers.IO) {
+                                        appContainer.scannerService.openScannerSettings()
                                     }
-                                },
-                                onOpenScannerKeyboardSettings = {
-                                    scannerProbeStatus = "Opening Sunmi scanner keyboard settings."
-                                    isScannerProbeFailure = false
-                                    Toast.makeText(
-                                        context,
-                                        "Keyboard settings",
-                                        Toast.LENGTH_SHORT,
-                                    ).show()
-                                    scope.launch {
-                                        runCatching {
-                                            withContext(Dispatchers.IO) {
-                                                appContainer.scannerService.openScannerKeyboardSettings()
-                                            }
-                                        }.onFailure { error ->
-                                            isScannerProbeFailure = true
-                                            scannerProbeStatus = "Open scanner keyboard settings failed: ${error.message ?: "Unknown error"}"
-                                        }
+                                }.onFailure { error ->
+                                    isScannerProbeFailure = true
+                                    scannerProbeStatus = "Open scanner settings failed: ${error.message ?: "Unknown error"}"
+                                }
+                            }
+                        },
+                        onOpenScannerDeviceSettings = {
+                            scannerProbeStatus = "Opening Sunmi scanner device settings."
+                            isScannerProbeFailure = false
+                            Toast.makeText(
+                                context,
+                                "Device settings",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                            scope.launch {
+                                runCatching {
+                                    withContext(Dispatchers.IO) {
+                                        appContainer.scannerService.openScannerDeviceSettings()
                                     }
-                                },
-                                nfcAdapterSummary = when {
-                                    !nfcStatus.adapterPresent -> "No NFC adapter on this device"
-                                    !nfcStatus.enabled -> "NFC adapter present but disabled in system settings"
-                                    else -> "NFC adapter present and enabled"
-                                },
-                                nfcProbeStatus = nfcProbeStatus,
-                                isNfcProbeFailure = isNfcProbeFailure,
-                                lastNfcTagSummary = nfcStatus.lastTagEvent?.let { event ->
-                                    "Last tag: uid=${event.uid} techs=${event.techList.joinToString()}"
-                                },
-                                onRunNfcProbe = {
-                                    val manager = context.getSystemService(android.nfc.NfcManager::class.java)
-                                    val adapter = manager?.defaultAdapter
-                                    NfcProbe.updateAdapterStatus(
-                                        adapterPresent = adapter != null,
-                                        enabled = adapter?.isEnabled == true,
-                                    )
-                                    nfcProbeStatus = when {
-                                        adapter == null -> "No NFC adapter on this device"
-                                        !adapter.isEnabled -> "NFC adapter present but disabled — enable in system settings"
-                                        else -> "NFC adapter ready. Tap a card to test."
+                                }.onFailure { error ->
+                                    isScannerProbeFailure = true
+                                    scannerProbeStatus = "Open scanner device settings failed: ${error.message ?: "Unknown error"}"
+                                }
+                            }
+                        },
+                        onOpenScannerKeyboardSettings = {
+                            scannerProbeStatus = "Opening Sunmi scanner keyboard settings."
+                            isScannerProbeFailure = false
+                            Toast.makeText(
+                                context,
+                                "Keyboard settings",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                            scope.launch {
+                                runCatching {
+                                    withContext(Dispatchers.IO) {
+                                        appContainer.scannerService.openScannerKeyboardSettings()
                                     }
-                                    isNfcProbeFailure = adapter == null || adapter?.isEnabled != true
-                                },
-                                lastNfcStaffResolutionSummary = when (val r = nfcStatus.lastStaffResolution) {
-                                    is NfcStaffResolution.Matched ->
-                                        "Matched: ${r.match.displayName} · ${r.match.role} · staffId=${r.match.staffId}"
-                                    is NfcStaffResolution.Unknown ->
-                                        "Unknown tag: ${r.uid} — not enrolled"
-                                    null -> null
-                                },
-                                isNfcStaffResolutionUnknown =
-                                    nfcStatus.lastStaffResolution is NfcStaffResolution.Unknown,
+                                }.onFailure { error ->
+                                    isScannerProbeFailure = true
+                                    scannerProbeStatus = "Open scanner keyboard settings failed: ${error.message ?: "Unknown error"}"
+                                }
+                            }
+                        },
+                        nfcAdapterSummary = when {
+                            !nfcStatus.adapterPresent -> "No NFC adapter on this device"
+                            !nfcStatus.enabled -> "NFC adapter present but disabled in system settings"
+                            else -> "NFC adapter present and enabled"
+                        },
+                        nfcProbeStatus = nfcProbeStatus,
+                        isNfcProbeFailure = isNfcProbeFailure,
+                        lastNfcTagSummary = nfcStatus.lastTagEvent?.let { event ->
+                            "Last tag: uid=${event.uid} techs=${event.techList.joinToString()}"
+                        },
+                        onRunNfcProbe = {
+                            val manager = context.getSystemService(android.nfc.NfcManager::class.java)
+                            val adapter = manager?.defaultAdapter
+                            NfcProbe.updateAdapterStatus(
+                                adapterPresent = adapter != null,
+                                enabled = adapter?.isEnabled == true,
+                            )
+                            nfcProbeStatus = when {
+                                adapter == null -> "No NFC adapter on this device"
+                                !adapter.isEnabled -> "NFC adapter present but disabled — enable in system settings"
+                                else -> "NFC adapter ready. Tap a card to test."
+                            }
+                            isNfcProbeFailure = adapter == null || adapter?.isEnabled != true
+                        },
+                        lastNfcStaffResolutionSummary = when (val r = nfcStatus.lastStaffResolution) {
+                            is NfcStaffResolution.Matched ->
+                                "Matched: ${r.match.displayName} · ${r.match.role} · staffId=${r.match.staffId}"
+                            is NfcStaffResolution.Unknown ->
+                                "Unknown tag: ${r.uid} — not enrolled"
+                            null -> null
+                        },
+                        isNfcStaffResolutionUnknown =
+                            nfcStatus.lastStaffResolution is NfcStaffResolution.Unknown,
                     )
-                        }
-                    }
                 }
 
                 composable(Routes.TableMap) {
