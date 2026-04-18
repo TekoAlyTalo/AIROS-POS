@@ -103,6 +103,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import androidx.compose.ui.window.Dialog
+import com.airos.pos.core.ui.NumericPinPad
 import kotlinx.coroutines.withContext
 
 private val AppShellBackground = Color(0xFF060C12)
@@ -278,6 +280,24 @@ fun AirosPosApp(
 ) {
     val session by appContainer.authRepository.activeSession.collectAsState()
 
+    // Auto clock-in: when a new sign-in happens (session transitions null → non-null),
+    // clock the newly signed-in staff in without requiring a separate action.
+    // drop(1) skips the initial StateFlow emission so app restarts with a persisted
+    // session do not re-clock-in staff who were already clocked in.
+    LaunchedEffect(Unit) {
+        var prevId: String? = appContainer.authRepository.activeSession.value?.sessionId
+        appContainer.authRepository.activeSession.drop(1).collect { newSession ->
+            val newId = newSession?.sessionId
+            if (newId != null && prevId == null) {
+                appContainer.worktimeAttendanceRepository.clockIn(
+                    newSession.staffId,
+                    newSession.displayName,
+                )
+            }
+            prevId = newId
+        }
+    }
+
     if (session == null) {
         val authViewModel: AuthViewModel = viewModel(factory = AuthViewModel.factory(appContainer.authRepository))
         val authState by authViewModel.uiState.collectAsState()
@@ -411,6 +431,27 @@ private fun SignedInApp(
         ),
     )
 
+    var signOutDialogVisible by remember { mutableStateOf(false) }
+    var signOutPin by remember { mutableStateOf("") }
+    var signOutPinError by remember { mutableStateOf<String?>(null) }
+
+    // NFC fast-path: current staff's badge confirms sign-out identity without PIN entry.
+    LaunchedEffect(signOutDialogVisible, currentStaffId) {
+        if (!signOutDialogVisible) return@LaunchedEffect
+        NfcProbe.status.drop(1).collect { status ->
+            val r = status.lastStaffResolution
+            if (r is NfcStaffResolution.Matched && r.match.staffId == currentStaffId) {
+                signOutDialogVisible = false
+                signOutPin = ""
+                signOutPinError = null
+                scope.launch {
+                    appContainer.worktimeAttendanceRepository.clockOut(currentStaffId, currentStaffName)
+                    appContainer.authRepository.signOut()
+                }
+            }
+        }
+    }
+
     Row(
         modifier = Modifier
             .fillMaxSize()
@@ -419,9 +460,9 @@ private fun SignedInApp(
         AppRail(
             navController = navController,
             onSignOut = {
-                scope.launch {
-                    appContainer.authRepository.signOut()
-                }
+                signOutPin = ""
+                signOutPinError = null
+                signOutDialogVisible = true
             },
         )
 
@@ -479,6 +520,20 @@ private fun SignedInApp(
                         else -> null
                     }
 
+                    // Rule 1: merge local clocked-in state into the on-site list so it
+                    // remains visible when the backend snapshot is stale or offline.
+                    val effectiveAttendance = if (currentAttendance.activeSession != null &&
+                        attendance.currentlyOnSite.none { it.staffId == currentStaffId }
+                    ) {
+                        val localEntry = currentAttendance.activeSession!!.toAttendanceEntry(
+                            fallbackStaffName = currentStaffName,
+                            fallbackDurationMinutes = 0.0,
+                        )
+                        attendance.copy(currentlyOnSite = listOf(localEntry) + attendance.currentlyOnSite)
+                    } else {
+                        attendance
+                    }
+
                     ShiftScreen(
                         state = state,
                         currentStaffId = currentStaffId,
@@ -486,7 +541,7 @@ private fun SignedInApp(
                         onCountedCashChanged = viewModel::updateCountedCash,
                         onOpenShift = viewModel::openShift,
                         onCloseShift = viewModel::closeShift,
-                        attendance = attendance,
+                        attendance = effectiveAttendance,
                         isClockedIn = isClockedIn,
                         myAttendanceEntry = myEntry,
                         attendanceStateLoading = false,
@@ -508,20 +563,12 @@ private fun SignedInApp(
                             }
                         },
                         onClockOut = {
-                            attendanceScope.launch {
-                                attendanceBusy = true
-                                attendanceMessage = null
-                                try {
-                                    when (val result = attendanceRepository.clockOut(currentStaffId, currentStaffName)) {
-                                        is PosResult.Success -> attendanceMessage = null
-                                        is PosResult.Failure -> attendanceMessage = result.message
-                                    }
-                                } finally {
-                                    attendanceBusy = false
-                                }
-                            }
+                            signOutPin = ""
+                            signOutPinError = null
+                            signOutDialogVisible = true
                         },
                     )
+
                 }
 
                 composable(Routes.Diagnostics) {
@@ -1416,6 +1463,71 @@ private fun SignedInApp(
                         onAmountChanged = viewModel::updateAmount,
                         onReasonChanged = viewModel::updateReason,
                         onSubmitRefund = viewModel::submitRefund,
+                    )
+                }
+            }
+        }
+    }
+
+    if (signOutDialogVisible) {
+        Dialog(onDismissRequest = { signOutDialogVisible = false }) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = AppShellPanelColor,
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    Text(
+                        text = "Confirm identity to sign out",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = AppShellTextPrimary,
+                    )
+                    Text(
+                        text = currentStaffName,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AppShellTextSecondary,
+                    )
+                    Text(
+                        text = "●".repeat(signOutPin.length).padEnd(4, '○'),
+                        style = MaterialTheme.typography.titleLarge,
+                        color = AppShellTextPrimary,
+                    )
+                    signOutPinError?.let {
+                        Text(
+                            text = it,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    NumericPinPad(
+                        onDigit = { digit ->
+                            if (signOutPin.length < 4) {
+                                val updated = signOutPin + digit
+                                signOutPin = updated
+                                if (updated.length == 4) {
+                                    scope.launch {
+                                        when (val authResult = appContainer.authRepository.signInWithPin(currentStaffId, updated)) {
+                                            is PosResult.Success -> {
+                                                signOutDialogVisible = false
+                                                signOutPin = ""
+                                                signOutPinError = null
+                                                appContainer.worktimeAttendanceRepository.clockOut(currentStaffId, currentStaffName)
+                                                appContainer.authRepository.signOut()
+                                            }
+                                            is PosResult.Failure -> {
+                                                signOutPin = ""
+                                                signOutPinError = authResult.message
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        onBackspace = {
+                            if (signOutPin.isNotEmpty()) signOutPin = signOutPin.dropLast(1)
+                        },
                     )
                 }
             }
