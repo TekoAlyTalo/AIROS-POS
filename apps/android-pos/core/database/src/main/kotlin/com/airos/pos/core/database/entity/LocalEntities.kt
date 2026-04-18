@@ -92,6 +92,38 @@ data class SyncQueueLocalEntity(
 )
 
 @Entity(
+    tableName = "sales_ledger_outbox",
+    indices = [
+        Index(value = ["receiptNumber"], unique = true),
+        Index(value = ["syncStatus", "createdAtEpochMillis"]),
+        Index(value = ["terminalId", "createdAtEpochMillis"]),
+        Index(value = ["cashierStaffId", "createdAtEpochMillis"]),
+    ],
+)
+data class SalesLedgerOutboxLocalEntity(
+    @PrimaryKey val sourcePosEventId: String,
+    val receiptNumber: String,
+    val ticketId: String?,
+    val tableId: String?,
+    val terminalId: String?,
+    val restaurantId: String?,
+    val cashierStaffId: String?,
+    val totalCents: Int,
+    val requestJson: String,
+    val syncStatus: String,
+    val attemptCount: Int,
+    val lastError: String?,
+    val serverSaleId: String?,
+    val receiptSnapshotId: String?,
+    val publicUrlPath: String?,
+    val deliveryTokenIdsCsv: String,
+    val createdAtEpochMillis: Long,
+    val updatedAtEpochMillis: Long,
+    val lastAttemptAtEpochMillis: Long?,
+    val syncedAtEpochMillis: Long?,
+)
+
+@Entity(
     tableName = "attendance_events",
     indices = [
         Index(value = ["metadataKey", "terminalSequenceNumber"], unique = true),

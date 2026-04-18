@@ -23,6 +23,10 @@ import java.nio.charset.StandardCharsets
  */
 interface AirosPosLedgerHttpClient {
     suspend fun finalizeSale(request: LedgerFinalizeSaleRequest): PosResult<LedgerFinalizeSaleResponse>
+    suspend fun finalizeSaleJson(
+        requestJson: String,
+        receiptNumber: String,
+    ): PosResult<LedgerFinalizeSaleResponse>
 }
 
 data class LedgerFinalizeAndQrResult(
@@ -43,6 +47,16 @@ class DefaultAirosPosLedgerHttpClient(
     }
 
     override suspend fun finalizeSale(request: LedgerFinalizeSaleRequest): PosResult<LedgerFinalizeSaleResponse> {
+        return finalizeSaleJson(
+            requestJson = request.toJsonString(),
+            receiptNumber = request.receipt_number,
+        )
+    }
+
+    override suspend fun finalizeSaleJson(
+        requestJson: String,
+        receiptNumber: String,
+    ): PosResult<LedgerFinalizeSaleResponse> {
         return withContext(Dispatchers.IO) {
             val rawBaseUrl = backendBaseUrlProvider.invoke()
             val baseUrl = rawBaseUrl.trim().trimEnd('/')
@@ -52,7 +66,7 @@ class DefaultAirosPosLedgerHttpClient(
             }
 
             val urlString = "$baseUrl/${endpointPath.trimStart('/')}"
-            debugLog("finalizeSale start baseUrl='${baseUrl}' url='${urlString}' receipt='${request.receipt_number}' total=${request.total_cents}")
+            debugLog("finalizeSale start baseUrl='${baseUrl}' url='${urlString}' receipt='${receiptNumber}'")
 
             val connection = try {
                 (URL(urlString).openConnection() as HttpURLConnection).apply {
@@ -76,7 +90,6 @@ class DefaultAirosPosLedgerHttpClient(
             }
 
             try {
-                val requestJson = request.toJsonString()
                 debugLog("request body bytes=${requestJson.toByteArray(StandardCharsets.UTF_8).size}")
                 OutputStreamWriter(connection.outputStream, StandardCharsets.UTF_8).use { writer ->
                     writer.write(requestJson)
@@ -188,7 +201,7 @@ object AirosPosLedgerFinalizeBridge {
     }
 }
 
-private fun LedgerFinalizeSaleRequest.toJsonString(): String = jsonString(toJsonMap())
+fun LedgerFinalizeSaleRequest.toJsonString(): String = jsonString(toJsonMap())
 
 private fun LedgerFinalizeSaleRequest.toJsonMap(): Map<String, Any?> = linkedMapOf(
     "receipt_number" to receipt_number,

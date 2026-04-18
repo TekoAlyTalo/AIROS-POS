@@ -11,6 +11,7 @@ import com.airos.pos.core.database.dao.BackendMenuCacheDao
 import com.airos.pos.core.database.dao.MenuItemDao
 import com.airos.pos.core.database.dao.NfcIdentityDao
 import com.airos.pos.core.database.dao.OpenSaleDao
+import com.airos.pos.core.database.dao.SalesLedgerOutboxDao
 import com.airos.pos.core.database.dao.ShiftDao
 import com.airos.pos.core.database.dao.StaffDao
 import com.airos.pos.core.database.dao.SyncQueueDao
@@ -28,6 +29,7 @@ import com.airos.pos.core.database.entity.NfcReceiptHandoffEntity
 import com.airos.pos.core.database.entity.OpenSaleEntity
 import com.airos.pos.core.database.entity.OpenSaleLineEntity
 import com.airos.pos.core.database.entity.RestaurantTableLocalEntity
+import com.airos.pos.core.database.entity.SalesLedgerOutboxLocalEntity
 import com.airos.pos.core.database.entity.ShiftLocalEntity
 import com.airos.pos.core.database.entity.StaffLocalEntity
 import com.airos.pos.core.database.entity.SyncQueueLocalEntity
@@ -53,8 +55,9 @@ import com.airos.pos.core.database.entity.TicketLocalEntity
         AttendanceEventLocalEntity::class,
         AttendanceActiveSessionLocalEntity::class,
         AttendanceSyncMetadataLocalEntity::class,
+        SalesLedgerOutboxLocalEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = false,
 )
 abstract class AirosPosDatabase : RoomDatabase() {
@@ -68,6 +71,7 @@ abstract class AirosPosDatabase : RoomDatabase() {
     abstract fun nfcIdentityDao(): NfcIdentityDao
     abstract fun openSaleDao(): OpenSaleDao
     abstract fun attendanceDao(): AttendanceDao
+    abstract fun salesLedgerOutboxDao(): SalesLedgerOutboxDao
 
     companion object {
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -363,6 +367,62 @@ abstract class AirosPosDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `sales_ledger_outbox` (
+                        `sourcePosEventId` TEXT NOT NULL,
+                        `receiptNumber` TEXT NOT NULL,
+                        `ticketId` TEXT,
+                        `tableId` TEXT,
+                        `terminalId` TEXT,
+                        `restaurantId` TEXT,
+                        `cashierStaffId` TEXT,
+                        `totalCents` INTEGER NOT NULL,
+                        `requestJson` TEXT NOT NULL,
+                        `syncStatus` TEXT NOT NULL,
+                        `attemptCount` INTEGER NOT NULL,
+                        `lastError` TEXT,
+                        `serverSaleId` TEXT,
+                        `receiptSnapshotId` TEXT,
+                        `publicUrlPath` TEXT,
+                        `deliveryTokenIdsCsv` TEXT NOT NULL,
+                        `createdAtEpochMillis` INTEGER NOT NULL,
+                        `updatedAtEpochMillis` INTEGER NOT NULL,
+                        `lastAttemptAtEpochMillis` INTEGER,
+                        `syncedAtEpochMillis` INTEGER,
+                        PRIMARY KEY(`sourcePosEventId`)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS `index_sales_ledger_outbox_receiptNumber`
+                    ON `sales_ledger_outbox` (`receiptNumber`)
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `index_sales_ledger_outbox_syncStatus_createdAtEpochMillis`
+                    ON `sales_ledger_outbox` (`syncStatus`, `createdAtEpochMillis`)
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `index_sales_ledger_outbox_terminalId_createdAtEpochMillis`
+                    ON `sales_ledger_outbox` (`terminalId`, `createdAtEpochMillis`)
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `index_sales_ledger_outbox_cashierStaffId_createdAtEpochMillis`
+                    ON `sales_ledger_outbox` (`cashierStaffId`, `createdAtEpochMillis`)
+                    """.trimIndent(),
+                )
+            }
+        }
+
         fun build(context: Context): AirosPosDatabase {
             return Room.databaseBuilder(
                 context,
@@ -376,6 +436,7 @@ abstract class AirosPosDatabase : RoomDatabase() {
                 MIGRATION_5_6,
                 MIGRATION_6_7,
                 MIGRATION_7_8,
+                MIGRATION_8_9,
             ).build()
         }
     }

@@ -12,6 +12,7 @@ import com.airos.pos.core.database.entity.MenuItemLocalEntity
 import com.airos.pos.core.database.entity.OpenSaleEntity
 import com.airos.pos.core.database.entity.OpenSaleLineEntity
 import com.airos.pos.core.database.entity.RestaurantTableLocalEntity
+import com.airos.pos.core.database.entity.SalesLedgerOutboxLocalEntity
 import com.airos.pos.core.database.entity.ShiftLocalEntity
 import com.airos.pos.core.database.entity.StaffLocalEntity
 import com.airos.pos.core.database.entity.SyncQueueLocalEntity
@@ -80,6 +81,82 @@ interface SyncQueueDao {
 
     @Upsert
     suspend fun upsert(item: SyncQueueLocalEntity)
+}
+
+@Dao
+interface SalesLedgerOutboxDao {
+    @Query("SELECT * FROM sales_ledger_outbox ORDER BY createdAtEpochMillis")
+    fun observeAll(): Flow<List<SalesLedgerOutboxLocalEntity>>
+
+    @Query("SELECT COUNT(*) FROM sales_ledger_outbox WHERE syncStatus IN ('queued', 'syncing', 'failed')")
+    fun observeUnresolvedCount(): Flow<Int>
+
+    @Query("SELECT * FROM sales_ledger_outbox WHERE sourcePosEventId = :sourcePosEventId LIMIT 1")
+    suspend fun load(sourcePosEventId: String): SalesLedgerOutboxLocalEntity?
+
+    @Query("SELECT * FROM sales_ledger_outbox WHERE syncStatus IN ('queued', 'syncing', 'failed') ORDER BY createdAtEpochMillis ASC LIMIT :limit")
+    suspend fun pending(limit: Int): List<SalesLedgerOutboxLocalEntity>
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insert(entity: SalesLedgerOutboxLocalEntity): Long
+
+    @Query(
+        """
+        UPDATE sales_ledger_outbox
+        SET syncStatus = 'syncing',
+            attemptCount = attemptCount + 1,
+            lastError = NULL,
+            lastAttemptAtEpochMillis = :updatedAtEpochMillis,
+            updatedAtEpochMillis = :updatedAtEpochMillis
+        WHERE sourcePosEventId = :sourcePosEventId
+        """
+    )
+    suspend fun markSyncing(sourcePosEventId: String, updatedAtEpochMillis: Long)
+
+    @Query(
+        """
+        UPDATE sales_ledger_outbox
+        SET syncStatus = 'synced',
+            serverSaleId = :serverSaleId,
+            receiptSnapshotId = :receiptSnapshotId,
+            publicUrlPath = :publicUrlPath,
+            deliveryTokenIdsCsv = :deliveryTokenIdsCsv,
+            lastError = NULL,
+            syncedAtEpochMillis = :updatedAtEpochMillis,
+            updatedAtEpochMillis = :updatedAtEpochMillis
+        WHERE sourcePosEventId = :sourcePosEventId
+        """
+    )
+    suspend fun markSynced(
+        sourcePosEventId: String,
+        serverSaleId: String,
+        receiptSnapshotId: String,
+        publicUrlPath: String?,
+        deliveryTokenIdsCsv: String,
+        updatedAtEpochMillis: Long,
+    )
+
+    @Query(
+        """
+        UPDATE sales_ledger_outbox
+        SET syncStatus = 'failed',
+            lastError = :lastError,
+            updatedAtEpochMillis = :updatedAtEpochMillis
+        WHERE sourcePosEventId = :sourcePosEventId
+        """
+    )
+    suspend fun markFailed(sourcePosEventId: String, lastError: String, updatedAtEpochMillis: Long)
+
+    @Query(
+        """
+        UPDATE sales_ledger_outbox
+        SET syncStatus = 'blocked',
+            lastError = :lastError,
+            updatedAtEpochMillis = :updatedAtEpochMillis
+        WHERE sourcePosEventId = :sourcePosEventId
+        """
+    )
+    suspend fun markBlocked(sourcePosEventId: String, lastError: String, updatedAtEpochMillis: Long)
 }
 
 @Dao

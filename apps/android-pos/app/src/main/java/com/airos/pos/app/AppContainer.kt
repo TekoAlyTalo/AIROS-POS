@@ -41,7 +41,12 @@ import com.airos.pos.domain.TicketRepository
 import com.airos.pos.sync.InMemorySyncQueueRepository
 import com.airos.pos.sync.SyncCoordinator
 import android.util.Log
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
 interface AppContainer {
@@ -82,6 +87,7 @@ class DefaultAppContainer(
         backendBaseUrlProvider = { currentLedgerBackendBaseUrl().orEmpty() },
     )
     private val androidDeviceInfoService = AndroidDeviceInfoService()
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override val database: AirosPosDatabase = AirosPosDatabase.build(appContext)
     override val terminalPreferencesStore: TerminalPreferencesStore = TerminalPreferencesStore(appContext)
@@ -236,18 +242,43 @@ class DefaultAppContainer(
         )
     }
 
-        override val paymentRepository: PaymentRepository = FakePaymentRepository(
-            store = store,
-            syncQueueRepository = syncQueueRepository,
+    private val salesLedgerOutboxRepository: SalesLedgerOutboxRepository by lazy {
+        SalesLedgerOutboxRepository(
+            dao = database.salesLedgerOutboxDao(),
             ledgerHttpClient = ledgerHttpClient,
-            ledgerBackendBaseUrlProvider = { currentLedgerBackendBaseUrl() },
-            terminalIdProvider = { currentTerminalId() },
-            terminalNameProvider = { currentTerminalName() },
-            restaurantIdProvider = { null },
-            cashierStaffIdProvider = { currentCashierStaffId() },
-            cashierNameProvider = { currentCashierName() },
-            cashierSessionIdProvider = { currentCashierSessionId() },
-            cashierAuthMethodSnapshotProvider = { currentCashierAuthMethodSnapshot() },
-            restaurantReceiptSettingsClient = restaurantReceiptSettingsClient,
         )
+    }
+
+    override val paymentRepository: PaymentRepository = FakePaymentRepository(
+        store = store,
+        syncQueueRepository = syncQueueRepository,
+        ledgerHttpClient = ledgerHttpClient,
+        ledgerBackendBaseUrlProvider = { currentLedgerBackendBaseUrl() },
+        terminalIdProvider = { currentTerminalId() },
+        terminalNameProvider = { currentTerminalName() },
+        restaurantIdProvider = { null },
+        cashierStaffIdProvider = { currentCashierStaffId() },
+        cashierNameProvider = { currentCashierName() },
+        cashierSessionIdProvider = { currentCashierSessionId() },
+        cashierAuthMethodSnapshotProvider = { currentCashierAuthMethodSnapshot() },
+        restaurantReceiptSettingsClient = restaurantReceiptSettingsClient,
+        saleSyncOutboxRepository = salesLedgerOutboxRepository,
+    )
+
+    init {
+        appScope.launch {
+            while (true) {
+                try {
+                    salesLedgerOutboxRepository.syncPendingNow()
+                } catch (t: Throwable) {
+                    Log.e(
+                        "AIROS_SALES_OUTBOX",
+                        "background sync failed: ${t.javaClass.simpleName}: ${t.message}",
+                        t,
+                    )
+                }
+                delay(30_000L)
+            }
+        }
+    }
 }

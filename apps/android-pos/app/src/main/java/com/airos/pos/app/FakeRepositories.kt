@@ -38,8 +38,8 @@ import com.airos.pos.core.model.StaffTableMapViewPreference
 import com.airos.pos.core.model.Ticket
 import com.airos.pos.core.model.TicketLine
 import com.airos.pos.core.model.TicketStatus
-import com.airos.pos.domain.AirosPosLedgerFinalizeBridge
 import com.airos.pos.domain.AirosPosLedgerHttpClient
+import com.airos.pos.domain.AirosPosLedgerMapper
 import com.airos.pos.domain.AuthRepository
 import com.airos.pos.domain.KitchenRepository
 import com.airos.pos.domain.MenuRepository
@@ -51,6 +51,7 @@ import com.airos.pos.domain.ShiftRepository
 import com.airos.pos.domain.SyncQueueRepository
 import com.airos.pos.domain.TableRepository
 import com.airos.pos.domain.TicketRepository
+import com.airos.pos.domain.toJsonString
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -420,32 +421,10 @@ class FakePaymentRepository(
     private val cashierSessionIdProvider: (() -> String?)? = null,
     private val cashierAuthMethodSnapshotProvider: (() -> String?)? = null,
     private val restaurantReceiptSettingsClient: RestaurantReceiptSettingsClient? = null,
+    private val saleSyncOutboxRepository: SalesLedgerOutboxRepository? = null,
 ) : PaymentRepository {
     private companion object {
         const val TAG = "AIROS_LEDGER"
-
-        /**
-         * Returns true when a ledger failure message indicates a connectivity/availability problem
-         * (network unreachable, socket timeout, server-side 5xx) as opposed to a business logic
-         * rejection from the backend (HTTP 4xx validation error, etc.).
-         *
-         * Only connectivity-style failures activate the local offline fallback.
-         * Business logic rejections still propagate as failures so the operator can act on them.
-         */
-        fun isConnectivityFailure(message: String): Boolean {
-            // Raw network failure — connection couldn't be opened (UnknownHostException, ConnectException, SocketTimeoutException, etc.)
-            if (message.contains("connection open failed", ignoreCase = true)) return true
-            // I/O failure during the HTTP send/receive phase (read timeout, network drop mid-request)
-            if (message.contains("request failed at", ignoreCase = true)) return true
-            // HTTP 5xx — server responded but is unavailable, overloaded, or crashed
-            val httpStatusMatch = Regex("""HTTP (\d{3})""").find(message)
-            if (httpStatusMatch != null) {
-                val code = httpStatusMatch.groupValues[1].toIntOrNull() ?: 0
-                return code >= 500
-            }
-            // Anything else (HTTP 4xx, parse failure, empty base URL, unknown) is not a connectivity error
-            return false
-        }
     }
 
     override fun observePaymentSummary(ticketId: String): Flow<PaymentSummary?> {
@@ -613,39 +592,61 @@ class FakePaymentRepository(
 
         var receiptHandoffPayload: ReceiptHandoffPayload? = null
         val receiptDocument = when {
-            ledgerHttpClient != null && !ledgerBackendBaseUrlProvider?.invoke().isNullOrBlank() -> {
+            ledgerHttpClient != null && saleSyncOutboxRepository != null -> {
                 val ledgerBaseUrl = ledgerBackendBaseUrlProvider?.invoke().orEmpty()
-                Log.i(TAG, "finalizeTablePayment: attempting ledger finalize receipt=$receiptNumber baseUrl=$ledgerBaseUrl tableId=$resolvedTableId totalDueCents=$totalDueCents totalPaidCents=$totalPaidCents")
-                when (
-                        val ledgerFinalize = AirosPosLedgerFinalizeBridge.finalizeSaleAndAttachQr(
-                            client = ledgerHttpClient,
-                            backendBaseUrl = ledgerBaseUrl,
-                            paymentRequest = request,
-                            paymentResult = TablePaymentResult(
-                                ticketId = ticketId,
-                                tableId = resolvedTableId,
-                                tableLabel = resolvedTableLabel,
-                                totalDueCents = totalDueCents,
-                                totalPaidCents = totalPaidCents,
-                                changeCents = changeCents,
-                                payments = paymentRecords,
-                                receiptDocument = settingsAppliedReceiptDocument,
-                            ),
-                            terminalId = terminalIdProvider?.invoke(),
-                            terminalName = terminalNameProvider?.invoke(),
-                            restaurantId = restaurantIdProvider?.invoke(),
-                            cashierStaffId = cashierStaffId,
-                            cashierName = cashierName,
-                            cashierSessionId = cashierSessionId,
-                            cashierAuthMethodSnapshot = cashierAuthMethodSnapshot,
-                            countryProfile = "FI",
-                            languageCode = "fi",
-                            currencyCode = settingsAppliedReceiptDocument.currencyCode,
-                            saleChannel = if (resolvedTableId.isNullOrBlank()) "walk_in" else "table_service",
-                        )
-                ) {
-                    is PosResult.Success -> {
-                        val ledgerResponse = ledgerFinalize.value.ledgerResponse
+                val sourcePosEventId = UUID.randomUUID().toString()
+                val ledgerPaymentResult = TablePaymentResult(
+                    ticketId = ticketId,
+                    tableId = resolvedTableId,
+                    tableLabel = resolvedTableLabel,
+                    totalDueCents = totalDueCents,
+                    totalPaidCents = totalPaidCents,
+                    changeCents = changeCents,
+                    payments = paymentRecords,
+                    receiptDocument = settingsAppliedReceiptDocument,
+                )
+                val ledgerRequest = AirosPosLedgerMapper.buildFinalizeSaleRequest(
+                    paymentRequest = request,
+                    paymentResult = ledgerPaymentResult,
+                    terminalId = terminalIdProvider?.invoke(),
+                    terminalName = terminalNameProvider?.invoke(),
+                    restaurantId = restaurantIdProvider?.invoke(),
+                    cashierStaffId = cashierStaffId,
+                    cashierName = cashierName,
+                    sessionId = cashierSessionId,
+                    authMethodSnapshot = cashierAuthMethodSnapshot,
+                    countryProfile = "FI",
+                    languageCode = "fi",
+                    currencyCode = settingsAppliedReceiptDocument.currencyCode,
+                    saleChannel = if (resolvedTableId.isNullOrBlank()) "walk_in" else "table_service",
+                    sourcePosEventId = sourcePosEventId,
+                )
+                val enqueueResult = saleSyncOutboxRepository.enqueue(
+                    SalesLedgerOutboxDraft(
+                        sourcePosEventId = sourcePosEventId,
+                        receiptNumber = receiptNumber,
+                        ticketId = ticketId,
+                        tableId = resolvedTableId,
+                        terminalId = terminalIdProvider?.invoke(),
+                        restaurantId = restaurantIdProvider?.invoke(),
+                        cashierStaffId = cashierStaffId,
+                        totalCents = totalDueCents,
+                        requestJson = ledgerRequest.toJsonString(),
+                        createdAtEpochMillis = settingsAppliedReceiptDocument.printedAtEpochMillis ?: store.now(),
+                    ),
+                )
+                if (enqueueResult is PosResult.Failure) {
+                    return enqueueResult
+                }
+
+                Log.i(
+                    TAG,
+                    "finalizeTablePayment: durable ledger outbox queued receipt=$receiptNumber sourcePosEventId=$sourcePosEventId baseUrl=$ledgerBaseUrl tableId=$resolvedTableId totalDueCents=$totalDueCents totalPaidCents=$totalPaidCents",
+                )
+
+                when (val syncOutcome = saleSyncOutboxRepository.syncOne(sourcePosEventId)) {
+                    is SalesLedgerOutboxSyncOutcome.Delivered -> {
+                        val ledgerResponse = syncOutcome.response
                         receiptHandoffPayload = ReceiptHandoffPayload(
                             receiptNumber = receiptNumber,
                             ticketId = ticketId,
@@ -658,29 +659,25 @@ class FakePaymentRepository(
                             createdAtEpochMillis = store.now(),
                         )
                         Log.i(TAG, "finalizeTablePayment: ledger finalize success receipt=$receiptNumber publicUrl=${ledgerResponse.public_url_path} token=${ledgerResponse.raw_public_token != null}")
-                        ledgerFinalize.value.receiptDocumentWithQr
+                        AirosPosLedgerMapper.applyPublicReceiptQr(
+                            document = settingsAppliedReceiptDocument,
+                            backendBaseUrl = ledgerBaseUrl,
+                            ledgerResponse = ledgerResponse,
+                            label = "Sähköinen kuitti",
+                        )
                     }
-                    is PosResult.Failure -> {
-                        Log.e(TAG, "finalizeTablePayment: ledger finalize failure receipt=$receiptNumber baseUrl=$ledgerBaseUrl reason=${ledgerFinalize.message}")
-                        if (isConnectivityFailure(ledgerFinalize.message)) {
-                            // Backend unreachable — activate local offline fallback.
-                            // The sale is still finalized locally; a pending-sync record is written
-                            // so a future sync pass can reconcile this sale with the ledger.
-                            Log.w(TAG, "finalizeTablePayment: ledger unreachable, activating local offline fallback receipt=$receiptNumber")
-                            enqueueSyncItem(
-                                store = store,
-                                syncQueueRepository = syncQueueRepository,
-                                aggregateType = "ledger_finalize",
-                                aggregateId = receiptNumber,
-                                action = "finalize_ledger_pending",
-                                payloadJson = """{"receipt_number":"$receiptNumber","ticket_id":"$ticketId","total_cents":$totalDueCents,"table_id":"${resolvedTableId ?: ""}","ledger_base_url":"$ledgerBaseUrl"}""",
-                            )
-                            settingsAppliedReceiptDocument
-                        } else {
-                            // A real business logic rejection from the backend (HTTP 4xx, etc.) —
-                            // propagate the failure so the operator can act on it.
-                            return ledgerFinalize
-                        }
+                    is SalesLedgerOutboxSyncOutcome.RetryableFailure -> {
+                        Log.w(
+                            TAG,
+                            "finalizeTablePayment: ledger sync pending receipt=$receiptNumber baseUrl=$ledgerBaseUrl sourcePosEventId=$sourcePosEventId reason=${syncOutcome.message}",
+                        )
+                        settingsAppliedReceiptDocument
+                    }
+                    is SalesLedgerOutboxSyncOutcome.Blocked -> {
+                        return PosResult.Failure("Sale was rejected by the backend ledger. ${syncOutcome.message}")
+                    }
+                    SalesLedgerOutboxSyncOutcome.NotFound -> {
+                        return PosResult.Failure("Sale ledger outbox event was not found after queueing.")
                     }
                 }
             }
