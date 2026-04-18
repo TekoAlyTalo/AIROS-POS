@@ -131,7 +131,14 @@ class WorktimeAttendanceRepository(
         syncPendingNow()
         return when (val result = refreshActiveSessionFromBackend(scope, staffId, staffName)) {
             is PosResult.Success -> {
-                markSyncIdleIfSettled(scope)
+                // If we were stuck in reconciling (previous batch failed to confirm server
+                // state), a successful backend refresh clears it to idle.
+                val metadata = attendanceDao.loadSyncMetadata(scope.metadataKey)
+                if (metadata?.syncState == AttendanceSyncStateReconciling) {
+                    markSyncState(scope, AttendanceSyncStateIdle, metadata.lastSyncBatchId, lastError = null)
+                } else {
+                    markSyncIdleIfSettled(scope)
+                }
                 PosResult.Success(Unit)
             }
             is PosResult.Failure -> {
@@ -363,6 +370,9 @@ class WorktimeAttendanceRepository(
         // retry queue happens to be empty (blocked events are excluded from the
         // retry pool by design).
         if (metadata.syncState == AttendanceSyncStateContractBlocked) return
+        // reconciling is sticky via this path — clearing it requires a confirmed backend
+        // refresh (see syncAndRefreshCurrentUser), not just an empty retry queue.
+        if (metadata.syncState == AttendanceSyncStateReconciling) return
         val pending = attendanceDao.pendingEvents(scope.metadataKey, limit = 1)
         if (pending.isEmpty() && metadata.syncState != AttendanceSyncStateIdle) {
             attendanceDao.upsertSyncMetadata(

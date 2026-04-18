@@ -52,6 +52,7 @@ data class SettingsUiState(
     val settings: TerminalSettings? = null,
     val terminalNameInput: String = "",
     val edgeBaseUrlInput: String = "",
+    val restaurantKeyInput: String = "",
     val defaultOpeningFloatInput: String = "",
     val queueDepth: Int = 0,
     val deviceProfile: DeviceProfile? = null,
@@ -96,6 +97,7 @@ class SettingsViewModel(
                         settings = settings,
                         terminalNameInput = if (current.terminalNameInput.isBlank()) settings.terminalName else current.terminalNameInput,
                         edgeBaseUrlInput = if (current.edgeBaseUrlInput.isBlank()) settings.edgeBaseUrl else current.edgeBaseUrlInput,
+                        restaurantKeyInput = if (current.restaurantKeyInput.isBlank()) settings.restaurantKey else current.restaurantKeyInput,
                         defaultOpeningFloatInput = if (current.defaultOpeningFloatInput.isBlank()) {
                             centsToEuroInput(settings.defaultOpeningFloatCents)
                         } else {
@@ -147,6 +149,10 @@ class SettingsViewModel(
         mutableState.update { it.copy(edgeBaseUrlInput = value) }
     }
 
+    fun updateRestaurantKeyInput(value: String) {
+        mutableState.update { it.copy(restaurantKeyInput = value) }
+    }
+
     fun updateDefaultOpeningFloatInput(value: String) {
         mutableState.update { it.copy(defaultOpeningFloatInput = value) }
     }
@@ -165,6 +171,7 @@ class SettingsViewModel(
         viewModelScope.launch {
             settingsRepository.updateTerminalName(mutableState.value.terminalNameInput)
             settingsRepository.updateEdgeBaseUrl(mutableState.value.edgeBaseUrlInput)
+            settingsRepository.updateRestaurantKey(mutableState.value.restaurantKeyInput)
             settingsRepository.updateDefaultOpeningFloatCents(floatCents)
             mutableState.update {
                 it.copy(
@@ -427,6 +434,7 @@ fun SettingsScreen(
     state: SettingsUiState,
     onTerminalNameChanged: (String) -> Unit,
     onEdgeBaseUrlChanged: (String) -> Unit,
+    onRestaurantKeyChanged: (String) -> Unit,
     onDefaultOpeningFloatChanged: (String) -> Unit,
     onSaveSettings: () -> Unit,
     onOfflineModeChanged: (Boolean) -> Unit,
@@ -473,6 +481,13 @@ fun SettingsScreen(
                 value = state.edgeBaseUrlInput,
                 onValueChange = onEdgeBaseUrlChanged,
                 label = { Text("Edge base URL") },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = state.restaurantKeyInput,
+                onValueChange = onRestaurantKeyChanged,
+                label = { Text("Restaurant scope key") },
+                supportingText = { Text("Must match the backend restaurant identifier. Default: ravintola_default") },
                 modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(

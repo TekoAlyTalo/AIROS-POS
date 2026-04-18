@@ -120,6 +120,7 @@ interface SettingsRepository {
     suspend fun setOfflineMode(enabled: Boolean)
     suspend fun setNfcDirectLoginEnabled(enabled: Boolean)
     suspend fun updateDefaultOpeningFloatCents(cents: Int)
+    suspend fun updateRestaurantKey(value: String)
 }
 
 interface StaffUiPreferencesRepository {

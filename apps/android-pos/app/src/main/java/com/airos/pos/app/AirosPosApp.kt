@@ -465,9 +465,16 @@ private fun SignedInApp(
                         fallbackDurationMinutes = polledMyEntry?.durationMinutes ?: 0.0,
                     )
                     val isClockedIn = currentAttendance.activeSession != null
+                    val attendanceSyncBlockedMessage = if (currentAttendance.syncMetadata.syncState == "contract_blocked") {
+                        "Attendance sync error — a clock event was rejected by the server and will not be retried. Contact support."
+                    } else {
+                        null
+                    }
                     val attendanceNoticeMessage = when {
+                        currentAttendance.syncMetadata.syncState == "contract_blocked" -> null
                         currentAttendance.unresolvedEventCount > 0 &&
                             currentAttendance.syncMetadata.syncState == "syncing" -> "Syncing attendance..."
+                        currentAttendance.syncMetadata.syncState == "reconciling" -> "Confirming attendance with server..."
                         currentAttendance.unresolvedEventCount > 0 -> "Offline, syncing later"
                         else -> null
                     }
@@ -485,7 +492,7 @@ private fun SignedInApp(
                         attendanceStateLoading = false,
                         attendanceBusy = attendanceBusy,
                         attendanceNoticeMessage = attendanceNoticeMessage,
-                        attendanceMessage = attendanceMessage,
+                        attendanceMessage = attendanceSyncBlockedMessage ?: attendanceMessage,
                         onClockIn = {
                             attendanceScope.launch {
                                 attendanceBusy = true
@@ -1346,6 +1353,7 @@ private fun SignedInApp(
                         state = state,
                         onTerminalNameChanged = viewModel::updateTerminalNameInput,
                         onEdgeBaseUrlChanged = viewModel::updateEdgeBaseUrlInput,
+                        onRestaurantKeyChanged = viewModel::updateRestaurantKeyInput,
                         onDefaultOpeningFloatChanged = viewModel::updateDefaultOpeningFloatInput,
                         onSaveSettings = viewModel::saveSettings,
                         onOfflineModeChanged = viewModel::setOfflineMode,

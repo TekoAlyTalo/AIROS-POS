@@ -832,6 +832,10 @@ class DataStoreSettingsRepository(
     override suspend fun updateDefaultOpeningFloatCents(cents: Int) {
         preferencesStore.updateDefaultOpeningFloatCents(cents)
     }
+
+    override suspend fun updateRestaurantKey(value: String) {
+        preferencesStore.updateRestaurantKey(value)
+    }
 }
 
 
