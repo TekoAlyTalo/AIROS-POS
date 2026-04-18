@@ -129,6 +129,7 @@ class CameraXMlKitScannerController(
             scaleType = PreviewView.ScaleType.FIT_CENTER
         }
 
+    @androidx.camera.core.ExperimentalGetImage
     override suspend fun bindToLifecycle(
         lifecycleOwner: LifecycleOwner,
         previewView: View,
@@ -212,6 +213,7 @@ class CameraXMlKitScannerController(
         runCatching { analysisExecutor.shutdown() }
     }
 
+    @androidx.camera.core.ExperimentalGetImage
     private fun analyzeFrame(imageProxy: ImageProxy) {
         val mediaImage = imageProxy.image
         if (mediaImage == null) {

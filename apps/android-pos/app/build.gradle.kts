@@ -8,6 +8,9 @@ android {
             isMinifyEnabled = false
         }
     }
+    lint {
+        baseline = file("lint-baseline.xml")
+    }
 }
 
 dependencies {

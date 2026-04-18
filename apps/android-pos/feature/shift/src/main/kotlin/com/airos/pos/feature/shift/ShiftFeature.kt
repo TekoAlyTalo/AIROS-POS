@@ -150,6 +150,7 @@ class ShiftViewModel(
 fun ShiftScreen(
     state: ShiftUiState,
     currentStaffId: String?,
+    currentStaffName: String? = null,
     onOpeningFloatChanged: (String) -> Unit,
     onCountedCashChanged: (String) -> Unit,
     onOpenShift: (String) -> Unit,
@@ -267,6 +268,10 @@ fun ShiftScreen(
                     shift.countedCashCents?.let { counted ->
                         KeyValueRow("Counted cash", CentsFormatter.format(counted))
                     }
+                }
+
+                currentStaffName?.let {
+                    KeyValueRow("Active seller", it)
                 }
 
                 Text(

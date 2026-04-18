@@ -12,6 +12,7 @@ import java.util.UUID
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -87,7 +88,7 @@ class WorktimeAttendanceRepository(
             }
             delay(pollIntervalMillis)
         }
-    }
+    }.distinctUntilChanged()
 
     fun observeCurrentUserState(staffId: String): Flow<WorktimeEffectiveAttendanceState> {
         val scope = currentScope()
@@ -101,7 +102,7 @@ class WorktimeAttendanceRepository(
                 syncMetadata = metadata?.toModel() ?: WorktimeAttendanceSyncMetadata(),
                 unresolvedEventCount = unresolvedCount,
             )
-        }
+        }.distinctUntilChanged()
     }
 
     suspend fun clockIn(staffId: String, staffName: String): PosResult<Unit> {

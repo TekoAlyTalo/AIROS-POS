@@ -56,7 +56,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import com.airos.pos.core.model.StaffMember
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -367,13 +373,37 @@ fun AirosPosApp(
 
     val syncState by appContainer.menuRepository.syncState.collectAsState()
 
+    // Collect current-user attendance state at app-shell level so the offline/syncing
+    // notice is visible on every screen, not only when the Shift tab is open.
+    // This is the same flow the Shift composable collects; hoisting it here ensures
+    // auto-clock-in (which fires on sign-in, before the user navigates to Shift) also
+    // surfaces its pending sync state in the global banner.
+    val currentStaffId = session!!.staffId
+    val attendanceGlobalStateFlow = remember(appContainer.worktimeAttendanceRepository, currentStaffId) {
+        appContainer.worktimeAttendanceRepository.observeCurrentUserState(currentStaffId)
+    }
+    val attendanceGlobalState by attendanceGlobalStateFlow.collectAsState(
+        initial = WorktimeEffectiveAttendanceState(),
+    )
+    val attendanceSyncNotice: String? = when {
+        attendanceGlobalState.unresolvedEventCount > 0 &&
+            attendanceGlobalState.syncMetadata.syncState == "syncing" -> "Syncing attendance..."
+        attendanceGlobalState.syncMetadata.syncState == "reconciling" ->
+            "Confirming attendance with server..."
+        attendanceGlobalState.unresolvedEventCount > 0 -> "Offline, syncing later"
+        else -> null
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         SignedInApp(
             appContainer = appContainer,
-            currentStaffId = session!!.staffId,
+            currentStaffId = currentStaffId,
             currentStaffName = session!!.displayName,
         )
-        MenuSyncBanner(syncState = syncState)
+        Column(modifier = Modifier.fillMaxWidth()) {
+            MenuSyncBanner(syncState = syncState)
+            AttendanceSyncBanner(message = attendanceSyncNotice)
+        }
     }
 }
 
@@ -415,6 +445,24 @@ private fun MenuSyncBanner(syncState: MenuSyncResult?) {
 }
 
 @Composable
+private fun AttendanceSyncBanner(message: String?) {
+    if (message == null) return
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFF0D2F3D))
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = message,
+            style = MaterialTheme.typography.labelSmall,
+            color = Color(0xFFB3E5FC),
+        )
+    }
+}
+
+@Composable
 private fun SignedInApp(
     appContainer: AppContainer,
     currentStaffId: String,
@@ -435,6 +483,15 @@ private fun SignedInApp(
     var signOutPin by remember { mutableStateOf("") }
     var signOutPinError by remember { mutableStateOf<String?>(null) }
 
+    var sellerSwitchDialogVisible by remember { mutableStateOf(false) }
+    var sellerSwitchSelectedStaff by remember { mutableStateOf<StaffMember?>(null) }
+    var sellerSwitchPin by remember { mutableStateOf("") }
+    var sellerSwitchPinError by remember { mutableStateOf<String?>(null) }
+    val quickSelectStaffFlow = remember(appContainer.authRepository) {
+        appContainer.authRepository.observeQuickSelectStaff()
+    }
+    val quickSelectStaff by quickSelectStaffFlow.collectAsState(initial = emptyList())
+
     // NFC fast-path: current staff's badge confirms sign-out identity without PIN entry.
     LaunchedEffect(signOutDialogVisible, currentStaffId) {
         if (!signOutDialogVisible) return@LaunchedEffect
@@ -452,6 +509,27 @@ private fun SignedInApp(
         }
     }
 
+    // Rule 6 + Rule 7: NFC badge while already signed in.
+    // Same person → restrained acknowledgement, no action.
+    // Different person → seller switch: sign out current user (NO clockOut — work session continues),
+    //   sign in new user. Auto-clock-in fires from AirosPosApp LaunchedEffect if not already clocked in.
+    val sellerSwitchContext = LocalContext.current
+    LaunchedEffect(currentStaffId) {
+        NfcProbe.status.drop(1).collect { status ->
+            if (signOutDialogVisible) return@collect
+            val r = status.lastStaffResolution as? NfcStaffResolution.Matched ?: return@collect
+            val match = r.match
+            if (match.staffId == currentStaffId) {
+                Toast.makeText(sellerSwitchContext, "Already signed in as ${match.displayName}", Toast.LENGTH_SHORT).show()
+            } else {
+                scope.launch {
+                    appContainer.authRepository.signOut()
+                    appContainer.authRepository.signInWithNfc(match.staffId)
+                }
+            }
+        }
+    }
+
     Row(
         modifier = Modifier
             .fillMaxSize()
@@ -459,9 +537,20 @@ private fun SignedInApp(
     ) {
         AppRail(
             navController = navController,
+            currentStaffName = currentStaffName,
+            onSellerSwitchRequested = {
+                // Rule 8: sign-out dialog has priority — never open seller switch while it is active.
+                if (!signOutDialogVisible) {
+                    sellerSwitchSelectedStaff = null
+                    sellerSwitchPin = ""
+                    sellerSwitchPinError = null
+                    sellerSwitchDialogVisible = true
+                }
+            },
             onSignOut = {
                 signOutPin = ""
                 signOutPinError = null
+                sellerSwitchDialogVisible = false  // Rule 8: sign-out takes priority
                 signOutDialogVisible = true
             },
         )
@@ -486,12 +575,10 @@ private fun SignedInApp(
                     )
                     val state by viewModel.uiState.collectAsState()
                     val attendanceRepository = appContainer.worktimeAttendanceRepository
-                    val attendance by attendanceRepository.observeAttendance().collectAsState(
-                        initial = WorktimeAttendanceSnapshot(),
-                    )
-                    val currentAttendance by attendanceRepository.observeCurrentUserState(currentStaffId).collectAsState(
-                        initial = WorktimeEffectiveAttendanceState(),
-                    )
+                    val attendanceFlow = remember(attendanceRepository) { attendanceRepository.observeAttendance() }
+                    val attendance by attendanceFlow.collectAsState(initial = WorktimeAttendanceSnapshot())
+                    val currentUserStateFlow = remember(attendanceRepository, currentStaffId) { attendanceRepository.observeCurrentUserState(currentStaffId) }
+                    val currentAttendance by currentUserStateFlow.collectAsState(initial = WorktimeEffectiveAttendanceState())
                     val attendanceScope = rememberCoroutineScope()
                     var attendanceBusy by remember { mutableStateOf(false) }
                     var attendanceMessage by remember { mutableStateOf<String?>(null) }
@@ -520,23 +607,45 @@ private fun SignedInApp(
                         else -> null
                     }
 
-                    // Rule 1: merge local clocked-in state into the on-site list so it
-                    // remains visible when the backend snapshot is stale or offline.
-                    val effectiveAttendance = if (currentAttendance.activeSession != null &&
-                        attendance.currentlyOnSite.none { it.staffId == currentStaffId }
-                    ) {
-                        val localEntry = currentAttendance.activeSession!!.toAttendanceEntry(
-                            fallbackStaffName = currentStaffName,
-                            fallbackDurationMinutes = 0.0,
+                    // Build a deterministic, deduplicated snapshot for the UI:
+                    // Step 1 — offline-first: if the current user is locally clocked in but
+                    //   absent from the backend on-site list (backend stale/offline), prepend
+                    //   a synthetic local entry so they remain visible.
+                    // Step 2 — deduplicate on-site by staffId (first/active entry wins).
+                    // Step 3 — strip from clockedInToday any staffId already in on-site;
+                    //   this removes the ghost "done · 0min" row that appears when the
+                    //   backend returns the same person in both lists simultaneously.
+                    // Step 4 — deduplicate clockedInToday by staffId, keeping the entry with
+                    //   the highest durationMinutes (the most meaningful completed session).
+                    val effectiveAttendance = run {
+                        val rawOnSite = if (currentAttendance.activeSession != null &&
+                            attendance.currentlyOnSite.none { it.staffId == currentStaffId }
+                        ) {
+                            val localEntry = currentAttendance.activeSession!!.toAttendanceEntry(
+                                fallbackStaffName = currentStaffName,
+                                fallbackDurationMinutes = 0.0,
+                            )
+                            listOf(localEntry) + attendance.currentlyOnSite
+                        } else {
+                            attendance.currentlyOnSite
+                        }
+                        val dedupedOnSite = rawOnSite.distinctBy { it.staffId }
+                        val onSiteIds = dedupedOnSite.mapTo(mutableSetOf()) { it.staffId }
+                        val dedupedClockedInToday = attendance.clockedInToday
+                            .filter { it.staffId !in onSiteIds }
+                            .groupBy { it.staffId }
+                            .values
+                            .map { entries -> entries.maxByOrNull { it.durationMinutes } ?: entries.first() }
+                        attendance.copy(
+                            currentlyOnSite = dedupedOnSite,
+                            clockedInToday = dedupedClockedInToday,
                         )
-                        attendance.copy(currentlyOnSite = listOf(localEntry) + attendance.currentlyOnSite)
-                    } else {
-                        attendance
                     }
 
                     ShiftScreen(
                         state = state,
                         currentStaffId = currentStaffId,
+                        currentStaffName = currentStaffName,
                         onOpeningFloatChanged = viewModel::updateOpeningFloat,
                         onCountedCashChanged = viewModel::updateCountedCash,
                         onOpenShift = viewModel::openShift,
@@ -1469,6 +1578,134 @@ private fun SignedInApp(
         }
     }
 
+    if (sellerSwitchDialogVisible) {
+        Dialog(onDismissRequest = {
+            sellerSwitchDialogVisible = false
+            sellerSwitchSelectedStaff = null
+            sellerSwitchPin = ""
+            sellerSwitchPinError = null
+        }) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = AppShellPanelColor,
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    Text(
+                        text = "Switch seller",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = AppShellTextPrimary,
+                    )
+                    if (sellerSwitchSelectedStaff == null) {
+                        Text(
+                            text = "Who is taking over?",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = AppShellTextSecondary,
+                        )
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 260.dp)
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            quickSelectStaff.forEach { staff ->
+                                Button(
+                                    onClick = {
+                                        sellerSwitchSelectedStaff = staff
+                                        sellerSwitchPin = ""
+                                        sellerSwitchPinError = null
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = AppShellButtonColor,
+                                        contentColor = AppShellTextPrimary,
+                                    ),
+                                ) {
+                                    Text(staff.displayName)
+                                }
+                            }
+                        }
+                    } else {
+                        val selectedStaff = sellerSwitchSelectedStaff!!
+                        Text(
+                            text = selectedStaff.displayName,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = AppShellTextSecondary,
+                        )
+                        Text(
+                            text = "●".repeat(sellerSwitchPin.length).padEnd(4, '○'),
+                            style = MaterialTheme.typography.titleLarge,
+                            color = AppShellTextPrimary,
+                        )
+                        sellerSwitchPinError?.let {
+                            Text(
+                                text = it,
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        NumericPinPad(
+                            onDigit = { digit ->
+                                if (sellerSwitchPin.length < 4) {
+                                    val updated = sellerSwitchPin + digit
+                                    sellerSwitchPin = updated
+                                    if (updated.length == 4) {
+                                        val isSamePerson = selectedStaff.id == currentStaffId
+                                        scope.launch {
+                                            when (val result = appContainer.authRepository.signInWithPin(selectedStaff.id, updated)) {
+                                                is PosResult.Success -> {
+                                                    sellerSwitchDialogVisible = false
+                                                    sellerSwitchPin = ""
+                                                    sellerSwitchPinError = null
+                                                    sellerSwitchSelectedStaff = null
+                                                    if (isSamePerson) {
+                                                        Toast.makeText(
+                                                            sellerSwitchContext,
+                                                            "Already signed in as ${selectedStaff.displayName}",
+                                                            Toast.LENGTH_SHORT,
+                                                        ).show()
+                                                    } else {
+                                                        // signInWithPin already replaced the active session
+                                                        // without going through null, so auto-clock-in
+                                                        // (null→non-null guard) did not fire. Call it explicitly.
+                                                        appContainer.worktimeAttendanceRepository.clockIn(
+                                                            selectedStaff.id,
+                                                            selectedStaff.displayName,
+                                                        )
+                                                    }
+                                                }
+                                                is PosResult.Failure -> {
+                                                    sellerSwitchPin = ""
+                                                    sellerSwitchPinError = result.message
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            onBackspace = {
+                                if (sellerSwitchPin.isNotEmpty()) sellerSwitchPin = sellerSwitchPin.dropLast(1)
+                            },
+                        )
+                        Text(
+                            text = "← Change staff",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = AppShellTextMuted,
+                            modifier = Modifier.clickable {
+                                sellerSwitchSelectedStaff = null
+                                sellerSwitchPin = ""
+                                sellerSwitchPinError = null
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     if (signOutDialogVisible) {
         Dialog(onDismissRequest = { signOutDialogVisible = false }) {
             Surface(
@@ -1571,6 +1808,8 @@ private fun isRailDestinationSelected(
 @Composable
 private fun AppRail(
     navController: NavHostController,
+    currentStaffName: String,
+    onSellerSwitchRequested: () -> Unit,
     onSignOut: () -> Unit,
 ) {
     val backStackEntry by navController.currentBackStackEntryAsState()
@@ -1613,6 +1852,38 @@ private fun AppRail(
             }
 
             Spacer(modifier = Modifier.weight(1f))
+
+            // Active seller indicator — tappable to open seller-switch PIN dialog.
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 6.dp)
+                    .clickable(onClick = onSellerSwitchRequested),
+                shape = RoundedCornerShape(12.dp),
+                color = AppShellButtonMutedColor,
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp, horizontal = 4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        text = "Active",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AppShellTextMuted,
+                    )
+                    Text(
+                        text = currentStaffName,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = AppShellAccentText,
+                        textAlign = TextAlign.Center,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
 
             RailButton(
                 label = "Sign out",
