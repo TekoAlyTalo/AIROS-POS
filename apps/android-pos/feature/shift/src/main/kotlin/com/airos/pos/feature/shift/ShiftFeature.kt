@@ -262,7 +262,7 @@ fun ShiftScreen(
             ) {
                 KeyValueRow("Status", state.currentShift?.status?.name ?: "CLOSED")
                 state.currentShift?.let { shift ->
-                    KeyValueRow("Opened by", shift.openedByStaffId)
+                    KeyValueRow("Opened by staff ID", shift.openedByStaffId)
                     KeyValueRow("Opening float", CentsFormatter.format(shift.openingFloatCents))
                     KeyValueRow("Expected cash", CentsFormatter.format(shift.expectedCashCents))
                     shift.countedCashCents?.let { counted ->
