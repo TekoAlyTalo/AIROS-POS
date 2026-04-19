@@ -687,10 +687,16 @@ class FakePaymentRepository(
             }
         }
 
+        val finalizedTicketOpenedByStaffId = store.tickets.value[ticketId]
+            ?.openedByStaffId
+            ?.trim()
+            ?.takeIf { it.isNotBlank() && it != "menu-checkout" }
+            ?: cashierStaffId
+
         val closedTicket = Ticket(
             id = ticketId,
             tableId = resolvedTableId ?: "walk-in",
-            openedByStaffId = "menu-checkout",
+            openedByStaffId = finalizedTicketOpenedByStaffId,
             openedAtEpochMillis = store.now(),
             status = TicketStatus.CLOSED,
             lines = request.lines,
