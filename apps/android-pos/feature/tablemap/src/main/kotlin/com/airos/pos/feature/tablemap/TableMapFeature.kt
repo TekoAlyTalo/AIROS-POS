@@ -113,6 +113,8 @@ import androidx.compose.foundation.layout.offset
 private const val SIGNALING_PORT = 8000
 private const val PREVIEW_TAG = "TableLivePreview"
 private const val PREVIEW_SURFACE_ASPECT_RATIO = 4f / 3f
+private const val PREVIEW_FRAME_FRESHNESS_WINDOW_MILLIS = 2_500L
+private const val PREVIEW_FRAME_FRESHNESS_TICK_MILLIS = 500L
 private const val AREA_FILTER_ALL = "All"
 private const val TOP_TICKER_SCROLL_PX_PER_SECOND = 77f
 private const val TRANSFERRED_MESSAGE_MAX_APPEARANCES = 2
@@ -1120,6 +1122,13 @@ private fun TableDetailsContent(
     val mergedHint = mergedHintFor(table)
     val transferForThisTable = transferState?.takeIf { it.sourceSpotId == table.id }
     val billsScrollState = rememberScrollState()
+    val previewNowEpochMillis = rememberPreviewFreshnessNow(
+        isTickerActive = previewTarget != null &&
+            !isLivePreviewDialogVisible &&
+            previewState.shouldTrackPreviewFreshness(),
+    )
+    val isPreviewLiveForUser = previewState.isUserVisibleLive(previewNowEpochMillis)
+    val displayConnectionState = previewState.userVisibleConnectionState(isPreviewLiveForUser)
 
     Column(
         modifier = Modifier.fillMaxHeight(),
@@ -1338,7 +1347,7 @@ private fun TableDetailsContent(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    PreviewStatusPill(previewState.connectionState)
+                    PreviewStatusPill(displayConnectionState)
                 }
 
                 val isMiniVisibleOwner = previewTarget != null && !isLivePreviewDialogVisible
@@ -1362,12 +1371,13 @@ private fun TableDetailsContent(
                                 modifier = Modifier.fillMaxSize(),
                             )
                         }
-                        if (!canOpenLivePreview || !previewState.isStreaming || !isMiniVisibleOwner) {
+                        if (!canOpenLivePreview || !isPreviewLiveForUser || !isMiniVisibleOwner) {
                             val overlayText = when {
                                 !canOpenLivePreview -> "Assign a camera and configure edge URL to enable live preview."
                                 previewTarget == null -> "Starting live preview..."
                                 isLivePreviewDialogVisible -> "Live preview is open in the enlarged view."
                                 previewState.errorMessage?.isNotBlank() == true -> previewState.errorMessage ?: previewState.detailMessage
+                                previewState.isWaitingForFreshFrames(isPreviewLiveForUser) -> "Waiting for fresh video frames..."
                                 else -> previewState.detailMessage
                             }
                             Text(
@@ -2008,6 +2018,11 @@ private fun TableLivePreviewDialog(
     onDismiss: () -> Unit,
 ) {
     val errorMessage = previewState.errorMessage
+    val previewNowEpochMillis = rememberPreviewFreshnessNow(
+        isTickerActive = previewState.shouldTrackPreviewFreshness(),
+    )
+    val isPreviewLiveForUser = previewState.isUserVisibleLive(previewNowEpochMillis)
+    val displayConnectionState = previewState.userVisibleConnectionState(isPreviewLiveForUser)
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -2040,11 +2055,11 @@ private fun TableLivePreviewDialog(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    PreviewStatusPill(previewState.connectionState)
+                    PreviewStatusPill(displayConnectionState)
 
                     KeyValueRow("Table", target.tableLabel)
                     KeyValueRow("Resolved camera id", target.cameraId)
-                    KeyValueRow("State", previewState.connectionState.name)
+                    KeyValueRow("State", displayConnectionState.name)
 
                     if (!errorMessage.isNullOrBlank() && previewState.connectionState == CameraConnectionState.ERROR) {
                         StatusBanner(
@@ -2087,13 +2102,17 @@ private fun TableLivePreviewDialog(
                             ownerKey = "dialog:${target.tableId}:${target.cameraId}",
                             modifier = Modifier.fillMaxSize(),
                         )
-                        if (!previewState.isStreaming) {
+                        if (!isPreviewLiveForUser) {
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
                                 Text(
-                                    text = previewState.detailMessage,
+                                    text = if (previewState.isWaitingForFreshFrames(isPreviewLiveForUser)) {
+                                        "Waiting for fresh video frames..."
+                                    } else {
+                                        previewState.detailMessage
+                                    },
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.SemiBold,
                                 )
@@ -2233,6 +2252,52 @@ private fun CameraPreviewState.shouldStartPreviewFor(target: TableLivePreviewTar
         connectionState == CameraConnectionState.ERROR ||
         tableId != target.tableId ||
         cameraId != target.cameraId
+}
+
+@Composable
+private fun rememberPreviewFreshnessNow(isTickerActive: Boolean): Long {
+    var nowEpochMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(isTickerActive) {
+        nowEpochMillis = System.currentTimeMillis()
+        if (!isTickerActive) {
+            return@LaunchedEffect
+        }
+        while (true) {
+            delay(PREVIEW_FRAME_FRESHNESS_TICK_MILLIS)
+            nowEpochMillis = System.currentTimeMillis()
+        }
+    }
+    return nowEpochMillis
+}
+
+private fun CameraPreviewState.shouldTrackPreviewFreshness(): Boolean {
+    return connectionState == CameraConnectionState.LIVE && isStreaming
+}
+
+private fun CameraPreviewState.isUserVisibleLive(nowEpochMillis: Long): Boolean {
+    return isStreaming &&
+        connectionState == CameraConnectionState.LIVE &&
+        hasFreshPreviewFrame(nowEpochMillis)
+}
+
+private fun CameraPreviewState.hasFreshPreviewFrame(nowEpochMillis: Long): Boolean {
+    val lastFrameAt = lastFrameAtEpochMillis ?: return false
+    val frameAgeMillis = nowEpochMillis - lastFrameAt
+    return frameAgeMillis in 0..PREVIEW_FRAME_FRESHNESS_WINDOW_MILLIS
+}
+
+private fun CameraPreviewState.userVisibleConnectionState(isLiveForUser: Boolean): CameraConnectionState {
+    return if (connectionState == CameraConnectionState.LIVE && !isLiveForUser) {
+        CameraConnectionState.WAITING_FOR_VIDEO
+    } else {
+        connectionState
+    }
+}
+
+private fun CameraPreviewState.isWaitingForFreshFrames(isLiveForUser: Boolean): Boolean {
+    return !isLiveForUser &&
+        connectionState == CameraConnectionState.LIVE &&
+        isStreaming
 }
 
 private fun String.toAutoStartSignalingBaseUrl(): String {

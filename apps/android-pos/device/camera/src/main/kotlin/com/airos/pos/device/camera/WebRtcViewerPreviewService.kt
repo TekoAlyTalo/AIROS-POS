@@ -12,6 +12,7 @@ import java.util.UUID
 import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit.MILLISECONDS
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -47,6 +48,7 @@ import org.webrtc.audio.JavaAudioDeviceModule
 private const val TAG = "WebRtcViewerSvc"
 private const val PREVIEW_PATH = "/ws/webrtc"
 private const val MAIN_THREAD_SINK_OP_TIMEOUT_MILLIS = 2_000L
+private const val FRAME_STATE_PUBLISH_INTERVAL_MILLIS = 1_000L
 
 private open class ViewerSdpObserver : SdpObserver {
     override fun onCreateSuccess(sessionDescription: SessionDescription?) = Unit
@@ -83,6 +85,7 @@ class WebRtcViewerPreviewService(
     private var initError: String? = null
     private var activeSession: PreviewSession? = null
     private var remoteVideoTrack: VideoTrack? = null
+    private val lastFrameStatePublishedAtEpochMillis = AtomicLong(0L)
 
     private val frameObserver = VideoSink { frame: VideoFrame? ->
         if (frame == null) {
@@ -90,13 +93,7 @@ class WebRtcViewerPreviewService(
         }
         frame.retain()
         try {
-            previewStateFlow.value = previewStateFlow.value.copy(
-                isStreaming = true,
-                connectionState = CameraConnectionState.LIVE,
-                detailMessage = "Live viewer frame received",
-                errorMessage = null,
-                lastFrameAtEpochMillis = System.currentTimeMillis(),
-            )
+            publishFrameArrivalStateIfDue(System.currentTimeMillis())
         } finally {
             frame.release()
         }
@@ -856,6 +853,23 @@ class WebRtcViewerPreviewService(
         remoteVideoTrack = null
     }
 
+    private fun publishFrameArrivalStateIfDue(nowEpochMillis: Long) {
+        val lastPublishedAt = lastFrameStatePublishedAtEpochMillis.get()
+        if (lastPublishedAt != 0L &&
+            nowEpochMillis - lastPublishedAt < FRAME_STATE_PUBLISH_INTERVAL_MILLIS
+        ) {
+            return
+        }
+        lastFrameStatePublishedAtEpochMillis.set(nowEpochMillis)
+        previewStateFlow.value = previewStateFlow.value.copy(
+            isStreaming = true,
+            connectionState = CameraConnectionState.LIVE,
+            detailMessage = "Live viewer frame received",
+            errorMessage = null,
+            lastFrameAtEpochMillis = nowEpochMillis,
+        )
+    }
+
     private fun failSessionAsync(session: PreviewSession, reason: String) {
         serviceScope.launch {
             sessionMutex.withLock {
@@ -923,6 +937,7 @@ class WebRtcViewerPreviewService(
         }
 
         if (resetState) {
+            lastFrameStatePublishedAtEpochMillis.set(0L)
             previewStateFlow.value = previewStateFlow.value.copy(
                 isStreaming = false,
                 connectionState = CameraConnectionState.IDLE,
@@ -943,6 +958,7 @@ class WebRtcViewerPreviewService(
         signalingUrl: String?,
         lastFrameAtEpochMillis: Long?,
     ) {
+        lastFrameStatePublishedAtEpochMillis.set(0L)
         previewStateFlow.value = CameraPreviewState(
             isStreaming = isStreaming,
             sourceLabel = request.sourceLabel,
