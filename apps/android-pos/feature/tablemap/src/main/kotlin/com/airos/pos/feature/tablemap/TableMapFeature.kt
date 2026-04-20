@@ -114,6 +114,7 @@ private const val SIGNALING_PORT = 8000
 private const val PREVIEW_TAG = "TableLivePreview"
 private const val PREVIEW_SURFACE_ASPECT_RATIO = 4f / 3f
 private const val PREVIEW_FRAME_FRESHNESS_WINDOW_MILLIS = 2_500L
+private const val PREVIEW_LIVE_STICKY_WINDOW_MILLIS = 1_500L
 private const val PREVIEW_FRAME_FRESHNESS_TICK_MILLIS = 500L
 private const val AREA_FILTER_ALL = "All"
 private const val TOP_TICKER_SCROLL_PX_PER_SECOND = 77f
@@ -1125,10 +1126,13 @@ private fun TableDetailsContent(
     val previewNowEpochMillis = rememberPreviewFreshnessNow(
         isTickerActive = previewTarget != null &&
             !isLivePreviewDialogVisible &&
-            previewState.shouldTrackPreviewFreshness(),
+            previewState.shouldTrackPreviewUserStateClock(),
     )
-    val isPreviewLiveForUser = previewState.isUserVisibleLive(previewNowEpochMillis)
-    val displayConnectionState = previewState.userVisibleConnectionState(isPreviewLiveForUser)
+    val displayConnectionState = rememberUserVisiblePreviewConnectionState(
+        previewState = previewState,
+        nowEpochMillis = previewNowEpochMillis,
+    )
+    val isPreviewLiveForUser = displayConnectionState == CameraConnectionState.LIVE
 
     Column(
         modifier = Modifier.fillMaxHeight(),
@@ -2019,10 +2023,13 @@ private fun TableLivePreviewDialog(
 ) {
     val errorMessage = previewState.errorMessage
     val previewNowEpochMillis = rememberPreviewFreshnessNow(
-        isTickerActive = previewState.shouldTrackPreviewFreshness(),
+        isTickerActive = previewState.shouldTrackPreviewUserStateClock(),
     )
-    val isPreviewLiveForUser = previewState.isUserVisibleLive(previewNowEpochMillis)
-    val displayConnectionState = previewState.userVisibleConnectionState(isPreviewLiveForUser)
+    val displayConnectionState = rememberUserVisiblePreviewConnectionState(
+        previewState = previewState,
+        nowEpochMillis = previewNowEpochMillis,
+    )
+    val isPreviewLiveForUser = displayConnectionState == CameraConnectionState.LIVE
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -2270,8 +2277,54 @@ private fun rememberPreviewFreshnessNow(isTickerActive: Boolean): Long {
     return nowEpochMillis
 }
 
-private fun CameraPreviewState.shouldTrackPreviewFreshness(): Boolean {
-    return connectionState == CameraConnectionState.LIVE && isStreaming
+private fun CameraPreviewState.shouldTrackPreviewUserStateClock(): Boolean {
+    return connectionState == CameraConnectionState.LIVE ||
+        connectionState == CameraConnectionState.WAITING_FOR_VIDEO
+}
+
+@Composable
+private fun rememberUserVisiblePreviewConnectionState(
+    previewState: CameraPreviewState,
+    nowEpochMillis: Long,
+): CameraConnectionState {
+    var lastFreshLiveAtEpochMillis by remember(
+        previewState.tableId,
+        previewState.cameraId,
+    ) { mutableStateOf<Long?>(null) }
+
+    val isFreshLiveNow = previewState.isUserVisibleLive(nowEpochMillis)
+
+    LaunchedEffect(
+        previewState.tableId,
+        previewState.cameraId,
+        previewState.connectionState,
+        previewState.lastFrameAtEpochMillis,
+        isFreshLiveNow,
+        nowEpochMillis,
+    ) {
+        when {
+            isFreshLiveNow -> lastFreshLiveAtEpochMillis = nowEpochMillis
+            previewState.connectionState == CameraConnectionState.IDLE ||
+                previewState.connectionState == CameraConnectionState.ERROR ||
+                previewState.connectionState == CameraConnectionState.CONNECTING ||
+                previewState.connectionState == CameraConnectionState.RECONNECTING -> {
+                lastFreshLiveAtEpochMillis = null
+            }
+        }
+    }
+
+    val lastFreshLiveAt = lastFreshLiveAtEpochMillis
+    val keepLiveSticky = isFreshLiveNow ||
+        (((previewState.connectionState == CameraConnectionState.LIVE ||
+            previewState.connectionState == CameraConnectionState.WAITING_FOR_VIDEO)) &&
+            lastFreshLiveAt != null &&
+            (nowEpochMillis - lastFreshLiveAt) in 0..PREVIEW_LIVE_STICKY_WINDOW_MILLIS)
+
+    return when {
+        keepLiveSticky -> CameraConnectionState.LIVE
+        previewState.connectionState == CameraConnectionState.LIVE -> CameraConnectionState.WAITING_FOR_VIDEO
+        else -> previewState.connectionState
+    }
 }
 
 private fun CameraPreviewState.isUserVisibleLive(nowEpochMillis: Long): Boolean {
@@ -2284,14 +2337,6 @@ private fun CameraPreviewState.hasFreshPreviewFrame(nowEpochMillis: Long): Boole
     val lastFrameAt = lastFrameAtEpochMillis ?: return false
     val frameAgeMillis = nowEpochMillis - lastFrameAt
     return frameAgeMillis in 0..PREVIEW_FRAME_FRESHNESS_WINDOW_MILLIS
-}
-
-private fun CameraPreviewState.userVisibleConnectionState(isLiveForUser: Boolean): CameraConnectionState {
-    return if (connectionState == CameraConnectionState.LIVE && !isLiveForUser) {
-        CameraConnectionState.WAITING_FOR_VIDEO
-    } else {
-        connectionState
-    }
 }
 
 private fun CameraPreviewState.isWaitingForFreshFrames(isLiveForUser: Boolean): Boolean {
