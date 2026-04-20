@@ -48,7 +48,7 @@ import org.webrtc.audio.JavaAudioDeviceModule
 private const val TAG = "WebRtcViewerSvc"
 private const val PREVIEW_PATH = "/ws/webrtc"
 private const val MAIN_THREAD_SINK_OP_TIMEOUT_MILLIS = 2_000L
-private const val FRAME_STATE_PUBLISH_INTERVAL_MILLIS = 1_000L
+private const val FRAME_STATE_PUBLISH_INTERVAL_MILLIS = 250L
 
 private open class ViewerSdpObserver : SdpObserver {
     override fun onCreateSuccess(sessionDescription: SessionDescription?) = Unit
