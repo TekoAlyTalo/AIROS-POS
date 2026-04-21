@@ -1,6 +1,8 @@
 package com.airos.pos.feature.tablemap
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
@@ -112,6 +114,7 @@ import androidx.compose.foundation.layout.offset
 
 private const val SIGNALING_PORT = 8000
 private const val PREVIEW_TAG = "TableLivePreview"
+private val previewMainHandler: Handler by lazy { Handler(Looper.getMainLooper()) }
 private const val PREVIEW_SURFACE_ASPECT_RATIO = 4f / 3f
 private const val PREVIEW_FRAME_FRESHNESS_WINDOW_MILLIS = 2_500L
 private const val PREVIEW_LIVE_STICKY_WINDOW_MILLIS = 1_500L
@@ -1128,11 +1131,45 @@ private fun TableDetailsContent(
             !isLivePreviewDialogVisible &&
             previewState.shouldTrackPreviewUserStateClock(),
     )
+    var hasRenderedFirstFrame by remember(
+        previewTarget?.tableId,
+        previewTarget?.cameraId,
+    ) { mutableStateOf(false) }
     val displayConnectionState = rememberUserVisiblePreviewConnectionState(
         previewState = previewState,
         nowEpochMillis = previewNowEpochMillis,
+        hasRenderedFirstFrame = hasRenderedFirstFrame,
     )
     val isPreviewLiveForUser = displayConnectionState == CameraConnectionState.LIVE
+    val miniOwnerKey = previewTarget?.let { target -> "mini:${target.tableId}:${target.cameraId}" }
+    val isMiniVisibleOwner = previewTarget != null && !isLivePreviewDialogVisible
+    val miniBranchReason = when {
+        !canOpenLivePreview -> "disabled_no_camera_or_edge"
+        previewTarget == null -> "no_preview_target"
+        isLivePreviewDialogVisible -> "dialog_visible"
+        else -> "mini_visible"
+    }
+    DisposableEffect(
+        table.id,
+        miniOwnerKey,
+        isMiniVisibleOwner,
+        miniBranchReason,
+    ) {
+        Log.i(
+            PREVIEW_TAG,
+            "Mini preview branch ENTER tableId=${table.id} ownerKey=${miniOwnerKey ?: "null"} " +
+                "target=${previewTargetTrace(previewTarget?.tableId, previewTarget?.cameraId)} " +
+                "visible=$isMiniVisibleOwner reason=$miniBranchReason service=${cameraPreviewService.traceIdentity()}",
+        )
+        onDispose {
+            Log.i(
+                PREVIEW_TAG,
+                "Mini preview branch LEAVE tableId=${table.id} ownerKey=${miniOwnerKey ?: "null"} " +
+                    "target=${previewTargetTrace(previewTarget?.tableId, previewTarget?.cameraId)} " +
+                    "visible=$isMiniVisibleOwner reason=$miniBranchReason",
+            )
+        }
+    }
 
     Column(
         modifier = Modifier.fillMaxHeight(),
@@ -1354,7 +1391,6 @@ private fun TableDetailsContent(
                     PreviewStatusPill(displayConnectionState)
                 }
 
-                val isMiniVisibleOwner = previewTarget != null && !isLivePreviewDialogVisible
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1371,8 +1407,13 @@ private fun TableDetailsContent(
                         if (isMiniVisibleOwner) {
                             LiveVideoSurface(
                                 cameraPreviewService = cameraPreviewService,
-                                ownerKey = "mini:${previewTarget.tableId}:${previewTarget.cameraId}",
+                                surfaceRole = "mini",
+                                ownerKey = miniOwnerKey ?: "mini:null:null",
+                                targetTableId = previewTarget.tableId,
+                                targetCameraId = previewTarget.cameraId,
                                 modifier = Modifier.fillMaxSize(),
+                                onRendererReadyChanged = { isReady -> hasRenderedFirstFrame = isReady },
+                                onFirstFrameRendered = { hasRenderedFirstFrame = true },
                             )
                         }
                         if (!canOpenLivePreview || !isPreviewLiveForUser || !isMiniVisibleOwner) {
@@ -2025,11 +2066,30 @@ private fun TableLivePreviewDialog(
     val previewNowEpochMillis = rememberPreviewFreshnessNow(
         isTickerActive = previewState.shouldTrackPreviewUserStateClock(),
     )
+    var hasRenderedFirstFrame by remember(
+        target.tableId,
+        target.cameraId,
+    ) { mutableStateOf(false) }
     val displayConnectionState = rememberUserVisiblePreviewConnectionState(
         previewState = previewState,
         nowEpochMillis = previewNowEpochMillis,
+        hasRenderedFirstFrame = hasRenderedFirstFrame,
     )
     val isPreviewLiveForUser = displayConnectionState == CameraConnectionState.LIVE
+    val dialogOwnerKey = "dialog:${target.tableId}:${target.cameraId}"
+    DisposableEffect(dialogOwnerKey, target.tableId, target.cameraId) {
+        Log.i(
+            PREVIEW_TAG,
+            "Dialog preview branch ENTER ownerKey=$dialogOwnerKey " +
+                "target=${previewTargetTrace(target.tableId, target.cameraId)} service=${cameraPreviewService.traceIdentity()}",
+        )
+        onDispose {
+            Log.i(
+                PREVIEW_TAG,
+                "Dialog preview branch LEAVE ownerKey=$dialogOwnerKey target=${previewTargetTrace(target.tableId, target.cameraId)}",
+            )
+        }
+    }
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -2106,8 +2166,13 @@ private fun TableLivePreviewDialog(
                     ) {
                         LiveVideoSurface(
                             cameraPreviewService = cameraPreviewService,
-                            ownerKey = "dialog:${target.tableId}:${target.cameraId}",
+                            surfaceRole = "dialog",
+                            ownerKey = dialogOwnerKey,
+                            targetTableId = target.tableId,
+                            targetCameraId = target.cameraId,
                             modifier = Modifier.fillMaxSize(),
+                            onRendererReadyChanged = { isReady -> hasRenderedFirstFrame = isReady },
+                            onFirstFrameRendered = { hasRenderedFirstFrame = true },
                         )
                         if (!isPreviewLiveForUser) {
                             Column(
@@ -2142,25 +2207,84 @@ private fun TableLivePreviewDialog(
 @Composable
 private fun LiveVideoSurface(
     cameraPreviewService: CameraPreviewService,
+    surfaceRole: String,
     ownerKey: String,
+    targetTableId: String?,
+    targetCameraId: String?,
     modifier: Modifier = Modifier,
+    onRendererReadyChanged: ((Boolean) -> Unit)? = null,
+    onFirstFrameRendered: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val sharedContext = cameraPreviewService.eglBaseContext
-    val renderer = remember(context, sharedContext, ownerKey) {
-        if (sharedContext == null) {
-            Log.w(PREVIEW_TAG, "Skipping renderer init because shared EGL context is null owner=$ownerKey")
+    val isSharedContextReady = sharedContext != null
+    val currentOnRendererReadyChanged by rememberUpdatedState(onRendererReadyChanged)
+    val currentOnFirstFrameRendered by rememberUpdatedState(onFirstFrameRendered)
+    val surfaceTrace = "role=$surfaceRole ownerKey=$ownerKey target=${previewTargetTrace(targetTableId, targetCameraId)}"
+    val rendererKeyTrace = "$surfaceTrace context=${context.traceIdentity()} " +
+        "service=${cameraPreviewService.traceIdentity()} sharedReady=$isSharedContextReady"
+    DisposableEffect(surfaceRole, ownerKey, targetTableId, targetCameraId) {
+        Log.i(PREVIEW_TAG, "LiveVideoSurface ENTER $rendererKeyTrace")
+        Log.i(PREVIEW_TAG, "Renderer ready RESET $surfaceTrace reason=surface_enter")
+        currentOnRendererReadyChanged?.invoke(false)
+        onDispose {
+            Log.i(
+                PREVIEW_TAG,
+                "LiveVideoSurface LEAVE $rendererKeyTrace reason=subtree_removed_or_owner_target_changed",
+            )
+        }
+    }
+    DisposableEffect(context, cameraPreviewService, ownerKey, isSharedContextReady) {
+        Log.i(PREVIEW_TAG, "Renderer key ENTER $rendererKeyTrace")
+        Log.i(PREVIEW_TAG, "Renderer ready RESET $surfaceTrace reason=renderer_key_enter")
+        currentOnRendererReadyChanged?.invoke(false)
+        onDispose {
+            Log.i(PREVIEW_TAG, "Renderer key LEAVE $rendererKeyTrace reason=renderer_key_changed_or_subtree_removed")
+        }
+    }
+    val renderer = remember(context, cameraPreviewService, ownerKey, isSharedContextReady) {
+        val rendererSharedContext = cameraPreviewService.eglBaseContext
+        if (rendererSharedContext == null) {
+            Log.w(PREVIEW_TAG, "Renderer create skipped $surfaceTrace reason=shared_egl_context_null")
             null
         } else {
-            createPreviewRenderer(context, sharedContext)
+            val rendererEvents = object : RendererCommon.RendererEvents {
+                override fun onFirstFrameRendered() {
+                    Log.i(PREVIEW_TAG, "Renderer onFirstFrameRendered $surfaceTrace")
+                    previewMainHandler.post { currentOnRendererReadyChanged?.invoke(true) }
+                    previewMainHandler.post { currentOnFirstFrameRendered?.invoke() }
+                }
+
+                override fun onFrameResolutionChanged(
+                    videoWidth: Int,
+                    videoHeight: Int,
+                    rotation: Int,
+                ) {
+                    Log.i(
+                        PREVIEW_TAG,
+                        "Renderer onFrameResolutionChanged $surfaceTrace size=${videoWidth}x$videoHeight rotation=$rotation",
+                    )
+                }
+            }
+            Log.i(
+                PREVIEW_TAG,
+                "Renderer create START $surfaceTrace sharedContext=${rendererSharedContext.traceIdentity()}",
+            )
+            createPreviewRenderer(context, rendererSharedContext, rendererEvents)
+                ?.also { createdRenderer ->
+                    Log.i(PREVIEW_TAG, "Renderer create SUCCESS $surfaceTrace renderer=${createdRenderer.logLabel()}")
+                }
         }
     }
     renderer?.let { currentRenderer ->
         AndroidView(
             modifier = modifier,
-            factory = { currentRenderer },
+            factory = {
+                Log.i(PREVIEW_TAG, "AndroidView factory $surfaceTrace renderer=${currentRenderer.logLabel()}")
+                currentRenderer
+            },
             update = {
-                Log.i(PREVIEW_TAG, "Renderer attached renderer=${it.logLabel()} owner=$ownerKey")
+                Log.i(PREVIEW_TAG, "AndroidView update $surfaceTrace renderer=${it.logLabel()}")
             },
         )
     }
@@ -2168,15 +2292,22 @@ private fun LiveVideoSurface(
         renderer?.let { currentRenderer ->
             Log.i(
                 PREVIEW_TAG,
-                "Attaching renderer sink renderer=${currentRenderer.logLabel()} owner=$ownerKey sharedContext=${sharedContext?.javaClass?.name ?: "null"}",
+                "Renderer sink ATTACH $surfaceTrace renderer=${currentRenderer.logLabel()} " +
+                    "sharedContext=${sharedContext.traceIdentityOrNull()}",
             )
             cameraPreviewService.attachVideoSink(currentRenderer)
         }
         onDispose {
             renderer?.let { currentRenderer ->
-                Log.i(PREVIEW_TAG, "Detaching renderer sink renderer=${currentRenderer.logLabel()} owner=$ownerKey")
+                Log.i(
+                    PREVIEW_TAG,
+                    "Renderer sink DETACH $surfaceTrace renderer=${currentRenderer.logLabel()} reason=sink_effect_dispose",
+                )
                 cameraPreviewService.detachVideoSink(currentRenderer)
-                Log.i(PREVIEW_TAG, "Releasing renderer renderer=${currentRenderer.logLabel()} owner=$ownerKey")
+                Log.i(
+                    PREVIEW_TAG,
+                    "Renderer RELEASE $surfaceTrace renderer=${currentRenderer.logLabel()} reason=sink_effect_dispose",
+                )
                 currentRenderer.release()
             }
         }
@@ -2186,11 +2317,13 @@ private fun LiveVideoSurface(
 private fun createPreviewRenderer(
     context: Context,
     sharedContext: EglBase.Context,
+    rendererEvents: RendererCommon.RendererEvents?,
 ): SurfaceViewRenderer? {
     return tryCreateRenderer(
         context = context,
         sharedContext = sharedContext,
         initLabel = "shared",
+        rendererEvents = rendererEvents,
     )
 }
 
@@ -2198,6 +2331,7 @@ private fun tryCreateRenderer(
     context: Context,
     sharedContext: EglBase.Context,
     initLabel: String,
+    rendererEvents: RendererCommon.RendererEvents?,
 ): SurfaceViewRenderer? {
     val renderer = SurfaceViewRenderer(context).apply {
         setMirror(false)
@@ -2208,7 +2342,7 @@ private fun tryCreateRenderer(
         "Initializing renderer mode=$initLabel renderer=${renderer.logLabel()} sharedContext=${sharedContext?.javaClass?.name ?: "null"}",
     )
     return try {
-        renderer.init(sharedContext, null)
+        renderer.init(sharedContext, rendererEvents)
         renderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
         renderer
     } catch (error: RuntimeException) {
@@ -2228,6 +2362,22 @@ private fun tryCreateRenderer(
 
 private fun SurfaceViewRenderer.logLabel(): String {
     return "SurfaceViewRenderer@${Integer.toHexString(hashCode())}"
+}
+
+private fun Any.traceIdentity(): String {
+    val typeName = javaClass.simpleName.ifBlank { javaClass.name }
+    return "$typeName@${Integer.toHexString(System.identityHashCode(this))}"
+}
+
+private fun Any?.traceIdentityOrNull(): String {
+    return this?.traceIdentity() ?: "null"
+}
+
+private fun previewTargetTrace(
+    tableId: String?,
+    cameraId: String?,
+): String {
+    return "tableId=${tableId ?: "null"} cameraId=${cameraId ?: "null"}"
 }
 
 private fun CameraPreviewState.activePreviewTarget(): TableLivePreviewTarget? {
@@ -2286,39 +2436,20 @@ private fun CameraPreviewState.shouldTrackPreviewUserStateClock(): Boolean {
 private fun rememberUserVisiblePreviewConnectionState(
     previewState: CameraPreviewState,
     nowEpochMillis: Long,
+    hasRenderedFirstFrame: Boolean,
 ): CameraConnectionState {
-    var lastFreshLiveAtEpochMillis by remember(
-        previewState.tableId,
-        previewState.cameraId,
-    ) { mutableStateOf<Long?>(null) }
-
-    val isFreshLiveNow = previewState.isUserVisibleLive(nowEpochMillis)
-
-    LaunchedEffect(
-        previewState.tableId,
-        previewState.cameraId,
-        previewState.connectionState,
-        previewState.lastFrameAtEpochMillis,
-        isFreshLiveNow,
-        nowEpochMillis,
-    ) {
-        when {
-            isFreshLiveNow -> lastFreshLiveAtEpochMillis = nowEpochMillis
-            previewState.connectionState == CameraConnectionState.IDLE ||
-                previewState.connectionState == CameraConnectionState.ERROR ||
-                previewState.connectionState == CameraConnectionState.CONNECTING ||
-                previewState.connectionState == CameraConnectionState.RECONNECTING -> {
-                lastFreshLiveAtEpochMillis = null
-            }
-        }
+    val isFreshLiveNow = hasRenderedFirstFrame && previewState.isUserVisibleLive(nowEpochMillis)
+    val frameAgeMillis = previewState.lastFrameAtEpochMillis?.let { lastFrameAt ->
+        nowEpochMillis - lastFrameAt
     }
-
-    val lastFreshLiveAt = lastFreshLiveAtEpochMillis
+    val stickyLiveWindowMillis = PREVIEW_FRAME_FRESHNESS_WINDOW_MILLIS +
+        PREVIEW_LIVE_STICKY_WINDOW_MILLIS
     val keepLiveSticky = isFreshLiveNow ||
-        (((previewState.connectionState == CameraConnectionState.LIVE ||
-            previewState.connectionState == CameraConnectionState.WAITING_FOR_VIDEO)) &&
-            lastFreshLiveAt != null &&
-            (nowEpochMillis - lastFreshLiveAt) in 0..PREVIEW_LIVE_STICKY_WINDOW_MILLIS)
+        (hasRenderedFirstFrame &&
+            previewState.isStreaming &&
+            previewState.connectionState == CameraConnectionState.LIVE &&
+            frameAgeMillis != null &&
+            frameAgeMillis in 0..stickyLiveWindowMillis)
 
     return when {
         keepLiveSticky -> CameraConnectionState.LIVE
