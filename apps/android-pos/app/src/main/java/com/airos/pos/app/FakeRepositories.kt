@@ -64,12 +64,22 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.roundToInt
 
 private const val AUTHORITATIVE_BACKEND_TABLE_ID = "table-1"
+private const val BACKEND_RUNTIME_FLOOR_MAP_ID = "backend-authoritative-floor"
+private const val BACKEND_RUNTIME_FLOOR_MAP_NAME = "Dining room"
+
+private fun emptyBackendAuthoritativeFloorMap(): FloorMap {
+    return FloorMap(
+        id = BACKEND_RUNTIME_FLOOR_MAP_ID,
+        name = BACKEND_RUNTIME_FLOOR_MAP_NAME,
+        tables = emptyList(),
+    )
+}
 
 class FakePosStore {
     private val idCounter = AtomicInteger(100)
 
     val menuItems = MutableStateFlow(SampleData.menuItems())
-    val floorMap = MutableStateFlow(SampleData.floorMap())
+    val floorMap = MutableStateFlow(emptyBackendAuthoritativeFloorMap())
     val tickets = MutableStateFlow(SampleData.initialTickets())
     val kitchenOrders = MutableStateFlow<List<KitchenOrder>>(emptyList())
     val currentShift = MutableStateFlow<PosShift?>(null)
@@ -168,11 +178,29 @@ class FakeAuthRepository(
 class FakeTableRepository(
     private val store: FakePosStore,
     private val syncQueueRepository: SyncQueueRepository,
-) : TableRepository {
+) : TableRepository, BackendAuthoritativeFloorMapSink {
     override fun observeFloorMap(): Flow<FloorMap> = store.floorMap
 
     override fun observeTable(tableId: String): Flow<RestaurantTable?> {
         return store.floorMap.map { floorMap -> floorMap.tables.firstOrNull { it.id == tableId } }
+    }
+
+    override fun replaceBackendAuthoritativeFloorMap(floorMap: FloorMap) {
+        val currentTablesById = store.floorMap.value.tables.associateBy(RestaurantTable::id)
+        val openTicketsByTableId = store.tickets.value.values
+            .filter { ticket -> ticket.status !in setOf(TicketStatus.CLOSED, TicketStatus.PAID) }
+            .associateBy { ticket -> ticket.tableId }
+        val mergedFloorMap = floorMap.copy(
+            tables = floorMap.tables.map { table ->
+                val currentTable = currentTablesById[table.id]
+                val activeTicketId = currentTable?.activeTicketId
+                    ?: openTicketsByTableId[table.id]?.id
+                table.copy(activeTicketId = activeTicketId)
+            },
+        )
+        if (store.floorMap.value != mergedFloorMap) {
+            store.floorMap.value = mergedFloorMap
+        }
     }
 
     override suspend fun openTable(tableId: String, guestCount: Int, openedByStaffId: String): PosResult<RestaurantTable> {

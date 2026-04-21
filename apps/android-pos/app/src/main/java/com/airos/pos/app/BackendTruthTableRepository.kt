@@ -6,6 +6,7 @@ import com.airos.pos.core.model.FloorMap
 import com.airos.pos.core.model.PersistedOpenSale
 import com.airos.pos.core.model.RestaurantTable
 import com.airos.pos.core.model.TableAttentionFlag
+import com.airos.pos.core.model.TablePosition
 import com.airos.pos.core.model.TableStatus
 import com.airos.pos.core.model.TableTruthSource
 import com.airos.pos.domain.OpenSaleRepository
@@ -29,9 +30,24 @@ import org.json.JSONObject
 private const val TABLE1_POS_SPOT_ID = "table-1"
 private const val TABLE1_POS_SPOT_LABEL = "T1"
 private const val TABLE1_BACKEND_TABLE_ID = 1
+private const val BACKEND_FLOOR_MAP_ID = "backend-authoritative-floor"
+private const val BACKEND_FLOOR_MAP_NAME = "Dining room"
+private const val BACKEND_DEFAULT_AREA_NAME = "Dining room"
+private const val BACKEND_TABLE_GRID_COLUMNS = 4
+private const val BACKEND_TABLE_GRID_LEFT = 96
+private const val BACKEND_TABLE_GRID_TOP = 96
+private const val BACKEND_TABLE_GRID_X_STEP = 220
+private const val BACKEND_TABLE_GRID_Y_STEP = 190
+private const val BACKEND_TABLE_WIDTH = 180
+private const val BACKEND_TABLE_HEIGHT = 120
+
+interface BackendAuthoritativeFloorMapSink {
+    fun replaceBackendAuthoritativeFloorMap(floorMap: FloorMap)
+}
 
 class BackendTruthTableRepository(
     private val delegate: TableRepository,
+    private val floorMapSink: BackendAuthoritativeFloorMapSink? = null,
     private val openSaleRepository: OpenSaleRepository,
     backendBaseUrlProvider: () -> String,
     pollIntervalMillis: Long = 2_000L,
@@ -49,21 +65,12 @@ class BackendTruthTableRepository(
             openSaleRepository.observeOpenSales(),
         ) { floorMap, backendTruthByTableId, openSales ->
             publishTable1OpenBillContext(openSales)
-            floorMap.copy(
-                tables = floorMap.tables.map { table ->
-                    if (table.id != TABLE1_POS_SPOT_ID) {
-                        table
-                    } else {
-                        backendTruthByTableId[TABLE1_BACKEND_TABLE_ID]?.let(table::withBackendTruth) ?: run {
-                            Log.w(
-                                "AIROS",
-                                "[BackendTruthTableRepository] Missing backend truth for $TABLE1_POS_SPOT_ID. POS will mark guest count unavailable instead of trusting fallback data.",
-                            )
-                            table
-                        }
-                    }
-                },
+            val authoritativeFloorMap = buildAuthoritativeBackendFloorMap(
+                currentFloorMap = floorMap,
+                backendTruthByTableId = backendTruthByTableId,
             )
+            floorMapSink?.replaceBackendAuthoritativeFloorMap(authoritativeFloorMap)
+            authoritativeFloorMap
         }
     }
 
@@ -287,7 +294,11 @@ private class BackendTableTruthClient(
             if (tableId <= 0) continue
             result[tableId] = BackendTableTruth(
                 tableId = tableId,
+                tableName = item.optStringOrNull("table_name") ?: "T$tableId",
+                capacity = item.optInt("capacity", 1).coerceAtLeast(1),
                 currentPersons = item.optInt("current_persons", 0).coerceAtLeast(0),
+                cameraId = item.optStringOrNull("camera_id"),
+                cameraLabel = item.optStringOrNull("camera_label"),
                 state = item.optString("state", "READY"),
                 attentionFlag = parseAttentionFlag(item.optString("attention_flag", "NONE")),
                 reviewAnchorTime = item.optStringOrNull("review_anchor_time"),
@@ -324,13 +335,20 @@ private class BackendTableTruthClient(
 
 private data class BackendTableTruth(
     val tableId: Int,
+    val tableName: String,
+    val capacity: Int,
     val currentPersons: Int,
+    val cameraId: String?,
+    val cameraLabel: String?,
     val state: String,
     val attentionFlag: TableAttentionFlag,
     val reviewAnchorTime: String?,
     val reviewFrom: String?,
     val reviewTo: String?,
 ) {
+    val posTableId: String
+        get() = "table-$tableId"
+
     val tableStatus: TableStatus
         get() = when (state.trim().uppercase()) {
             "FREE" -> TableStatus.AVAILABLE
@@ -350,6 +368,93 @@ private fun RestaurantTable.withBackendTruth(truth: BackendTableTruth): Restaura
         reviewFrom = truth.reviewFrom,
         reviewTo = truth.reviewTo,
         truthSource = TableTruthSource.BACKEND,
+    )
+}
+
+private fun buildAuthoritativeBackendFloorMap(
+    currentFloorMap: FloorMap,
+    backendTruthByTableId: Map<Int, BackendTableTruth>,
+): FloorMap {
+    val currentTablesById = currentFloorMap.tables.associateBy(RestaurantTable::id)
+    val authoritativeTables = backendTruthByTableId.values
+        .sortedBy(BackendTableTruth::tableId)
+        .mapIndexed { index, backendTruth ->
+            val currentTable = currentTablesById[backendTruth.posTableId]
+            buildAuthoritativeBackendTable(
+                backendTruth = backendTruth,
+                currentTable = currentTable,
+                index = index,
+            )
+        }
+
+    return FloorMap(
+        id = BACKEND_FLOOR_MAP_ID,
+        name = BACKEND_FLOOR_MAP_NAME,
+        tables = authoritativeTables,
+    )
+}
+
+private fun buildAuthoritativeBackendTable(
+    backendTruth: BackendTableTruth,
+    currentTable: RestaurantTable?,
+    index: Int,
+): RestaurantTable {
+    val baseTable = RestaurantTable(
+        id = backendTruth.posTableId,
+        label = backendTruth.tableName,
+        areaName = BACKEND_DEFAULT_AREA_NAME,
+        seats = backendTruth.capacity,
+        status = if (backendTruth.tableId == TABLE1_BACKEND_TABLE_ID) {
+            backendTruth.tableStatus
+        } else {
+            currentTable?.status ?: backendTruth.tableStatus
+        },
+        guestCount = if (backendTruth.tableId == TABLE1_BACKEND_TABLE_ID) {
+            backendTruth.currentPersons
+        } else {
+            currentTable?.guestCount ?: backendTruth.currentPersons
+        },
+        activeTicketId = currentTable?.activeTicketId,
+        position = generatedBackendTablePosition(index),
+        cameraId = backendTruth.cameraId,
+        cameraLabel = backendTruth.cameraLabel ?: backendTruth.cameraId,
+        attentionFlag = if (backendTruth.tableId == TABLE1_BACKEND_TABLE_ID) {
+            backendTruth.attentionFlag
+        } else {
+            TableAttentionFlag.NONE
+        },
+        reviewAnchorTime = if (backendTruth.tableId == TABLE1_BACKEND_TABLE_ID) {
+            backendTruth.reviewAnchorTime
+        } else {
+            null
+        },
+        reviewFrom = if (backendTruth.tableId == TABLE1_BACKEND_TABLE_ID) {
+            backendTruth.reviewFrom
+        } else {
+            null
+        },
+        reviewTo = if (backendTruth.tableId == TABLE1_BACKEND_TABLE_ID) {
+            backendTruth.reviewTo
+        } else {
+            null
+        },
+        truthSource = TableTruthSource.BACKEND,
+    )
+    return if (backendTruth.tableId == TABLE1_BACKEND_TABLE_ID) {
+        baseTable.withBackendTruth(backendTruth)
+    } else {
+        baseTable
+    }
+}
+
+private fun generatedBackendTablePosition(index: Int): TablePosition {
+    val row = index / BACKEND_TABLE_GRID_COLUMNS
+    val column = index % BACKEND_TABLE_GRID_COLUMNS
+    return TablePosition(
+        x = BACKEND_TABLE_GRID_LEFT + column * BACKEND_TABLE_GRID_X_STEP,
+        y = BACKEND_TABLE_GRID_TOP + row * BACKEND_TABLE_GRID_Y_STEP,
+        width = BACKEND_TABLE_WIDTH,
+        height = BACKEND_TABLE_HEIGHT,
     )
 }
 

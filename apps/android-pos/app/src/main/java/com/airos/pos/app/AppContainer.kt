@@ -108,9 +108,10 @@ class DefaultAppContainer(
     override val nfcStaffResolver: NfcStaffResolver = RepositoryNfcStaffResolver(roomNfcIdentityRepository)
     override val openSaleRepository: OpenSaleRepository = RoomOpenSaleRepository(database.openSaleDao())
     override val shiftRepository: ShiftRepository = FakeShiftRepository(store, syncQueueRepository)
-    private val localTableRepository: TableRepository = FakeTableRepository(store, syncQueueRepository)
+    private val localTableRepository = FakeTableRepository(store, syncQueueRepository)
     override val tableRepository: TableRepository = BackendTruthTableRepository(
         delegate = localTableRepository,
+        floorMapSink = localTableRepository,
         openSaleRepository = openSaleRepository,
         backendBaseUrlProvider = { currentLedgerBackendBaseUrl().orEmpty() },
     )
