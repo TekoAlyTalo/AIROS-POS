@@ -117,7 +117,6 @@ private const val PREVIEW_TAG = "TableLivePreview"
 private val previewMainHandler: Handler by lazy { Handler(Looper.getMainLooper()) }
 private const val PREVIEW_SURFACE_ASPECT_RATIO = 4f / 3f
 private const val PREVIEW_FRAME_FRESHNESS_WINDOW_MILLIS = 2_500L
-private const val PREVIEW_LIVE_STICKY_WINDOW_MILLIS = 1_500L
 private const val PREVIEW_FRAME_FRESHNESS_TICK_MILLIS = 500L
 private const val AREA_FILTER_ALL = "All"
 private const val TOP_TICKER_SCROLL_PX_PER_SECOND = 77f
@@ -233,8 +232,7 @@ class TableMapViewModel(
                 mutableState.update { current ->
                     current.copy(
                         cameraPreviewState = previewState,
-                        livePreviewTarget = previewState.activePreviewTarget()
-                            ?: if (previewState.connectionState == CameraConnectionState.IDLE) null else current.livePreviewTarget,
+                        livePreviewTarget = previewState.resolveLivePreviewTarget(current.livePreviewTarget),
                     )
                 }
             }
@@ -535,6 +533,20 @@ class TableMapViewModel(
 
     private fun startPreview(target: TableLivePreviewTarget, edgeBaseUrl: String) {
         viewModelScope.launch {
+            val previewState = mutableState.value.cameraPreviewState
+            if (!previewState.shouldStartPreviewFor(target)) {
+                Log.i(
+                    PREVIEW_TAG,
+                    "Reusing preview transport cameraId=${target.cameraId} oldTableId=${previewState.tableId ?: "null"} " +
+                        "newTableId=${target.tableId} reason=same_camera_transport_identity",
+                )
+                mutableState.update { current ->
+                    current.copy(
+                        livePreviewTarget = target,
+                    )
+                }
+                return@launch
+            }
             cameraPreviewService.startPreview(
                 CameraPreviewRequest(
                     cameraId = target.cameraId,
@@ -711,7 +723,10 @@ fun TableMapScreen(
         }
     }
     val desiredPreviewTarget = selectedTable?.previewTarget()
-    val selectedPreviewTarget = state.livePreviewTarget?.takeIf { it.tableId == selectedTable?.id }
+    val selectedPreviewTarget = when {
+        state.cameraPreviewState.matchesTransportCamera(desiredPreviewTarget) -> desiredPreviewTarget
+        else -> state.livePreviewTarget?.takeIf { it.tableId == selectedTable?.id }
+    }
     val transferState = state.transferState
     val isPickingTransferTarget = transferState?.stage == TableTransferStage.PICKING_TARGET
 
@@ -781,6 +796,12 @@ LaunchedEffect(
         val target = desiredPreviewTarget ?: return@LaunchedEffect
         val edgeBaseUrl = state.edgeBaseUrl?.takeIf(String::isNotBlank) ?: return@LaunchedEffect
         if (!state.cameraPreviewState.shouldStartPreviewFor(target)) {
+            Log.i(
+                PREVIEW_TAG,
+                "Skipping auto preview transport restart cameraId=${target.cameraId} " +
+                    "oldTableId=${state.cameraPreviewState.tableId ?: "null"} newTableId=${target.tableId} " +
+                    "reason=same_camera_transport_identity",
+            )
             return@LaunchedEffect
         }
         cameraPreviewService.startPreview(
@@ -1135,14 +1156,16 @@ private fun TableDetailsContent(
         previewTarget?.tableId,
         previewTarget?.cameraId,
     ) { mutableStateOf(false) }
+    val miniOwnerKey = previewTarget?.let { target -> "mini:${target.tableId}:${target.cameraId}" }
+    val isMiniVisibleOwner = previewTarget != null && !isLivePreviewDialogVisible
     val displayConnectionState = rememberUserVisiblePreviewConnectionState(
         previewState = previewState,
         nowEpochMillis = previewNowEpochMillis,
         hasRenderedFirstFrame = hasRenderedFirstFrame,
+        userVisibleOwnerKey = miniOwnerKey ?: "mini:null:null",
+        isSurfaceActive = isMiniVisibleOwner,
     )
     val isPreviewLiveForUser = displayConnectionState == CameraConnectionState.LIVE
-    val miniOwnerKey = previewTarget?.let { target -> "mini:${target.tableId}:${target.cameraId}" }
-    val isMiniVisibleOwner = previewTarget != null && !isLivePreviewDialogVisible
     val miniBranchReason = when {
         !canOpenLivePreview -> "disabled_no_camera_or_edge"
         previewTarget == null -> "no_preview_target"
@@ -2070,13 +2093,15 @@ private fun TableLivePreviewDialog(
         target.tableId,
         target.cameraId,
     ) { mutableStateOf(false) }
+    val dialogOwnerKey = "dialog:${target.tableId}:${target.cameraId}"
     val displayConnectionState = rememberUserVisiblePreviewConnectionState(
         previewState = previewState,
         nowEpochMillis = previewNowEpochMillis,
         hasRenderedFirstFrame = hasRenderedFirstFrame,
+        userVisibleOwnerKey = dialogOwnerKey,
+        isSurfaceActive = true,
     )
     val isPreviewLiveForUser = displayConnectionState == CameraConnectionState.LIVE
-    val dialogOwnerKey = "dialog:${target.tableId}:${target.cameraId}"
     DisposableEffect(dialogOwnerKey, target.tableId, target.cameraId) {
         Log.i(
             PREVIEW_TAG,
@@ -2394,6 +2419,22 @@ private fun CameraPreviewState.activePreviewTarget(): TableLivePreviewTarget? {
     )
 }
 
+private fun CameraPreviewState.resolveLivePreviewTarget(
+    currentTarget: TableLivePreviewTarget?,
+): TableLivePreviewTarget? {
+    if (connectionState == CameraConnectionState.IDLE) {
+        return null
+    }
+    val currentCameraId = cameraId
+    if (!currentCameraId.isNullOrBlank() &&
+        currentTarget != null &&
+        currentTarget.cameraId == currentCameraId
+    ) {
+        return currentTarget
+    }
+    return activePreviewTarget() ?: currentTarget
+}
+
 private fun RestaurantTable.previewTarget(): TableLivePreviewTarget? {
     val resolvedCameraId = cameraId ?: return null
     return TableLivePreviewTarget(
@@ -2407,8 +2448,14 @@ private fun RestaurantTable.previewTarget(): TableLivePreviewTarget? {
 private fun CameraPreviewState.shouldStartPreviewFor(target: TableLivePreviewTarget): Boolean {
     return connectionState == CameraConnectionState.IDLE ||
         connectionState == CameraConnectionState.ERROR ||
-        tableId != target.tableId ||
         cameraId != target.cameraId
+}
+
+private fun CameraPreviewState.matchesTransportCamera(target: TableLivePreviewTarget?): Boolean {
+    val targetCameraId = target?.cameraId ?: return false
+    val currentCameraId = cameraId ?: return false
+    return connectionState != CameraConnectionState.IDLE &&
+        currentCameraId == targetCameraId
 }
 
 @Composable
@@ -2437,22 +2484,68 @@ private fun rememberUserVisiblePreviewConnectionState(
     previewState: CameraPreviewState,
     nowEpochMillis: Long,
     hasRenderedFirstFrame: Boolean,
+    userVisibleOwnerKey: String,
+    isSurfaceActive: Boolean,
 ): CameraConnectionState {
+    var isUserVisibleLiveLatched by remember(userVisibleOwnerKey) { mutableStateOf(false) }
     val isFreshLiveNow = hasRenderedFirstFrame && previewState.isUserVisibleLive(nowEpochMillis)
-    val frameAgeMillis = previewState.lastFrameAtEpochMillis?.let { lastFrameAt ->
-        nowEpochMillis - lastFrameAt
+    val serviceSessionRestarted = !previewState.isStreaming &&
+        previewState.lastFrameAtEpochMillis == null &&
+        when (previewState.connectionState) {
+            CameraConnectionState.CONNECTING,
+            CameraConnectionState.WAITING_FOR_VIDEO,
+            CameraConnectionState.RECONNECTING,
+            -> true
+
+            CameraConnectionState.IDLE,
+            CameraConnectionState.LIVE,
+            CameraConnectionState.ERROR,
+            -> false
+        }
+    val shouldResetLiveLatch = !isSurfaceActive ||
+        !hasRenderedFirstFrame ||
+        previewState.connectionState == CameraConnectionState.IDLE ||
+        previewState.connectionState == CameraConnectionState.ERROR ||
+        serviceSessionRestarted
+
+    LaunchedEffect(
+        userVisibleOwnerKey,
+        isSurfaceActive,
+        hasRenderedFirstFrame,
+        previewState.connectionState,
+        previewState.isStreaming,
+        previewState.lastFrameAtEpochMillis,
+        isFreshLiveNow,
+    ) {
+        when {
+            shouldResetLiveLatch -> {
+                if (isUserVisibleLiveLatched) {
+                    Log.i(
+                        PREVIEW_TAG,
+                        "User-visible LIVE latch RESET ownerKey=$userVisibleOwnerKey " +
+                            "reason=${previewState.connectionState} active=$isSurfaceActive " +
+                            "rendered=$hasRenderedFirstFrame streaming=${previewState.isStreaming} " +
+                            "lastFrameAt=${previewState.lastFrameAtEpochMillis ?: -1L}",
+                    )
+                }
+                isUserVisibleLiveLatched = false
+            }
+
+            isFreshLiveNow && !isUserVisibleLiveLatched -> {
+                Log.i(
+                    PREVIEW_TAG,
+                    "User-visible LIVE latch ACQUIRE ownerKey=$userVisibleOwnerKey " +
+                        "cameraId=${previewState.cameraId ?: "null"} tableId=${previewState.tableId ?: "null"} " +
+                        "lastFrameAt=${previewState.lastFrameAtEpochMillis ?: -1L}",
+                )
+                isUserVisibleLiveLatched = true
+            }
+        }
     }
-    val stickyLiveWindowMillis = PREVIEW_FRAME_FRESHNESS_WINDOW_MILLIS +
-        PREVIEW_LIVE_STICKY_WINDOW_MILLIS
-    val keepLiveSticky = isFreshLiveNow ||
-        (hasRenderedFirstFrame &&
-            previewState.isStreaming &&
-            previewState.connectionState == CameraConnectionState.LIVE &&
-            frameAgeMillis != null &&
-            frameAgeMillis in 0..stickyLiveWindowMillis)
+    val keepLiveForUser = !shouldResetLiveLatch && (isFreshLiveNow || isUserVisibleLiveLatched)
 
     return when {
-        keepLiveSticky -> CameraConnectionState.LIVE
+        keepLiveForUser -> CameraConnectionState.LIVE
         previewState.connectionState == CameraConnectionState.LIVE -> CameraConnectionState.WAITING_FOR_VIDEO
         else -> previewState.connectionState
     }
