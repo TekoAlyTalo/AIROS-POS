@@ -32,6 +32,7 @@ import com.airos.pos.core.model.StaffMember
 import com.airos.pos.core.model.SyncItem
 import com.airos.pos.core.model.SyncState
 import com.airos.pos.core.model.TableStatus
+import com.airos.pos.core.model.TableTruthSource
 import com.airos.pos.core.model.TerminalSettings
 import com.airos.pos.core.model.StaffUiPreferences
 import com.airos.pos.core.model.StaffTableMapViewPreference
@@ -63,7 +64,6 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.roundToInt
 
-private const val AUTHORITATIVE_BACKEND_TABLE_ID = "table-1"
 private const val BACKEND_RUNTIME_FLOOR_MAP_ID = "backend-authoritative-floor"
 private const val BACKEND_RUNTIME_FLOOR_MAP_NAME = "Dining room"
 
@@ -208,7 +208,7 @@ class FakeTableRepository(
             ?: return PosResult.Failure("Table not found.")
         val updatedTable = table.copy(
             status = TableStatus.OCCUPIED,
-            guestCount = if (tableId.requiresBackendGuestTruth()) table.guestCount else guestCount,
+            guestCount = if (table.requiresBackendGuestTruth()) table.guestCount else guestCount,
         )
         store.floorMap.value = store.floorMap.value.copy(
             tables = store.floorMap.value.tables.map { current -> if (current.id == tableId) updatedTable else current },
@@ -257,7 +257,7 @@ class FakeTableRepository(
                         spot.copy(
                             status = TableStatus.AVAILABLE,
                             activeTicketId = null,
-                            guestCount = if (spot.id.requiresBackendGuestTruth()) spot.guestCount else 0,
+                            guestCount = if (spot.requiresBackendGuestTruth()) spot.guestCount else 0,
                         )
                     spot.id == toSpotId ->
                         spot.copy(status = TableStatus.OCCUPIED, activeTicketId = null)
@@ -405,7 +405,7 @@ class FakeTicketRepository(
                     table.copy(
                         status = TableStatus.OCCUPIED,
                         activeTicketId = ticket.id,
-                        guestCount = if (table.id.requiresBackendGuestTruth()) {
+                        guestCount = if (table.requiresBackendGuestTruth()) {
                             table.guestCount
                         } else if (table.guestCount == 0) {
                             2
@@ -484,7 +484,7 @@ class FakePaymentRepository(
                         table.copy(
                             status = TableStatus.AVAILABLE,
                             activeTicketId = null,
-                            guestCount = if (table.id.requiresBackendGuestTruth()) table.guestCount else 0,
+                            guestCount = if (table.requiresBackendGuestTruth()) table.guestCount else 0,
                         )
                     } else {
                         table
@@ -744,7 +744,7 @@ class FakePaymentRepository(
                         table.copy(
                             status = TableStatus.AVAILABLE,
                             activeTicketId = null,
-                            guestCount = if (table.id.requiresBackendGuestTruth()) table.guestCount else 0,
+                            guestCount = if (table.requiresBackendGuestTruth()) table.guestCount else 0,
                         )
                     } else {
                         table
@@ -919,4 +919,4 @@ private suspend fun enqueueSyncItem(
     )
 }
 
-private fun String.requiresBackendGuestTruth(): Boolean = this == AUTHORITATIVE_BACKEND_TABLE_ID
+private fun RestaurantTable.requiresBackendGuestTruth(): Boolean = truthSource == TableTruthSource.BACKEND

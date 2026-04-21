@@ -5,6 +5,7 @@ import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.model.FloorMap
 import com.airos.pos.core.model.PersistedOpenSale
 import com.airos.pos.core.model.RestaurantTable
+import com.airos.pos.core.model.ServiceSpotType
 import com.airos.pos.core.model.TableAttentionFlag
 import com.airos.pos.core.model.TablePosition
 import com.airos.pos.core.model.TableStatus
@@ -212,7 +213,6 @@ private class BackendTableTruthClient(
         }
     }
 
-
     suspend fun postAcknowledgeCheck(
         backendTableId: Int,
         actorStaffId: String? = null,
@@ -402,49 +402,22 @@ private fun buildAuthoritativeBackendTable(
     val baseTable = RestaurantTable(
         id = backendTruth.posTableId,
         label = backendTruth.tableName,
-        areaName = BACKEND_DEFAULT_AREA_NAME,
+        areaName = currentTable?.areaName ?: BACKEND_DEFAULT_AREA_NAME,
         seats = backendTruth.capacity,
-        status = if (backendTruth.tableId == TABLE1_BACKEND_TABLE_ID) {
-            backendTruth.tableStatus
-        } else {
-            currentTable?.status ?: backendTruth.tableStatus
-        },
-        guestCount = if (backendTruth.tableId == TABLE1_BACKEND_TABLE_ID) {
-            backendTruth.currentPersons
-        } else {
-            currentTable?.guestCount ?: backendTruth.currentPersons
-        },
+        status = backendTruth.tableStatus,
+        guestCount = backendTruth.currentPersons,
         activeTicketId = currentTable?.activeTicketId,
-        position = generatedBackendTablePosition(index),
+        position = currentTable?.position ?: generatedBackendTablePosition(index),
         cameraId = backendTruth.cameraId,
         cameraLabel = backendTruth.cameraLabel ?: backendTruth.cameraId,
-        attentionFlag = if (backendTruth.tableId == TABLE1_BACKEND_TABLE_ID) {
-            backendTruth.attentionFlag
-        } else {
-            TableAttentionFlag.NONE
-        },
-        reviewAnchorTime = if (backendTruth.tableId == TABLE1_BACKEND_TABLE_ID) {
-            backendTruth.reviewAnchorTime
-        } else {
-            null
-        },
-        reviewFrom = if (backendTruth.tableId == TABLE1_BACKEND_TABLE_ID) {
-            backendTruth.reviewFrom
-        } else {
-            null
-        },
-        reviewTo = if (backendTruth.tableId == TABLE1_BACKEND_TABLE_ID) {
-            backendTruth.reviewTo
-        } else {
-            null
-        },
+        attentionFlag = backendTruth.attentionFlag,
+        reviewAnchorTime = backendTruth.reviewAnchorTime,
+        reviewFrom = backendTruth.reviewFrom,
+        reviewTo = backendTruth.reviewTo,
         truthSource = TableTruthSource.BACKEND,
+        spotType = currentTable?.spotType ?: ServiceSpotType.TABLE,
     )
-    return if (backendTruth.tableId == TABLE1_BACKEND_TABLE_ID) {
-        baseTable.withBackendTruth(backendTruth)
-    } else {
-        baseTable
-    }
+    return baseTable.withBackendTruth(backendTruth)
 }
 
 private fun generatedBackendTablePosition(index: Int): TablePosition {
