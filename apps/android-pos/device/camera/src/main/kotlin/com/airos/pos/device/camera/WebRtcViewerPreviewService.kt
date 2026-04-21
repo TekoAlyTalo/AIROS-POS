@@ -1,8 +1,6 @@
 package com.airos.pos.device.camera
 
 import android.content.Context
-import android.os.Handler
-import android.os.Looper
 import android.util.Log
 import com.airos.pos.core.model.CameraConnectionState
 import com.airos.pos.core.model.CameraPreviewRequest
@@ -10,7 +8,6 @@ import com.airos.pos.core.model.CameraPreviewState
 import com.airos.pos.core.network.NetworkFoundation
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArraySet
-import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit.MILLISECONDS
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
@@ -47,7 +44,6 @@ import org.webrtc.audio.JavaAudioDeviceModule
 
 private const val TAG = "WebRtcViewerSvc"
 private const val PREVIEW_PATH = "/ws/webrtc"
-private const val MAIN_THREAD_SINK_OP_TIMEOUT_MILLIS = 2_000L
 private const val FRAME_STATE_PUBLISH_INTERVAL_MILLIS = 250L
 
 private open class ViewerSdpObserver : SdpObserver {
@@ -69,7 +65,7 @@ class WebRtcViewerPreviewService(
     }
 
     private val appContext = context.applicationContext
-    private val mainHandler = Handler(Looper.getMainLooper())
+    private val trackLock = Any()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val sessionMutex = Mutex()
     private val websocketClient: OkHttpClient = NetworkFoundation.createHttpClient()
@@ -85,6 +81,7 @@ class WebRtcViewerPreviewService(
     private var initError: String? = null
     private var activeSession: PreviewSession? = null
     private var remoteVideoTrack: VideoTrack? = null
+    private var remoteVideoTrackId: String? = null
     private val lastFrameStatePublishedAtEpochMillis = AtomicLong(0L)
 
     private val frameObserver = VideoSink { frame: VideoFrame? ->
@@ -155,7 +152,7 @@ class WebRtcViewerPreviewService(
             TAG,
             "attachVideoSink sink=${sink.logLabel()} count=${attachedSinks.size} remoteTrack=${remoteVideoTrack != null}",
         )
-        runOnMainThreadBlocking("attachVideoSink") {
+        synchronized(trackLock) {
             remoteVideoTrack?.addSink(sink)
         }
     }
@@ -166,7 +163,7 @@ class WebRtcViewerPreviewService(
             TAG,
             "detachVideoSink sink=${sink.logLabel()} count=${attachedSinks.size} remoteTrack=${remoteVideoTrack != null}",
         )
-        runOnMainThreadBlocking("detachVideoSink") {
+        synchronized(trackLock) {
             remoteVideoTrack?.removeSink(sink)
         }
     }
@@ -387,7 +384,7 @@ class WebRtcViewerPreviewService(
                             "onAddTrack cameraId=${session.request.cameraId} track=${track?.kind()} mediaStreams=${mediaStreams?.size ?: 0}",
                         )
                         if (track is VideoTrack) {
-                            bindRemoteTrack(track, session)
+                            bindRemoteTrack(track, session, source = "onAddTrack")
                         }
                     }
 
@@ -398,7 +395,7 @@ class WebRtcViewerPreviewService(
                             "onTrack cameraId=${session.request.cameraId} direction=${transceiver?.direction?.name ?: "null"} track=${track?.kind()}",
                         )
                         if (track is VideoTrack) {
-                            bindRemoteTrack(track, session)
+                            bindRemoteTrack(track, session, source = "onTrack")
                         }
                     }
 
@@ -647,6 +644,7 @@ class WebRtcViewerPreviewService(
             "ready" -> handleReady(session, json)
             "answer" -> handleAnswer(session, json)
             "ice" -> handleRemoteIceCandidate(session, json.optJSONObject("candidate"))
+            "error" -> handleSignalingError(session, json)
             "offer" -> {
                 Log.e(
                     TAG,
@@ -662,6 +660,44 @@ class WebRtcViewerPreviewService(
                 )
             }
         }
+    }
+
+    private fun handleSignalingError(
+        session: PreviewSession,
+        payload: JSONObject,
+    ) {
+        if (!isActiveSession(session)) {
+            return
+        }
+        val payloadCameraId = payload.optString("cameraId").ifBlank { session.request.cameraId }
+        val code = payload.optString("code").takeIf { it.isNotBlank() }
+        val reason = payload.optString("reason").takeIf { it.isNotBlank() }
+        val message = payload.optString("message").takeIf { it.isNotBlank() }
+            ?: "Unknown signaling error"
+        Log.e(
+            TAG,
+            "Received signaling error sessionCameraId=${session.request.cameraId} payloadCameraId=$payloadCameraId " +
+                "code=${code ?: "null"} reason=${reason ?: "null"} message=$message payload=${payload}",
+        )
+        val composedReason = buildString {
+            append(message)
+            if (!reason.isNullOrBlank()) {
+                append(" (reason=")
+                append(reason)
+                append(')')
+            }
+            if (!code.isNullOrBlank()) {
+                append(" [code=")
+                append(code)
+                append(']')
+            }
+            if (payloadCameraId != session.request.cameraId) {
+                append(" [payloadCameraId=")
+                append(payloadCameraId)
+                append(']')
+            }
+        }
+        failSessionAsync(session, composedReason)
     }
 
     private fun handleAnswer(
@@ -810,23 +846,36 @@ class WebRtcViewerPreviewService(
     private fun bindRemoteTrack(
         videoTrack: VideoTrack,
         session: PreviewSession,
+        source: String,
     ) {
         if (!isActiveSession(session)) {
             return
         }
-        runOnMainThreadBlocking("bindRemoteTrack") {
+        val trackId = videoTrack.id()
+        val shouldPublish = synchronized(trackLock) {
             if (!isActiveSession(session)) {
-                return@runOnMainThreadBlocking
+                return@synchronized false
+            }
+            if (remoteVideoTrackId == trackId) {
+                Log.i(
+                    TAG,
+                    "bindRemoteTrack skip duplicate cameraId=${session.request.cameraId} source=$source trackId=$trackId",
+                )
+                return@synchronized false
             }
             Log.i(
                 TAG,
-                "bindRemoteTrack cameraId=${session.request.cameraId} trackId=${videoTrack.id()} sinks=${attachedSinks.size}",
+                "bindRemoteTrack cameraId=${session.request.cameraId} source=$source trackId=$trackId sinks=${attachedSinks.size}",
             )
-            clearRemoteTrackOnMain()
+            clearRemoteTrackLocked()
             remoteVideoTrack = videoTrack
+            remoteVideoTrackId = trackId
             videoTrack.setEnabled(true)
             videoTrack.addSink(frameObserver)
             attachedSinks.forEach(videoTrack::addSink)
+            true
+        }
+        if (shouldPublish) {
             publishState(
                 request = session.request,
                 connectionState = CameraConnectionState.WAITING_FOR_VIDEO,
@@ -840,17 +889,22 @@ class WebRtcViewerPreviewService(
     }
 
     private fun clearRemoteTrack() {
-        runOnMainThreadBlocking("clearRemoteTrack") {
-            clearRemoteTrackOnMain()
+        synchronized(trackLock) {
+            clearRemoteTrackLocked()
         }
     }
 
-    private fun clearRemoteTrackOnMain() {
-        val track = remoteVideoTrack ?: return
-        Log.i(TAG, "clearRemoteTrack trackId=${track.id()} sinks=${attachedSinks.size}")
+    private fun clearRemoteTrackLocked() {
+        val track = remoteVideoTrack
+        if (track == null) {
+            remoteVideoTrackId = null
+            return
+        }
+        Log.i(TAG, "clearRemoteTrack trackId=${remoteVideoTrackId ?: track.id()} sinks=${attachedSinks.size}")
         attachedSinks.forEach(track::removeSink)
         track.removeSink(frameObserver)
         remoteVideoTrack = null
+        remoteVideoTrackId = null
     }
 
     private fun publishFrameArrivalStateIfDue(nowEpochMillis: Long) {
@@ -1003,37 +1057,6 @@ class WebRtcViewerPreviewService(
 
     private fun isActiveSession(session: PreviewSession): Boolean {
         return activeSession === session && !session.closed && session.peerConnection != null
-    }
-
-    private fun runOnMainThreadBlocking(
-        operation: String,
-        block: () -> Unit,
-    ) {
-        if (Looper.myLooper() == mainHandler.looper) {
-            block()
-            return
-        }
-        val latch = CountDownLatch(1)
-        val posted = mainHandler.post {
-            try {
-                block()
-            } finally {
-                latch.countDown()
-            }
-        }
-        if (!posted) {
-            Log.w(TAG, "Failed to post main-thread operation op=$operation")
-            return
-        }
-        try {
-            val completed = latch.await(MAIN_THREAD_SINK_OP_TIMEOUT_MILLIS, MILLISECONDS)
-            if (!completed) {
-                Log.w(TAG, "Timed out waiting for main-thread operation op=$operation")
-            }
-        } catch (error: InterruptedException) {
-            Thread.currentThread().interrupt()
-            Log.w(TAG, "Interrupted waiting for main-thread operation op=$operation", error)
-        }
     }
 
     private fun VideoSink.logLabel(): String {
