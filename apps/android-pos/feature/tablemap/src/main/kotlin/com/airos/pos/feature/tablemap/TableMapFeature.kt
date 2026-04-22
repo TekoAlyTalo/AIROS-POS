@@ -101,6 +101,9 @@ import org.webrtc.EglBase
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
 import java.net.URI
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneOffset
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -1224,6 +1227,13 @@ private fun TableDetailsContent(
     )
     val statusTick = rememberStatusTickPresentation(displayStatus)
     val mergedHint = mergedHintFor(table)
+    val physicalReviewDetail = remember(
+        table.emptyAnchorTime,
+        table.reviewFrom,
+        table.reviewTo,
+    ) {
+        backendPhysicalReviewDetail(table)
+    }
     val transferForThisTable = transferState?.takeIf { it.sourceSpotId == table.id }
     val billsScrollState = rememberScrollState()
     val transferHistoryScrollState = rememberScrollState()
@@ -1321,14 +1331,19 @@ private fun TableDetailsContent(
                 )
             }
 
-            if (displayStatus.differsFromPhysical || mergedHint != null) {
+            if (displayStatus.differsFromPhysical || mergedHint != null || physicalReviewDetail != null) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     TableDetailsMetaChip(
-                        label = if (displayStatus.differsFromPhysical) "Physical" else "Merged",
-                        value = if (displayStatus.differsFromPhysical) displayStatus.physicalLabel else (mergedHint ?: "-"),
+                        label = if (displayStatus.differsFromPhysical || physicalReviewDetail != null) "Physical" else "Merged",
+                        value = when {
+                            physicalReviewDetail != null ->
+                                "${displayStatus.physicalLabel} • $physicalReviewDetail"
+                            displayStatus.differsFromPhysical -> displayStatus.physicalLabel
+                            else -> mergedHint ?: "-"
+                        },
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -2271,6 +2286,34 @@ private fun formatTransferHistorySpot(serviceSpotId: String?, serviceSpotLabel: 
 
 private fun formatTransferHistoryTime(epochMillis: Long): String {
     return DateFormat.format("dd.MM HH:mm", epochMillis).toString()
+}
+
+private fun backendPhysicalReviewDetail(table: RestaurantTable): String? {
+    val reviewFrom = formatBackendAnchorClock(table.reviewFrom)
+    val reviewTo = formatBackendAnchorClock(table.reviewTo)
+    if (reviewFrom != null && reviewTo != null) {
+        return "Review $reviewFrom–$reviewTo"
+    }
+    val emptyAnchor = formatBackendAnchorClock(table.emptyAnchorTime)
+    return emptyAnchor?.let { "Tyhjänä alkaen $it" }
+}
+
+private fun formatBackendAnchorClock(value: String?): String? {
+    val epochMillis = parseBackendDateTimeMillis(value) ?: return null
+    return DateFormat.format("HH:mm", epochMillis).toString()
+}
+
+private fun parseBackendDateTimeMillis(value: String?): Long? {
+    val normalized = value?.trim()?.ifBlank { null } ?: return null
+    return try {
+        Instant.parse(normalized).toEpochMilli()
+    } catch (_: Throwable) {
+        try {
+            LocalDateTime.parse(normalized).toInstant(ZoneOffset.UTC).toEpochMilli()
+        } catch (_: Throwable) {
+            null
+        }
+    }
 }
 
 fun mergedHintFor(table: RestaurantTable): String? {

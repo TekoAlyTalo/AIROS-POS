@@ -208,6 +208,7 @@ data class RestaurantTable(
     val cameraId: String? = null,
     val cameraLabel: String? = null,
     val attentionFlag: TableAttentionFlag = TableAttentionFlag.NONE,
+    val emptyAnchorTime: String? = null,
     val reviewAnchorTime: String? = null,
     val reviewFrom: String? = null,
     val reviewTo: String? = null,
