@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Upsert
 import com.airos.pos.core.database.entity.AttendanceActiveSessionLocalEntity
 import com.airos.pos.core.database.entity.AttendanceEventLocalEntity
@@ -11,6 +12,7 @@ import com.airos.pos.core.database.entity.AttendanceSyncMetadataLocalEntity
 import com.airos.pos.core.database.entity.MenuItemLocalEntity
 import com.airos.pos.core.database.entity.OpenSaleEntity
 import com.airos.pos.core.database.entity.OpenSaleLineEntity
+import com.airos.pos.core.database.entity.OpenSaleTransferEventEntity
 import com.airos.pos.core.database.entity.RestaurantTableLocalEntity
 import com.airos.pos.core.database.entity.SalesLedgerOutboxLocalEntity
 import com.airos.pos.core.database.entity.ShiftLocalEntity
@@ -233,8 +235,14 @@ interface OpenSaleDao {
     @Query("SELECT * FROM open_sale_lines")
     fun observeAllLines(): Flow<List<OpenSaleLineEntity>>
 
+    @Query("SELECT * FROM open_sale_transfer_events ORDER BY occurredAtEpochMillis DESC, id DESC")
+    fun observeAllTransferEvents(): Flow<List<OpenSaleTransferEventEntity>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertSale(entity: OpenSaleEntity)
+
+    @Insert
+    suspend fun insertTransferEvent(entity: OpenSaleTransferEventEntity)
 
     @Query("DELETE FROM open_sales WHERE saleId = :saleId")
     suspend fun deleteSale(saleId: String)
@@ -258,4 +266,36 @@ interface OpenSaleDao {
 
     @Query("DELETE FROM open_sale_lines WHERE saleId = :saleId")
     suspend fun deleteLinesForSale(saleId: String)
+
+    @Transaction
+    suspend fun assignServiceSpotWithTransferAudit(
+        saleId: String,
+        serviceSpotId: String?,
+        serviceSpotLabel: String?,
+        actedByStaffId: String,
+        actedByDisplayName: String,
+        updated: Long,
+    ) {
+        val currentSale = loadOpenSaleById(saleId)
+        if (currentSale != null && currentSale.serviceSpotId != serviceSpotId) {
+            insertTransferEvent(
+                OpenSaleTransferEventEntity(
+                    saleId = saleId,
+                    fromServiceSpotId = currentSale.serviceSpotId,
+                    fromServiceSpotLabel = currentSale.serviceSpotLabel,
+                    toServiceSpotId = serviceSpotId,
+                    toServiceSpotLabel = serviceSpotLabel,
+                    actedByStaffId = actedByStaffId,
+                    actedByDisplayName = actedByDisplayName,
+                    occurredAtEpochMillis = updated,
+                ),
+            )
+        }
+        updateServiceSpot(
+            saleId = saleId,
+            serviceSpotId = serviceSpotId,
+            serviceSpotLabel = serviceSpotLabel,
+            updated = updated,
+        )
+    }
 }

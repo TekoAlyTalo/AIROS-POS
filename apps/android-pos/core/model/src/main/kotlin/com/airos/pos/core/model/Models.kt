@@ -298,6 +298,18 @@ data class PersistedOpenSaleLine(
     val discountAmountCents: Int? = null,
 )
 
+data class PersistedOpenSaleTransferEvent(
+    val id: Long,
+    val saleId: String,
+    val fromServiceSpotId: String?,
+    val fromServiceSpotLabel: String?,
+    val toServiceSpotId: String?,
+    val toServiceSpotLabel: String?,
+    val actedByStaffId: String,
+    val actedByDisplayName: String,
+    val occurredAtEpochMillis: Long,
+)
+
 data class KitchenOrder(
     val ticketId: String,
     val tableLabel: String,

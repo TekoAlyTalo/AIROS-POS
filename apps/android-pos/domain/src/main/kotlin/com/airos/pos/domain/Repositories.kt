@@ -21,6 +21,7 @@ import com.airos.pos.core.model.RestaurantTable
 import com.airos.pos.core.model.StaffMember
 import com.airos.pos.core.model.PersistedOpenSale
 import com.airos.pos.core.model.PersistedOpenSaleLine
+import com.airos.pos.core.model.PersistedOpenSaleTransferEvent
 import com.airos.pos.core.model.StaffFloorPlanViewportPreference
 import com.airos.pos.core.model.SyncItem
 import com.airos.pos.core.model.SyncState
@@ -163,6 +164,7 @@ interface SyncQueueRepository {
 
 interface OpenSaleRepository {
     fun observeOpenSales(): Flow<List<PersistedOpenSale>>
+    fun observeOpenSaleTransferEvents(): Flow<List<PersistedOpenSaleTransferEvent>>
     suspend fun loadOpenSale(): PersistedOpenSale?
     suspend fun loadOpenSaleById(saleId: String): PersistedOpenSale?
     /** Returns the first OPEN sale for the given spot, or null. Pass null for walk-in (no assigned spot). */
@@ -171,7 +173,13 @@ interface OpenSaleRepository {
     suspend fun loadOpenSalesForSpot(serviceSpotId: String?): List<PersistedOpenSale>
     suspend fun createOpenSale(serviceSpotId: String?, serviceSpotLabel: String?): PersistedOpenSale
     suspend fun saveLines(saleId: String, lines: List<PersistedOpenSaleLine>)
-    suspend fun assignServiceSpot(saleId: String, serviceSpotId: String?, serviceSpotLabel: String?)
+    suspend fun assignServiceSpot(
+        saleId: String,
+        serviceSpotId: String?,
+        serviceSpotLabel: String?,
+        actedByStaffId: String,
+        actedByDisplayName: String,
+    )
     suspend fun clearOpenSale(saleId: String)
     suspend fun closeOpenSale(saleId: String)
 }

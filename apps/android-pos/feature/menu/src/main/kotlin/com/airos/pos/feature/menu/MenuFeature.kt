@@ -181,6 +181,7 @@ class MenuViewModel(
     private val activeSaleId: String? = null,
     private val tableRepository: TableRepository? = null,
     private val activeStaffIdProvider: (() -> String?)? = null,
+    private val activeStaffDisplayNameProvider: (() -> String?)? = null,
     private val openSaleRepository: OpenSaleRepository? = null,
 ) : ViewModel() {
     // Mutable table assignment — changes when the cashier assigns or moves the draft.
@@ -525,6 +526,7 @@ class MenuViewModel(
         if (mutableState.value.paymentInProgress) return
         val fromSpotId = currentTableId
         val staffId = activeStaffIdProvider?.invoke() ?: "pos-draft"
+        val staffDisplayName = activeStaffDisplayNameProvider?.invoke().orEmpty().ifBlank { staffId }
         viewModelScope.launch {
             val repo = tableRepository
             if (repo == null) {
@@ -541,7 +543,13 @@ class MenuViewModel(
                     }
                     // Keep open sale spot in sync.
                     currentSaleId?.let { saleId ->
-                        openSaleRepository?.assignServiceSpot(saleId, toSpotId, toSpotLabel)
+                        openSaleRepository?.assignServiceSpot(
+                            saleId = saleId,
+                            serviceSpotId = toSpotId,
+                            serviceSpotLabel = toSpotLabel,
+                            actedByStaffId = staffId,
+                            actedByDisplayName = staffDisplayName,
+                        )
                     }
                     currentTableId = toSpotId
                     currentTableLabel = toSpotLabel
@@ -749,6 +757,7 @@ class MenuViewModel(
             activeSaleId: String? = null,
             tableRepository: TableRepository? = null,
             activeStaffIdProvider: (() -> String?)? = null,
+            activeStaffDisplayNameProvider: (() -> String?)? = null,
             openSaleRepository: OpenSaleRepository? = null,
         ): ViewModelProvider.Factory = viewModelFactory {
             initializer {
@@ -765,6 +774,7 @@ class MenuViewModel(
                     activeSaleId = activeSaleId,
                     tableRepository = tableRepository,
                     activeStaffIdProvider = activeStaffIdProvider,
+                    activeStaffDisplayNameProvider = activeStaffDisplayNameProvider,
                     openSaleRepository = openSaleRepository,
                 )
             }

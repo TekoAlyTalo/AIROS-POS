@@ -28,6 +28,7 @@ import com.airos.pos.core.database.entity.NfcIdentityEventEntity
 import com.airos.pos.core.database.entity.NfcReceiptHandoffEntity
 import com.airos.pos.core.database.entity.OpenSaleEntity
 import com.airos.pos.core.database.entity.OpenSaleLineEntity
+import com.airos.pos.core.database.entity.OpenSaleTransferEventEntity
 import com.airos.pos.core.database.entity.RestaurantTableLocalEntity
 import com.airos.pos.core.database.entity.SalesLedgerOutboxLocalEntity
 import com.airos.pos.core.database.entity.ShiftLocalEntity
@@ -52,12 +53,13 @@ import com.airos.pos.core.database.entity.TicketLocalEntity
         NfcReceiptHandoffEntity::class,
         OpenSaleEntity::class,
         OpenSaleLineEntity::class,
+        OpenSaleTransferEventEntity::class,
         AttendanceEventLocalEntity::class,
         AttendanceActiveSessionLocalEntity::class,
         AttendanceSyncMetadataLocalEntity::class,
         SalesLedgerOutboxLocalEntity::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = false,
 )
 abstract class AirosPosDatabase : RoomDatabase() {
@@ -423,6 +425,38 @@ abstract class AirosPosDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `open_sale_transfer_events` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `saleId` TEXT NOT NULL,
+                        `fromServiceSpotId` TEXT,
+                        `fromServiceSpotLabel` TEXT,
+                        `toServiceSpotId` TEXT,
+                        `toServiceSpotLabel` TEXT,
+                        `actedByStaffId` TEXT NOT NULL,
+                        `actedByDisplayName` TEXT NOT NULL,
+                        `occurredAtEpochMillis` INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `index_open_sale_transfer_events_saleId`
+                    ON `open_sale_transfer_events` (`saleId`)
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `index_open_sale_transfer_events_occurredAtEpochMillis`
+                    ON `open_sale_transfer_events` (`occurredAtEpochMillis`)
+                    """.trimIndent(),
+                )
+            }
+        }
+
         fun build(context: Context): AirosPosDatabase {
             return Room.databaseBuilder(
                 context,
@@ -437,6 +471,7 @@ abstract class AirosPosDatabase : RoomDatabase() {
                 MIGRATION_6_7,
                 MIGRATION_7_8,
                 MIGRATION_8_9,
+                MIGRATION_9_10,
             ).build()
         }
     }

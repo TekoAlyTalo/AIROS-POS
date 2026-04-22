@@ -3,12 +3,15 @@ package com.airos.pos.app
 import com.airos.pos.core.database.dao.OpenSaleDao
 import com.airos.pos.core.database.entity.OpenSaleEntity
 import com.airos.pos.core.database.entity.OpenSaleLineEntity
+import com.airos.pos.core.database.entity.OpenSaleTransferEventEntity
 import com.airos.pos.core.model.PersistedOpenSale
 import com.airos.pos.core.model.PersistedOpenSaleLine
+import com.airos.pos.core.model.PersistedOpenSaleTransferEvent
 import com.airos.pos.domain.OpenSaleRepository
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 
 class RoomOpenSaleRepository(
     private val openSaleDao: OpenSaleDao,
@@ -19,6 +22,11 @@ class RoomOpenSaleRepository(
             sales.map { sale ->
                 sale.toModel(linesBySaleId[sale.saleId].orEmpty().map(OpenSaleLineEntity::toModel))
             }
+        }
+
+    override fun observeOpenSaleTransferEvents(): Flow<List<PersistedOpenSaleTransferEvent>> =
+        openSaleDao.observeAllTransferEvents().map { events ->
+            events.map(OpenSaleTransferEventEntity::toModel)
         }
 
     override suspend fun loadOpenSale(): PersistedOpenSale? {
@@ -75,11 +83,19 @@ class RoomOpenSaleRepository(
         openSaleDao.upsertLines(lines.map(PersistedOpenSaleLine::toEntity))
     }
 
-    override suspend fun assignServiceSpot(saleId: String, serviceSpotId: String?, serviceSpotLabel: String?) {
-        openSaleDao.updateServiceSpot(
+    override suspend fun assignServiceSpot(
+        saleId: String,
+        serviceSpotId: String?,
+        serviceSpotLabel: String?,
+        actedByStaffId: String,
+        actedByDisplayName: String,
+    ) {
+        openSaleDao.assignServiceSpotWithTransferAudit(
             saleId = saleId,
             serviceSpotId = serviceSpotId,
             serviceSpotLabel = serviceSpotLabel,
+            actedByStaffId = actedByStaffId,
+            actedByDisplayName = actedByDisplayName,
             updated = System.currentTimeMillis(),
         )
     }
@@ -116,6 +132,20 @@ private fun OpenSaleLineEntity.toModel(): PersistedOpenSaleLine {
         taxRatePercent = taxRatePercent,
         discountPercent = discountPercent,
         discountAmountCents = discountAmountCents,
+    )
+}
+
+private fun OpenSaleTransferEventEntity.toModel(): PersistedOpenSaleTransferEvent {
+    return PersistedOpenSaleTransferEvent(
+        id = id,
+        saleId = saleId,
+        fromServiceSpotId = fromServiceSpotId,
+        fromServiceSpotLabel = fromServiceSpotLabel,
+        toServiceSpotId = toServiceSpotId,
+        toServiceSpotLabel = toServiceSpotLabel,
+        actedByStaffId = actedByStaffId,
+        actedByDisplayName = actedByDisplayName,
+        occurredAtEpochMillis = occurredAtEpochMillis,
     )
 }
 

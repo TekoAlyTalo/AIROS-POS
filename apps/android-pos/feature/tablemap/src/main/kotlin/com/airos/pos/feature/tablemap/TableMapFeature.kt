@@ -3,6 +3,7 @@ package com.airos.pos.feature.tablemap
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.text.format.DateFormat
 import android.util.Log
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
@@ -72,6 +73,7 @@ import com.airos.pos.core.model.CameraPreviewState
 import com.airos.pos.core.model.FloorMap
 import com.airos.pos.core.model.PersistedOpenSale
 import com.airos.pos.core.model.PersistedOpenSaleLine
+import com.airos.pos.core.model.PersistedOpenSaleTransferEvent
 import com.airos.pos.core.model.RestaurantTable
 import com.airos.pos.core.model.StaffFloorPlanViewportPreference
 import com.airos.pos.core.model.StaffTableMapViewPreference
@@ -195,11 +197,13 @@ data class TableMapUiState(
     val openChecksBySpotId: Map<String, OpenCheckSummary> = emptyMap(),
     /** Persisted open sales keyed by service spot id. This is the table map bill truth. */
     val openSalesBySpotId: Map<String, List<PersistedOpenSale>> = emptyMap(),
+    val openSaleTransferEvents: List<PersistedOpenSaleTransferEvent> = emptyList(),
     val transferState: TableTransferState? = null,
 )
 
 class TableMapViewModel(
     private val currentStaffId: String,
+    private val currentStaffDisplayName: String,
     private val tableRepository: TableRepository,
     private val settingsRepository: SettingsRepository,
     private val cameraPreviewService: CameraPreviewService,
@@ -281,6 +285,12 @@ class TableMapViewModel(
                         transferState = prunedTransferState,
                     )
                 }
+            }
+        }
+
+        viewModelScope.launch {
+            openSaleRepository.observeOpenSaleTransferEvents().collect { events ->
+                mutableState.update { it.copy(openSaleTransferEvents = events) }
             }
         }
     }
@@ -436,6 +446,8 @@ class TableMapViewModel(
                         saleId = saleId,
                         serviceSpotId = targetSpotId,
                         serviceSpotLabel = targetTable.label,
+                        actedByStaffId = currentStaffId,
+                        actedByDisplayName = currentStaffDisplayName,
                     )
                 }
             }.onSuccess {
@@ -586,6 +598,7 @@ class TableMapViewModel(
     companion object {
         fun factory(
             currentStaffId: String,
+            currentStaffDisplayName: String,
             tableRepository: TableRepository,
             settingsRepository: SettingsRepository,
             cameraPreviewService: CameraPreviewService,
@@ -595,6 +608,7 @@ class TableMapViewModel(
             initializer {
                 TableMapViewModel(
                     currentStaffId = currentStaffId,
+                    currentStaffDisplayName = currentStaffDisplayName,
                     tableRepository = tableRepository,
                     settingsRepository = settingsRepository,
                     cameraPreviewService = cameraPreviewService,
@@ -996,6 +1010,8 @@ LaunchedEffect(
             if (selectedTable == null) {
                 Text("Select a table to continue.")
             } else {
+                val selectedOpenSales = state.openSalesBySpotId[selectedTable.id].orEmpty()
+                val selectedOpenSaleIds = selectedOpenSales.mapTo(linkedSetOf()) { it.saleId }
                 TableDetailsContent(
                     table = selectedTable,
                     previewState = state.cameraPreviewState,
@@ -1004,7 +1020,8 @@ LaunchedEffect(
                     cameraPreviewService = cameraPreviewService,
                     canOpenLivePreview = !selectedTable.cameraId.isNullOrBlank() && !state.edgeBaseUrl.isNullOrBlank(),
                     openCheckSummary = state.openChecksBySpotId[selectedTable.id],
-                    openSales = state.openSalesBySpotId[selectedTable.id].orEmpty(),
+                    openSales = selectedOpenSales,
+                    transferHistory = state.openSaleTransferEvents.filter { it.saleId in selectedOpenSaleIds },
                     transferState = transferState,
                     onOpenSale = { saleId -> onOpenTableSale(selectedTable.id, selectedTable.label, saleId, TableSaleOpenSource.BILL_ROW) },
                     onOpenNewSale = { onOpenTableSale(selectedTable.id, selectedTable.label, null, TableSaleOpenSource.NEW_SALE_BUTTON) },
@@ -1124,6 +1141,7 @@ private fun TableDetailsContent(
     canOpenLivePreview: Boolean,
     openCheckSummary: OpenCheckSummary?,
     openSales: List<PersistedOpenSale>,
+    transferHistory: List<PersistedOpenSaleTransferEvent>,
     transferState: TableTransferState?,
     onOpenSale: (String) -> Unit,
     onOpenNewSale: () -> Unit,
@@ -1147,6 +1165,10 @@ private fun TableDetailsContent(
     val mergedHint = mergedHintFor(table)
     val transferForThisTable = transferState?.takeIf { it.sourceSpotId == table.id }
     val billsScrollState = rememberScrollState()
+    val transferHistoryScrollState = rememberScrollState()
+    val saleLabelsById = remember(openSales) {
+        openSales.associate { sale -> sale.saleId to sale.openSaleLabel() }
+    }
     val previewNowEpochMillis = rememberPreviewFreshnessNow(
         isTickerActive = previewTarget != null &&
             !isLivePreviewDialogVisible &&
@@ -1385,6 +1407,48 @@ private fun TableDetailsContent(
             }
         }
 
+        if (openSales.isNotEmpty()) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f),
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = "Siirtohistoria",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+
+                    if (transferHistory.isEmpty()) {
+                        Text(
+                            text = "Ei siirtohistoriaa avoimille laskuille.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .sizeIn(maxHeight = 156.dp)
+                                .verticalScroll(transferHistoryScrollState),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            transferHistory.forEach { event ->
+                                OpenSaleTransferHistoryRow(
+                                    event = event,
+                                    saleLabel = saleLabelsById[event.saleId] ?: "Lasku",
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(24.dp),
@@ -1470,6 +1534,45 @@ private fun TableDetailsContent(
                     Text("Open live view")
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun OpenSaleTransferHistoryRow(
+    event: PersistedOpenSaleTransferEvent,
+    saleLabel: String,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.62f),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.outline.copy(alpha = 0.18f),
+        ),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = saleLabel,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = "${formatTransferHistorySpot(event.fromServiceSpotId, event.fromServiceSpotLabel)} -> " +
+                    formatTransferHistorySpot(event.toServiceSpotId, event.toServiceSpotLabel),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = "${event.actedByDisplayName} | ${formatTransferHistoryTime(event.occurredAtEpochMillis)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -2065,6 +2168,14 @@ private fun PersistedOpenSaleLine.openLineTotalCents(): Int {
         else -> 0
     }
     return (subtotal - discount).coerceAtLeast(0)
+}
+
+private fun formatTransferHistorySpot(serviceSpotId: String?, serviceSpotLabel: String?): String {
+    return serviceSpotLabel ?: serviceSpotId ?: "Walk-in"
+}
+
+private fun formatTransferHistoryTime(epochMillis: Long): String {
+    return DateFormat.format("dd.MM HH:mm", epochMillis).toString()
 }
 
 fun mergedHintFor(table: RestaurantTable): String? {

@@ -26,10 +26,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tune
@@ -133,6 +133,7 @@ private object Routes {
     const val Shift = "shift"
     const val TableMap = "tablemap"
     const val Menu = "menu"
+    const val Transactions = "transactions"
     const val MenuPattern = "menu?tableId={tableId}&tableLabel={tableLabel}&saleId={saleId}"
     const val Kitchen = "kitchen"
     const val Scanner = "scanner"
@@ -160,7 +161,7 @@ private object Routes {
 
 private data class RailDestination(
     val route: String,
-    val label: String,
+    val labelKey: CashierStringKey,
     val icon: ImageVector,
     val iconContainerColor: Color,
     val iconTint: Color,
@@ -169,42 +170,42 @@ private data class RailDestination(
 private val mainRailDestinations = listOf(
     RailDestination(
         route = Routes.TableMap,
-        label = "Tables",
+        labelKey = CashierStringKey.RailTables,
         icon = Icons.Filled.Dashboard,
         iconContainerColor = Color(0xFF143A45),
         iconTint = Color(0xFF8DF2E0),
     ),
     RailDestination(
         route = Routes.Menu,
-        label = "Menu",
+        labelKey = CashierStringKey.RailMenu,
         icon = Icons.Filled.List,
         iconContainerColor = Color(0xFF1D3143),
         iconTint = Color(0xFFB8D8F5),
     ),
     RailDestination(
+        route = Routes.Transactions,
+        labelKey = CashierStringKey.RailTransactions,
+        icon = Icons.Filled.ReceiptLong,
+        iconContainerColor = Color(0xFF2F2748),
+        iconTint = Color(0xFFE2CCFF),
+    ),
+    RailDestination(
         route = Routes.Scanner,
-        label = "Scan",
+        labelKey = CashierStringKey.RailScan,
         icon = Icons.Filled.Search,
         iconContainerColor = Color(0xFF2E2A4A),
         iconTint = Color(0xFFD7C8FF),
     ),
     RailDestination(
         route = Routes.Shift,
-        label = "Shift",
+        labelKey = CashierStringKey.RailShift,
         icon = Icons.Filled.Tune,
         iconContainerColor = Color(0xFF3B2E23),
         iconTint = Color(0xFFFFD8A8),
     ),
     RailDestination(
-        route = Routes.Diagnostics,
-        label = "Devices",
-        icon = Icons.Filled.Build,
-        iconContainerColor = Color(0xFF2E3B23),
-        iconTint = Color(0xFFD8FFB8),
-    ),
-    RailDestination(
         route = Routes.Settings,
-        label = "Settings",
+        labelKey = CashierStringKey.RailSettings,
         icon = Icons.Filled.Settings,
         iconContainerColor = Color(0xFF2D353F),
         iconTint = Color(0xFFE5EEF6),
@@ -1115,6 +1116,7 @@ private fun SignedInApp(
                         key = "tablemap-$currentStaffId",
                         factory = TableMapViewModel.factory(
                             currentStaffId = currentStaffId,
+                            currentStaffDisplayName = currentStaffName,
                             tableRepository = appContainer.tableRepository,
                             settingsRepository = appContainer.settingsRepository,
                             cameraPreviewService = appContainer.cameraPreviewService,
@@ -1211,6 +1213,13 @@ private fun SignedInApp(
                     )
                 }
 
+                composable(Routes.Transactions) {
+                    TransactionsRoute(
+                        openSaleRepository = appContainer.openSaleRepository,
+                        salesLedgerOutboxDao = appContainer.database.salesLedgerOutboxDao(),
+                    )
+                }
+
                 composable(
                     route = Routes.MenuPattern,
                     arguments = listOf(
@@ -1271,6 +1280,9 @@ private fun SignedInApp(
                             tableRepository = appContainer.tableRepository,
                             activeStaffIdProvider = {
                                 appContainer.authRepository.activeSession.value?.staffId
+                            },
+                            activeStaffDisplayNameProvider = {
+                                appContainer.authRepository.activeSession.value?.displayName ?: currentStaffName
                             },
                             openSaleRepository = appContainer.openSaleRepository,
                         ),
@@ -1812,6 +1824,7 @@ private fun AppRail(
     onSellerSwitchRequested: () -> Unit,
     onSignOut: () -> Unit,
 ) {
+    val strings = rememberCashierStrings()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
 
@@ -1842,7 +1855,7 @@ private fun AppRail(
 
             mainRailDestinations.forEach { destination ->
                 RailButton(
-                    label = destination.label,
+                    label = strings[destination.labelKey],
                     icon = destination.icon,
                     iconContainerColor = destination.iconContainerColor,
                     iconTint = destination.iconTint,
@@ -1869,7 +1882,7 @@ private fun AppRail(
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Text(
-                        text = "Active",
+                        text = strings[CashierStringKey.RailActive],
                         style = MaterialTheme.typography.labelSmall,
                         color = AppShellTextMuted,
                     )
@@ -1886,7 +1899,7 @@ private fun AppRail(
             }
 
             RailButton(
-                label = "Sign out",
+                label = strings[CashierStringKey.RailSignOut],
                 icon = Icons.Filled.ExitToApp,
                 iconContainerColor = Color(0xFF3C2630),
                 iconTint = Color(0xFFFFC6D4),
