@@ -66,6 +66,13 @@ class BackendTruthTableRepository(
             openSaleRepository.observeOpenSales(),
         ) { floorMap, backendTruthByTableId, openSales ->
             publishTable1OpenBillContext(openSales)
+            if (backendTruthByTableId.isEmpty()) {
+                Log.i(
+                    "AIROS",
+                    "[BackendTruthTableRepository] backend table truth unavailable; keeping current delegate floor map tables=${floorMap.tables.size}",
+                )
+                return@combine floorMap
+            }
             val authoritativeFloorMap = buildAuthoritativeBackendFloorMap(
                 currentFloorMap = floorMap,
                 backendTruthByTableId = backendTruthByTableId,

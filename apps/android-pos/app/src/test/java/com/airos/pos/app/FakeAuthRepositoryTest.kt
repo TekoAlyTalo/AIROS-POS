@@ -9,8 +9,8 @@ import org.junit.Test
 class FakeAuthRepositoryTest {
     @Test
     fun signInWithPin_returnsSessionForValidPin() = runBlocking {
-        val repository = FakeAuthRepository(SampleData.localAuthStaffRecords())
-        val credential = SampleData.localAuthStaffRecords().first()
+        val repository = FakeAuthRepository(LocalAuthSeed.localAuthStaffRecords())
+        val credential = LocalAuthSeed.localAuthStaffRecords().first()
 
         val result = repository.signInWithPin(credential.staffId, credential.pin)
 
@@ -21,8 +21,8 @@ class FakeAuthRepositoryTest {
 
     @Test
     fun signInWithPin_returnsFailureForInvalidPin() = runBlocking {
-        val repository = FakeAuthRepository(SampleData.localAuthStaffRecords())
-        val credential = SampleData.localAuthStaffRecords().first()
+        val repository = FakeAuthRepository(LocalAuthSeed.localAuthStaffRecords())
+        val credential = LocalAuthSeed.localAuthStaffRecords().first()
 
         val result = repository.signInWithPin(credential.staffId, "0000")
 
@@ -32,8 +32,8 @@ class FakeAuthRepositoryTest {
 
     @Test
     fun verifyManagerOverride_returnsGrantForEnabledManager() = runBlocking {
-        val repository = FakeAuthRepository(SampleData.localAuthStaffRecords())
-        val manager = SampleData.localAuthStaffRecords().first { it.isManager }
+        val repository = FakeAuthRepository(LocalAuthSeed.localAuthStaffRecords())
+        val manager = LocalAuthSeed.localAuthStaffRecords().first { it.isManager }
 
         val result = repository.verifyManagerOverride(
             managerStaffId = manager.staffId,
@@ -49,8 +49,8 @@ class FakeAuthRepositoryTest {
 
     @Test
     fun verifyManagerOverride_rejectsWrongManagerPin() = runBlocking {
-        val repository = FakeAuthRepository(SampleData.localAuthStaffRecords())
-        val manager = SampleData.localAuthStaffRecords().first { it.isManager }
+        val repository = FakeAuthRepository(LocalAuthSeed.localAuthStaffRecords())
+        val manager = LocalAuthSeed.localAuthStaffRecords().first { it.isManager }
 
         val result = repository.verifyManagerOverride(
             managerStaffId = manager.staffId,

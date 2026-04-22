@@ -75,12 +75,21 @@ private fun emptyBackendAuthoritativeFloorMap(): FloorMap {
     )
 }
 
-class FakePosStore {
+class FakePosStore(
+    initialFloorMap: FloorMap = emptyBackendAuthoritativeFloorMap(),
+) {
     private val idCounter = AtomicInteger(100)
 
-    val menuItems = MutableStateFlow(SampleData.menuItems())
-    val floorMap = MutableStateFlow(emptyBackendAuthoritativeFloorMap())
-    val tickets = MutableStateFlow(SampleData.initialTickets())
+    // Menu items are served by BackendMenuRepository, not this store. The only
+    // remaining reader is FakeTicketRepository.addItem, which is dormant in the
+    // live checkout flow (OpenSaleRepository owns real line entry). Leave it
+    // empty — any future caller must discover a real source, not a seed.
+    val menuItems = MutableStateFlow<List<MenuItem>>(emptyList())
+    val floorMap = MutableStateFlow(initialFloorMap)
+    // Tickets are seeded empty: the previous ticket-t2-open fake made Table 2
+    // appear OCCUPIED without a real sale. Real tickets arrive through the
+    // OpenSale + backend truth paths.
+    val tickets = MutableStateFlow<Map<String, Ticket>>(emptyMap())
     val kitchenOrders = MutableStateFlow<List<KitchenOrder>>(emptyList())
     val currentShift = MutableStateFlow<PosShift?>(null)
     val paymentsByTicket = MutableStateFlow<Map<String, Int>>(emptyMap())

@@ -662,6 +662,7 @@ fun TableMapScreen(
         DefaultFloorPlanViewpoint.copy(defaultRotationDeg = floorPlanRotationDeg)
     }
     val allTables = state.floorMap?.tables.orEmpty()
+    val hasRealFloorMap = allTables.isNotEmpty()
     val availableAreas = remember(allTables) { buildAreaFilterOptions(allTables) }
     var selectedAreaName by rememberSaveable { mutableStateOf(AREA_FILTER_ALL) }
     val activeAreaName = selectedAreaName.takeIf { it in availableAreas } ?: AREA_FILTER_ALL
@@ -924,8 +925,24 @@ LaunchedEffect(
                     )
                 }
 
-                when (viewMode) {
-                    TableMapViewMode.GRID -> {
+                when {
+                    !hasRealFloorMap -> {
+                        HonestFloorMapUnavailableState(
+                            title = "Floor map unavailable",
+                            message = "No real floor map is cached on this device. Connect once to load tables.",
+                            modifier = Modifier.weight(1f, fill = true),
+                        )
+                    }
+
+                    visibleTables.isEmpty() -> {
+                        HonestFloorMapUnavailableState(
+                            title = "No tables in this area",
+                            message = "Change the area filter to view available tables.",
+                            modifier = Modifier.weight(1f, fill = true),
+                        )
+                    }
+
+                    viewMode == TableMapViewMode.GRID -> {
                         LazyVerticalGrid(
                             modifier = Modifier.weight(1f, fill = true),
                             columns = GridCells.Adaptive(minSize = 170.dp),
@@ -952,7 +969,7 @@ LaunchedEffect(
                         }
                     }
 
-                    TableMapViewMode.FLOOR_PLAN -> {
+                    else -> {
                         Box(
                             modifier = Modifier
                                 .weight(1f, fill = true)
@@ -1008,7 +1025,14 @@ LaunchedEffect(
                 .fillMaxHeight(),
         ) {
             if (selectedTable == null) {
-                Text("Select a table to continue.")
+                if (hasRealFloorMap) {
+                    Text("Select a table to continue.")
+                } else {
+                    HonestFloorMapUnavailableState(
+                        title = "Tables unavailable offline",
+                        message = "No real floor map is cached on this device yet.",
+                    )
+                }
             } else {
                 val selectedOpenSales = state.openSalesBySpotId[selectedTable.id].orEmpty()
                 val selectedOpenSaleIds = selectedOpenSales.mapTo(linkedSetOf()) { it.saleId }
@@ -1131,6 +1155,39 @@ if (state.isLivePreviewDialogVisible) {
 
 
 }
+
+@Composable
+private fun HonestFloorMapUnavailableState(
+    title: String,
+    message: String,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = TableMapVisualTokens.TextPrimary,
+            )
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = TableMapVisualTokens.TextSecondary,
+            )
+        }
+    }
+}
+
 @Composable
 private fun TableDetailsContent(
     table: RestaurantTable,

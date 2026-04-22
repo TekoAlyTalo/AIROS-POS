@@ -8,6 +8,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.airos.pos.core.database.dao.AttendanceDao
 import com.airos.pos.core.database.dao.BackendMenuCacheDao
+import com.airos.pos.core.database.dao.CachedFloorMapDao
 import com.airos.pos.core.database.dao.MenuItemDao
 import com.airos.pos.core.database.dao.NfcIdentityDao
 import com.airos.pos.core.database.dao.OpenSaleDao
@@ -18,6 +19,7 @@ import com.airos.pos.core.database.dao.SyncQueueDao
 import com.airos.pos.core.database.dao.TableDao
 import com.airos.pos.core.database.dao.TicketDao
 import com.airos.pos.core.database.entity.BackendMenuItemEntity
+import com.airos.pos.core.database.entity.CachedFloorMapTableEntity
 import com.airos.pos.core.database.entity.AttendanceActiveSessionLocalEntity
 import com.airos.pos.core.database.entity.AttendanceEventLocalEntity
 import com.airos.pos.core.database.entity.AttendanceSyncMetadataLocalEntity
@@ -58,8 +60,9 @@ import com.airos.pos.core.database.entity.TicketLocalEntity
         AttendanceActiveSessionLocalEntity::class,
         AttendanceSyncMetadataLocalEntity::class,
         SalesLedgerOutboxLocalEntity::class,
+        CachedFloorMapTableEntity::class,
     ],
-    version = 10,
+    version = 11,
     exportSchema = false,
 )
 abstract class AirosPosDatabase : RoomDatabase() {
@@ -74,6 +77,7 @@ abstract class AirosPosDatabase : RoomDatabase() {
     abstract fun openSaleDao(): OpenSaleDao
     abstract fun attendanceDao(): AttendanceDao
     abstract fun salesLedgerOutboxDao(): SalesLedgerOutboxDao
+    abstract fun cachedFloorMapDao(): CachedFloorMapDao
 
     companion object {
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -425,6 +429,38 @@ abstract class AirosPosDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `cached_floor_map_tables` (
+                        `id` TEXT NOT NULL,
+                        `label` TEXT NOT NULL,
+                        `areaName` TEXT NOT NULL,
+                        `seats` INTEGER NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `guestCount` INTEGER NOT NULL,
+                        `activeTicketId` TEXT,
+                        `positionX` INTEGER NOT NULL,
+                        `positionY` INTEGER NOT NULL,
+                        `positionWidth` INTEGER NOT NULL,
+                        `positionHeight` INTEGER NOT NULL,
+                        `cameraId` TEXT,
+                        `cameraLabel` TEXT,
+                        `attentionFlag` TEXT NOT NULL,
+                        `reviewAnchorTime` TEXT,
+                        `reviewFrom` TEXT,
+                        `reviewTo` TEXT,
+                        `spotType` TEXT NOT NULL,
+                        `sortOrder` INTEGER NOT NULL,
+                        `cachedAtEpochMillis` INTEGER NOT NULL,
+                        PRIMARY KEY(`id`)
+                    )
+                    """.trimIndent(),
+                )
+            }
+        }
+
         private val MIGRATION_9_10 = object : Migration(9, 10) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
@@ -472,6 +508,7 @@ abstract class AirosPosDatabase : RoomDatabase() {
                 MIGRATION_7_8,
                 MIGRATION_8_9,
                 MIGRATION_9_10,
+                MIGRATION_10_11,
             ).build()
         }
     }

@@ -4,6 +4,7 @@ import android.content.Context
 import com.airos.pos.core.database.AirosPosDatabase
 import com.airos.pos.core.datastore.TerminalPreferencesStore
 import com.airos.pos.core.datastore.StaffUiPreferencesStore
+import com.airos.pos.core.model.FloorMap
 import com.airos.pos.core.model.TerminalSettings
 import com.airos.pos.device.camera.AndroidTorchService
 import com.airos.pos.device.camera.CameraPreviewService
@@ -82,7 +83,6 @@ class DefaultAppContainer(
     context: Context,
 ) : AppContainer {
     private val appContext = context.applicationContext
-    private val store = FakePosStore()
     private val nfcIdentitySyncClient = DefaultNfcIdentitySyncClient(
         backendBaseUrlProvider = { currentLedgerBackendBaseUrl().orEmpty() },
     )
@@ -91,6 +91,14 @@ class DefaultAppContainer(
 
     override val database: AirosPosDatabase = AirosPosDatabase.build(appContext)
     override val terminalPreferencesStore: TerminalPreferencesStore = TerminalPreferencesStore(appContext)
+
+    // Durable local floor-map cache. Populated only by the write-through sink below
+    // whenever BackendTruthTableRepository publishes a fresh backend-authoritative
+    // snapshot. Consumed on cold start so the Tables view can render the last
+    // honest layout without backend reachability.
+    private val floorMapCacheStore = FloorMapCacheStore(database.cachedFloorMapDao())
+    private val hydratedFloorMap: FloorMap? = runBlocking { floorMapCacheStore.loadPersistedFloorMap() }
+    private val store = if (hydratedFloorMap != null) FakePosStore(initialFloorMap = hydratedFloorMap) else FakePosStore()
 
     // Stable technical terminal identifier — persisted once per install. Drives
     // attendance sync metadata key + terminal sequence numbering. Intentionally
@@ -102,16 +110,34 @@ class DefaultAppContainer(
     private val staffUiPreferencesStore: StaffUiPreferencesStore = StaffUiPreferencesStore(appContext)
     override val syncQueueRepository: SyncQueueRepository = InMemorySyncQueueRepository()
     override val syncCoordinator: SyncCoordinator = SyncCoordinator(syncQueueRepository)
-    override val authRepository: AuthRepository = FakeAuthRepository(SampleData.localAuthStaffRecords())
+    override val authRepository: AuthRepository = FakeAuthRepository(LocalAuthSeed.localAuthStaffRecords())
     private val roomNfcIdentityRepository = RoomNfcIdentityRepository(database, nfcIdentitySyncClient)
     override val nfcIdentityRepository: NfcIdentityRepository = roomNfcIdentityRepository
     override val nfcStaffResolver: NfcStaffResolver = RepositoryNfcStaffResolver(roomNfcIdentityRepository)
     override val openSaleRepository: OpenSaleRepository = RoomOpenSaleRepository(database.openSaleDao())
     override val shiftRepository: ShiftRepository = FakeShiftRepository(store, syncQueueRepository)
     private val localTableRepository = FakeTableRepository(store, syncQueueRepository)
+    // Write-through sink: apply backend truth to the in-memory delegate AND
+    // persist it to the durable floor-map cache so the next cold start has a
+    // real snapshot to bootstrap from without backend reachability.
+    private val persistingFloorMapSink = object : BackendAuthoritativeFloorMapSink {
+        override fun replaceBackendAuthoritativeFloorMap(floorMap: FloorMap) {
+            localTableRepository.replaceBackendAuthoritativeFloorMap(floorMap)
+            appScope.launch {
+                try {
+                    floorMapCacheStore.persist(floorMap)
+                } catch (t: Throwable) {
+                    Log.w(
+                        "AIROS",
+                        "[AppContainer] floor map cache persist failed: ${t.javaClass.simpleName}: ${t.message}",
+                    )
+                }
+            }
+        }
+    }
     override val tableRepository: TableRepository = BackendTruthTableRepository(
         delegate = localTableRepository,
-        floorMapSink = localTableRepository,
+        floorMapSink = persistingFloorMapSink,
         openSaleRepository = openSaleRepository,
         backendBaseUrlProvider = { currentLedgerBackendBaseUrl().orEmpty() },
     )
@@ -153,7 +179,7 @@ class DefaultAppContainer(
     init {
         runBlocking {
             roomNfcIdentityRepository.seedLegacyStaffEnrollmentsIfEmpty(
-                buildLegacyStaffEnrollmentDefaults(SampleData.localAuthStaffRecords()),
+                buildLegacyStaffEnrollmentDefaults(LocalAuthSeed.localAuthStaffRecords()),
             )
         }
         Log.i(
