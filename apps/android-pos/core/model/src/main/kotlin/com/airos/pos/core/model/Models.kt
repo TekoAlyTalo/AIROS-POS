@@ -599,6 +599,9 @@ data class CameraPreviewState(
     val errorMessage: String? = null,
     val signalingUrl: String? = null,
     val lastFrameAtEpochMillis: Long? = null,
+    val videoWidth: Int? = null,
+    val videoHeight: Int? = null,
+    val videoRotationDeg: Int? = null,
 )
 
 data class TerminalSettings(

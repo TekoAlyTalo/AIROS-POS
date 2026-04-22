@@ -16,6 +16,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -90,7 +91,7 @@ class WebRtcViewerPreviewService(
         }
         frame.retain()
         try {
-            publishFrameArrivalStateIfDue(System.currentTimeMillis())
+            publishFrameArrivalStateIfDue(frame, System.currentTimeMillis())
         } finally {
             frame.release()
         }
@@ -111,6 +112,9 @@ class WebRtcViewerPreviewService(
             connectionState = CameraConnectionState.ERROR,
             detailMessage = "Preview request missing",
             errorMessage = "Viewer preview needs a cameraId and a backend base URL.",
+            videoWidth = null,
+            videoHeight = null,
+            videoRotationDeg = null,
         )
     }
 
@@ -221,6 +225,9 @@ class WebRtcViewerPreviewService(
                 connectionState = CameraConnectionState.ERROR,
                 detailMessage = "Viewer unavailable",
                 errorMessage = initError,
+                videoWidth = null,
+                videoHeight = null,
+                videoRotationDeg = null,
             )
         }
     }
@@ -907,21 +914,51 @@ class WebRtcViewerPreviewService(
         remoteVideoTrackId = null
     }
 
-    private fun publishFrameArrivalStateIfDue(nowEpochMillis: Long) {
+    private fun publishFrameArrivalStateIfDue(
+        frame: VideoFrame,
+        nowEpochMillis: Long,
+    ) {
+        val frameWidth = frame.buffer.width.takeIf { it > 0 }
+        val frameHeight = frame.buffer.height.takeIf { it > 0 }
+        val frameRotation = frame.rotation
         val lastPublishedAt = lastFrameStatePublishedAtEpochMillis.get()
-        if (lastPublishedAt != 0L &&
-            nowEpochMillis - lastPublishedAt < FRAME_STATE_PUBLISH_INTERVAL_MILLIS
-        ) {
-            return
+        val shouldPublishFrameFreshness = lastPublishedAt == 0L ||
+            nowEpochMillis - lastPublishedAt >= FRAME_STATE_PUBLISH_INTERVAL_MILLIS
+        var geometryChanged = false
+        previewStateFlow.update { current ->
+            geometryChanged = frameWidth != null &&
+                frameHeight != null &&
+                (
+                    current.videoWidth != frameWidth ||
+                        current.videoHeight != frameHeight ||
+                        current.videoRotationDeg != frameRotation
+                    )
+
+            if (!shouldPublishFrameFreshness && !geometryChanged) {
+                return@update current
+            }
+
+            current.copy(
+                isStreaming = if (shouldPublishFrameFreshness) true else current.isStreaming,
+                connectionState = if (shouldPublishFrameFreshness) CameraConnectionState.LIVE else current.connectionState,
+                detailMessage = if (shouldPublishFrameFreshness) "Live viewer frame received" else current.detailMessage,
+                errorMessage = if (shouldPublishFrameFreshness) null else current.errorMessage,
+                lastFrameAtEpochMillis = if (shouldPublishFrameFreshness) nowEpochMillis else current.lastFrameAtEpochMillis,
+                videoWidth = frameWidth ?: current.videoWidth,
+                videoHeight = frameHeight ?: current.videoHeight,
+                videoRotationDeg = if (frameWidth != null && frameHeight != null) frameRotation else current.videoRotationDeg,
+            )
         }
-        lastFrameStatePublishedAtEpochMillis.set(nowEpochMillis)
-        previewStateFlow.value = previewStateFlow.value.copy(
-            isStreaming = true,
-            connectionState = CameraConnectionState.LIVE,
-            detailMessage = "Live viewer frame received",
-            errorMessage = null,
-            lastFrameAtEpochMillis = nowEpochMillis,
-        )
+        if (shouldPublishFrameFreshness) {
+            lastFrameStatePublishedAtEpochMillis.set(nowEpochMillis)
+        }
+        if (geometryChanged && frameWidth != null && frameHeight != null) {
+            Log.i(
+                TAG,
+                "Preview geometry updated cameraId=${previewStateFlow.value.cameraId} " +
+                    "size=${frameWidth}x${frameHeight} rotation=$frameRotation",
+            )
+        }
     }
 
     private fun failSessionAsync(session: PreviewSession, reason: String) {
@@ -999,6 +1036,9 @@ class WebRtcViewerPreviewService(
                 errorMessage = null,
                 signalingUrl = null,
                 lastFrameAtEpochMillis = null,
+                videoWidth = null,
+                videoHeight = null,
+                videoRotationDeg = null,
             )
         }
     }
@@ -1024,6 +1064,9 @@ class WebRtcViewerPreviewService(
             errorMessage = errorMessage,
             signalingUrl = signalingUrl,
             lastFrameAtEpochMillis = lastFrameAtEpochMillis,
+            videoWidth = null,
+            videoHeight = null,
+            videoRotationDeg = null,
         )
     }
 

@@ -16,6 +16,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -119,7 +121,7 @@ import androidx.compose.foundation.layout.offset
 private const val SIGNALING_PORT = 8000
 private const val PREVIEW_TAG = "TableLivePreview"
 private val previewMainHandler: Handler by lazy { Handler(Looper.getMainLooper()) }
-private const val PREVIEW_SURFACE_ASPECT_RATIO = 4f / 3f
+private const val MINI_PREVIEW_SHELL_ASPECT_RATIO = 16f / 9f
 private const val PREVIEW_FRAME_FRESHNESS_WINDOW_MILLIS = 2_500L
 private const val PREVIEW_FRAME_FRESHNESS_TICK_MILLIS = 500L
 private const val AREA_FILTER_ALL = "All"
@@ -1539,57 +1541,66 @@ private fun TableDetailsContent(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(152.dp),
+                        .aspectRatio(MINI_PREVIEW_SHELL_ASPECT_RATIO),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .clip(RoundedCornerShape(18.dp))
-                            .background(MaterialTheme.colorScheme.surface),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        if (isMiniVisibleOwner) {
-                            LiveVideoSurface(
-                                cameraPreviewService = cameraPreviewService,
-                                surfaceRole = "mini",
-                                ownerKey = miniOwnerKey ?: "mini:null:null",
-                                targetTableId = previewTarget.tableId,
-                                targetCameraId = previewTarget.cameraId,
-                                modifier = Modifier.fillMaxSize(),
-                                onRendererReadyChanged = { isReady -> hasRenderedFirstFrame = isReady },
-                                onFirstFrameRendered = { hasRenderedFirstFrame = true },
-                            )
-                        }
-                        if (!canOpenLivePreview || !isPreviewLiveForUser || !isMiniVisibleOwner) {
-                            val overlayText = when {
-                                !canOpenLivePreview -> "Assign a camera and configure edge URL to enable live preview."
-                                previewTarget == null -> "Starting live preview..."
-                                isLivePreviewDialogVisible -> "Live preview is open in the enlarged view."
-                                previewState.errorMessage?.isNotBlank() == true -> previewState.errorMessage ?: previewState.detailMessage
-                                previewState.isWaitingForFreshFrames(isPreviewLiveForUser) -> "Waiting for fresh video frames..."
-                                else -> previewState.detailMessage
+                    val activeMiniTarget = previewTarget
+                    PreviewVideoShell(
+                        previewState = previewState,
+                        targetTableId = activeMiniTarget?.tableId,
+                        targetCameraId = activeMiniTarget?.cameraId,
+                        modifier = Modifier.fillMaxSize(),
+                        shape = RoundedCornerShape(18.dp),
+                        backgroundColor = MaterialTheme.colorScheme.surface,
+                        videoContent = { videoModifier ->
+                            if (isMiniVisibleOwner) {
+                                activeMiniTarget?.let { resolvedPreviewTarget ->
+                                    LiveVideoSurface(
+                                        cameraPreviewService = cameraPreviewService,
+                                        surfaceRole = "mini",
+                                        ownerKey = miniOwnerKey ?: "mini:null:null",
+                                        targetTableId = resolvedPreviewTarget.tableId,
+                                        targetCameraId = resolvedPreviewTarget.cameraId,
+                                        modifier = videoModifier,
+                                        onRendererReadyChanged = { isReady -> hasRenderedFirstFrame = isReady },
+                                        onFirstFrameRendered = { hasRenderedFirstFrame = true },
+                                    )
+                                }
                             }
-                            Text(
-                                text = overlayText,
-                                modifier = Modifier.padding(12.dp),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (previewState.connectionState == CameraConnectionState.ERROR) {
-                                    MaterialTheme.colorScheme.error
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                },
-                            )
-                        }
+                        },
+                        shellOverlayContent = {
+                            if (!canOpenLivePreview || !isPreviewLiveForUser || !isMiniVisibleOwner) {
+                                val overlayText = when {
+                                    !canOpenLivePreview -> "Assign a camera and configure edge URL to enable live preview."
+                                    previewTarget == null -> "Starting live preview..."
+                                    isLivePreviewDialogVisible -> "Live preview is open in the enlarged view."
+                                    previewState.errorMessage?.isNotBlank() == true -> previewState.errorMessage ?: previewState.detailMessage
+                                    previewState.isWaitingForFreshFrames(isPreviewLiveForUser) -> "Waiting for fresh video frames..."
+                                    else -> previewState.detailMessage
+                                }
+                                Text(
+                                    text = overlayText,
+                                    modifier = Modifier
+                                        .align(Alignment.Center)
+                                        .padding(12.dp),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (previewState.connectionState == CameraConnectionState.ERROR) {
+                                        MaterialTheme.colorScheme.error
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                )
+                            }
 
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(10.dp),
-                        ) {
-                            PreviewStatusPill(displayConnectionState)
-                        }
-                    }
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(10.dp),
+                            ) {
+                                PreviewStatusPill(displayConnectionState)
+                            }
+                        },
+                    )
                 }
 
                 Button(
@@ -2376,50 +2387,106 @@ private fun TableLivePreviewDialog(
                         .height(560.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .aspectRatio(PREVIEW_SURFACE_ASPECT_RATIO, matchHeightConstraintsFirst = true)
-                            .clip(RoundedCornerShape(24.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        LiveVideoSurface(
-                            cameraPreviewService = cameraPreviewService,
-                            surfaceRole = "dialog",
-                            ownerKey = dialogOwnerKey,
-                            targetTableId = target.tableId,
-                            targetCameraId = target.cameraId,
-                            modifier = Modifier.fillMaxSize(),
-                            onRendererReadyChanged = { isReady -> hasRenderedFirstFrame = isReady },
-                            onFirstFrameRendered = { hasRenderedFirstFrame = true },
-                        )
-                        if (!isPreviewLiveForUser) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                Text(
-                                    text = if (previewState.isWaitingForFreshFrames(isPreviewLiveForUser)) {
-                                        "Waiting for fresh video frames..."
-                                    } else {
-                                        previewState.detailMessage
-                                    },
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.SemiBold,
-                                )
-                                if (!errorMessage.isNullOrBlank()) {
+                    PreviewVideoShell(
+                        previewState = previewState,
+                        targetTableId = target.tableId,
+                        targetCameraId = target.cameraId,
+                        modifier = Modifier.fillMaxSize(),
+                        shape = RoundedCornerShape(24.dp),
+                        backgroundColor = MaterialTheme.colorScheme.surfaceVariant,
+                        videoContent = { videoModifier ->
+                            LiveVideoSurface(
+                                cameraPreviewService = cameraPreviewService,
+                                surfaceRole = "dialog",
+                                ownerKey = dialogOwnerKey,
+                                targetTableId = target.tableId,
+                                targetCameraId = target.cameraId,
+                                modifier = videoModifier,
+                                onRendererReadyChanged = { isReady -> hasRenderedFirstFrame = isReady },
+                                onFirstFrameRendered = { hasRenderedFirstFrame = true },
+                            )
+                        },
+                        shellOverlayContent = {
+                            if (!isPreviewLiveForUser) {
+                                Column(
+                                    modifier = Modifier.align(Alignment.Center),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
                                     Text(
-                                        text = errorMessage,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.error,
+                                        text = if (previewState.isWaitingForFreshFrames(isPreviewLiveForUser)) {
+                                            "Waiting for fresh video frames..."
+                                        } else {
+                                            previewState.detailMessage
+                                        },
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.SemiBold,
                                     )
+                                    if (!errorMessage.isNullOrBlank()) {
+                                        Text(
+                                            text = errorMessage,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.error,
+                                        )
+                                    }
                                 }
                             }
-                        }
-                    }
+                        },
+                    )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun PreviewVideoShell(
+    previewState: CameraPreviewState,
+    targetTableId: String?,
+    targetCameraId: String?,
+    modifier: Modifier = Modifier,
+    shape: RoundedCornerShape,
+    backgroundColor: Color,
+    videoContent: @Composable BoxScope.(Modifier) -> Unit,
+    shellOverlayContent: @Composable BoxScope.() -> Unit = {},
+) {
+    BoxWithConstraints(
+        modifier = modifier,
+        contentAlignment = Alignment.Center,
+    ) {
+        val videoAspectRatio = previewState.runtimeVideoAspectRatioOrNull(
+            targetTableId = targetTableId,
+            targetCameraId = targetCameraId,
+        )
+        val shellAspectRatio = if (maxHeight.value > 0f) {
+            maxWidth.value / maxHeight.value
+        } else {
+            null
+        }
+        val videoModifier = when {
+            videoAspectRatio == null || shellAspectRatio == null -> Modifier.fillMaxSize()
+            videoAspectRatio >= shellAspectRatio -> Modifier
+                .fillMaxWidth()
+                .aspectRatio(videoAspectRatio)
+            else -> Modifier
+                .fillMaxHeight()
+                .aspectRatio(videoAspectRatio, matchHeightConstraintsFirst = true)
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(shape)
+                .background(backgroundColor),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                modifier = videoModifier,
+                contentAlignment = Alignment.Center,
+            ) {
+                videoContent(Modifier.fillMaxSize())
+            }
+            shellOverlayContent()
         }
     }
 }
@@ -2598,6 +2665,28 @@ private fun previewTargetTrace(
     cameraId: String?,
 ): String {
     return "tableId=${tableId ?: "null"} cameraId=${cameraId ?: "null"}"
+}
+
+private fun CameraPreviewState.runtimeVideoAspectRatioOrNull(
+    targetTableId: String?,
+    targetCameraId: String?,
+): Float? {
+    val resolvedCameraId = cameraId ?: return null
+    if (resolvedCameraId != targetCameraId) {
+        return null
+    }
+    val resolvedTableId = tableId
+    if (resolvedTableId != null && targetTableId != null && resolvedTableId != targetTableId) {
+        return null
+    }
+    val resolvedWidth = videoWidth?.takeIf { it > 0 } ?: return null
+    val resolvedHeight = videoHeight?.takeIf { it > 0 } ?: return null
+    val normalizedRotation = ((videoRotationDeg ?: 0) % 360 + 360) % 360
+    return if (normalizedRotation == 90 || normalizedRotation == 270) {
+        resolvedHeight.toFloat() / resolvedWidth.toFloat()
+    } else {
+        resolvedWidth.toFloat() / resolvedHeight.toFloat()
+    }
 }
 
 private fun CameraPreviewState.activePreviewTarget(): TableLivePreviewTarget? {
