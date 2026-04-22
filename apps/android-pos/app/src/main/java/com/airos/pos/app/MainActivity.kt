@@ -47,8 +47,7 @@ class MainActivity : ComponentActivity() {
             runCatching {
                 appContainer.customerDisplayService.updateCustomerTotalDisplay(null)
             }
-            val syncResult = appContainer.menuRepository.refresh()
-            Log.d("AIROS", "[MainActivity] menuRepository.refresh() -> $syncResult")
+            refreshMenuSyncTruth(reason = "activity_create")
         }
 
         startMenuPushListener(appContainer)
@@ -65,6 +64,9 @@ class MainActivity : ComponentActivity() {
         // Re-probe: the user may have toggled NFC in system settings and returned.
         probeNfcAdapter()
         enableNfcReaderMode()
+        lifecycleScope.launch {
+            refreshMenuSyncTruth(reason = "activity_resume")
+        }
     }
 
     override fun onPause() {
@@ -215,6 +217,12 @@ class MainActivity : ComponentActivity() {
                         continue
                     }
 
+                    val reconnectSyncResult = appContainer.menuRepository.refresh()
+                    Log.d(
+                        MenuPushLogTag,
+                        "Refresh after listener reconnect -> $reconnectSyncResult",
+                    )
+
                     BufferedReader(
                         InputStreamReader(connection.inputStream, StandardCharsets.UTF_8)
                     ).use { reader ->
@@ -226,8 +234,8 @@ class MainActivity : ComponentActivity() {
                             if (payload.isBlank()) continue
 
                             Log.d(MenuPushLogTag, "Event received: $payload")
-                            val syncResult = appContainer.menuRepository.refresh()
-                            Log.d(MenuPushLogTag, "Refresh after push -> $syncResult")
+                            val pushSyncResult = appContainer.menuRepository.refresh()
+                            Log.d(MenuPushLogTag, "Refresh after push -> $pushSyncResult")
                         }
                     }
                 } catch (t: Throwable) {
@@ -238,6 +246,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    private suspend fun refreshMenuSyncTruth(reason: String) {
+        val syncResult = appContainer.menuRepository.refresh()
+        Log.d("AIROS", "[MainActivity] menuRepository.refresh(reason=$reason) -> $syncResult")
     }
 
     private fun sendSunmiStatusBarBroadcast() {

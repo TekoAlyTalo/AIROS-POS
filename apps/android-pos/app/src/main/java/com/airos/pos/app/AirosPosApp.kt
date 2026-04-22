@@ -420,7 +420,7 @@ private fun MenuSyncBanner(syncState: MenuSyncResult?) {
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = "Offline — tuotelista välimuistista",
+                    text = "Tuotelista välimuistista",
                     style = MaterialTheme.typography.labelSmall,
                     color = Color(0xFFFEF3C7),
                 )
@@ -435,7 +435,7 @@ private fun MenuSyncBanner(syncState: MenuSyncResult?) {
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = "Ei yhteyttä — tuotelista ei saatavilla",
+                    text = "Tuotelista ei saatavilla",
                     style = MaterialTheme.typography.labelSmall,
                     color = Color(0xFFFEE2E2),
                 )
