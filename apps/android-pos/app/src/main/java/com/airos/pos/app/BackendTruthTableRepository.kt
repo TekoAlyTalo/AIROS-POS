@@ -28,9 +28,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
-private const val TABLE1_POS_SPOT_ID = "table-1"
-private const val TABLE1_POS_SPOT_LABEL = "T1"
-private const val TABLE1_BACKEND_TABLE_ID = 1
+private val POS_TABLE_ID_PATTERN = Regex("^table-(\\d+)$")
 private const val BACKEND_FLOOR_MAP_ID = "backend-authoritative-floor"
 private const val BACKEND_FLOOR_MAP_NAME = "Dining room"
 private const val BACKEND_DEFAULT_AREA_NAME = "Dining room"
@@ -57,7 +55,7 @@ class BackendTruthTableRepository(
         backendBaseUrlProvider = backendBaseUrlProvider,
         pollIntervalMillis = pollIntervalMillis,
     )
-    private var lastPublishedTable1ContextKey: String? = null
+    private val lastPublishedOpenBillContextKeys = linkedMapOf<Int, String>()
 
     override fun observeFloorMap(): Flow<FloorMap> {
         return combine(
@@ -65,7 +63,10 @@ class BackendTruthTableRepository(
             client.observeBackendTableTruth(),
             openSaleRepository.observeOpenSales(),
         ) { floorMap, backendTruthByTableId, openSales ->
-            publishTable1OpenBillContext(openSales)
+            publishOpenBillContexts(
+                floorMap = floorMap,
+                openSales = openSales,
+            )
             if (backendTruthByTableId.isEmpty()) {
                 Log.i(
                     "AIROS",
@@ -103,44 +104,75 @@ class BackendTruthTableRepository(
         actorStaffId: String? = null,
         actorDisplayName: String? = null,
     ): Boolean {
-        if (tableId != TABLE1_POS_SPOT_ID) {
+        val backendTableId = tableId.toBackendTableIdOrNull()
+        if (backendTableId == null) {
             Log.w(
                 "AIROS",
-                "[BackendTruthTableRepository] CHECK acknowledge is currently supported only for $TABLE1_POS_SPOT_ID.",
+                "[BackendTruthTableRepository] CHECK acknowledge rejected for unsupported service spot id=$tableId",
             )
             return false
         }
         return client.postAcknowledgeCheck(
-            backendTableId = TABLE1_BACKEND_TABLE_ID,
+            backendTableId = backendTableId,
             actorStaffId = actorStaffId,
             actorDisplayName = actorDisplayName,
         )
     }
 
-    private suspend fun publishTable1OpenBillContext(openSales: List<PersistedOpenSale>) {
-        val table1Sales = openSales
-            .filter { it.serviceSpotId == TABLE1_POS_SPOT_ID }
-            .sortedBy { it.saleId }
-        val contextKey = buildString {
-            append(table1Sales.size)
-            append('|')
-            append(table1Sales.sumOf { it.totalCents() })
-            append('|')
-            append(table1Sales.joinToString(separator = ",") { it.saleId })
+    private suspend fun publishOpenBillContexts(
+        floorMap: FloorMap,
+        openSales: List<PersistedOpenSale>,
+    ) {
+        val floorTablesByBackendId = floorMap.tables
+            .mapNotNull { table ->
+                table.id.toBackendTableIdOrNull()?.let { backendTableId -> backendTableId to table }
+            }
+            .toMap(linkedMapOf())
+        val openSalesByBackendTableId = openSales
+            .mapNotNull { sale ->
+                sale.serviceSpotId
+                    ?.toBackendTableIdOrNull()
+                    ?.let { backendTableId -> backendTableId to sale }
+            }
+            .groupBy(
+                keySelector = { it.first },
+                valueTransform = { it.second },
+            )
+        val backendTableIds = linkedSetOf<Int>().apply {
+            addAll(floorTablesByBackendId.keys)
+            addAll(openSalesByBackendTableId.keys)
         }
-        if (contextKey == lastPublishedTable1ContextKey) return
 
-        val published = client.postOpenBillContext(
-            backendTableId = TABLE1_BACKEND_TABLE_ID,
-            serviceSpotId = TABLE1_POS_SPOT_ID,
-            serviceSpotLabel = table1Sales.firstOrNull()?.serviceSpotLabel ?: TABLE1_POS_SPOT_LABEL,
-            openBillCount = table1Sales.size,
-            openSaleIds = table1Sales.map { it.saleId },
-            openTotalCents = table1Sales.sumOf { it.totalCents() },
-            oldestOpenSaleCreatedAtEpochMillis = table1Sales.minOfOrNull { it.createdAtEpochMillis },
-        )
-        if (published) {
-            lastPublishedTable1ContextKey = contextKey
+        backendTableIds.forEach { backendTableId ->
+            val table = floorTablesByBackendId[backendTableId]
+            val tableSales = openSalesByBackendTableId[backendTableId]
+                .orEmpty()
+                .sortedBy { it.saleId }
+            val serviceSpotId = table?.id ?: backendTableId.toPosTableId()
+            val serviceSpotLabel = table?.label ?: "T$backendTableId"
+            val contextKey = buildString {
+                append(serviceSpotId)
+                append('|')
+                append(tableSales.size)
+                append('|')
+                append(tableSales.sumOf { it.totalCents() })
+                append('|')
+                append(tableSales.joinToString(separator = ",") { it.saleId })
+            }
+            if (contextKey == lastPublishedOpenBillContextKeys[backendTableId]) return@forEach
+
+            val published = client.postOpenBillContext(
+                backendTableId = backendTableId,
+                serviceSpotId = serviceSpotId,
+                serviceSpotLabel = tableSales.firstOrNull()?.serviceSpotLabel ?: serviceSpotLabel,
+                openBillCount = tableSales.size,
+                openSaleIds = tableSales.map { it.saleId },
+                openTotalCents = tableSales.sumOf { it.totalCents() },
+                oldestOpenSaleCreatedAtEpochMillis = tableSales.minOfOrNull { it.createdAtEpochMillis },
+            )
+            if (published) {
+                lastPublishedOpenBillContextKeys[backendTableId] = contextKey
+            }
         }
     }
 }
@@ -449,6 +481,13 @@ private fun JSONObject.optStringOrNull(name: String): String? {
     if (!has(name) || isNull(name)) return null
     return optString(name).takeIf { it.isNotBlank() }
 }
+
+private fun String.toBackendTableIdOrNull(): Int? {
+    val match = POS_TABLE_ID_PATTERN.matchEntire(trim()) ?: return null
+    return match.groupValues.getOrNull(1)?.toIntOrNull()?.takeIf { it > 0 }
+}
+
+private fun Int.toPosTableId(): String = "table-$this"
 
 private fun PersistedOpenSale.totalCents(): Int {
     return lines.sumOf { line ->
