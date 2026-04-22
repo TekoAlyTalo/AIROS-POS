@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -58,6 +59,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
@@ -930,7 +932,7 @@ LaunchedEffect(
                         HonestFloorMapUnavailableState(
                             title = "Floor map unavailable",
                             message = "No real floor map is cached on this device. Connect once to load tables.",
-                            modifier = Modifier.weight(1f, fill = true),
+                            modifier = Modifier.weight(1.16f, fill = true),
                         )
                     }
 
@@ -1226,6 +1228,10 @@ private fun TableDetailsContent(
     val saleLabelsById = remember(openSales) {
         openSales.associate { sale -> sale.saleId to sale.openSaleLabel() }
     }
+    val shouldCompactTransferHistory = transferHistory.isNotEmpty()
+    var isTransferHistoryExpanded by rememberSaveable(table.id, shouldCompactTransferHistory, transferHistory.size) {
+        mutableStateOf(false)
+    }
     val previewNowEpochMillis = rememberPreviewFreshnessNow(
         isTickerActive = previewTarget != null &&
             !isLivePreviewDialogVisible &&
@@ -1275,7 +1281,7 @@ private fun TableDetailsContent(
 
     Column(
         modifier = Modifier.fillMaxHeight(),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -1342,7 +1348,7 @@ private fun TableDetailsContent(
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f, fill = true),
+                .weight(1.25f, fill = true),
             shape = RoundedCornerShape(24.dp),
             color = if (transferForThisTable != null) {
                 MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
@@ -1353,8 +1359,8 @@ private fun TableDetailsContent(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 if (transferForThisTable != null) {
                     Text(
@@ -1464,40 +1470,49 @@ private fun TableDetailsContent(
             }
         }
 
-        if (openSales.isNotEmpty()) {
+        if (transferHistory.isNotEmpty()) {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(24.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.58f),
             ) {
                 Column(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
-                    Text(
-                        text = "Siirtohistoria",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-
-                    if (transferHistory.isEmpty()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Text(
-                            text = "Ei siirtohistoriaa avoimille laskuille.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            text = "Siirtohistoria",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
                         )
-                    } else {
+                        if (shouldCompactTransferHistory) {
+                            TextButton(
+                                onClick = { isTransferHistoryExpanded = !isTransferHistoryExpanded },
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                            ) {
+                                Text(if (isTransferHistoryExpanded) "Piilota" else "Näytä")
+                            }
+                        }
+                    }
+
+                    if (isTransferHistoryExpanded) {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .sizeIn(maxHeight = 156.dp)
+                                .sizeIn(maxHeight = 136.dp)
                                 .verticalScroll(transferHistoryScrollState),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
                             transferHistory.forEach { event ->
                                 OpenSaleTransferHistoryRow(
                                     event = event,
                                     saleLabel = saleLabelsById[event.saleId] ?: "Lasku",
+                                    compact = true,
                                 )
                             }
                         }
@@ -1512,28 +1527,14 @@ private fun TableDetailsContent(
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
         ) {
             Column(
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(
-                            text = "Mini live preview",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Text(
-                            text = table.cameraLabel ?: table.cameraId ?: "No assigned camera",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    PreviewStatusPill(displayConnectionState)
-                }
+                Text(
+                    text = table.cameraLabel ?: table.cameraId ?: "No assigned camera",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
 
                 Box(
                     modifier = Modifier
@@ -1580,6 +1581,14 @@ private fun TableDetailsContent(
                                 },
                             )
                         }
+
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(10.dp),
+                        ) {
+                            PreviewStatusPill(displayConnectionState)
+                        }
                     }
                 }
 
@@ -1599,10 +1608,11 @@ private fun TableDetailsContent(
 private fun OpenSaleTransferHistoryRow(
     event: PersistedOpenSaleTransferEvent,
     saleLabel: String,
+    compact: Boolean = false,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(if (compact) 14.dp else 16.dp),
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.62f),
         border = androidx.compose.foundation.BorderStroke(
             1.dp,
@@ -1610,26 +1620,43 @@ private fun OpenSaleTransferHistoryRow(
         ),
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
+            modifier = Modifier.padding(
+                horizontal = if (compact) 8.dp else 10.dp,
+                vertical = if (compact) 5.dp else 8.dp,
+            ),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 2.dp),
         ) {
             Text(
                 text = saleLabel,
-                style = MaterialTheme.typography.labelLarge,
+                style = if (compact) MaterialTheme.typography.labelMedium else MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
-            Text(
-                text = "${formatTransferHistorySpot(event.fromServiceSpotId, event.fromServiceSpotLabel)} -> " +
-                    formatTransferHistorySpot(event.toServiceSpotId, event.toServiceSpotLabel),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                text = "${event.actedByDisplayName} | ${formatTransferHistoryTime(event.occurredAtEpochMillis)}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (compact) {
+                Text(
+                    text = "${formatTransferHistorySpot(event.fromServiceSpotId, event.fromServiceSpotLabel)} -> " +
+                        "${formatTransferHistorySpot(event.toServiceSpotId, event.toServiceSpotLabel)} • " +
+                        "${event.actedByDisplayName} • ${formatTransferHistoryTime(event.occurredAtEpochMillis)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            } else {
+                Text(
+                    text = "${formatTransferHistorySpot(event.fromServiceSpotId, event.fromServiceSpotLabel)} -> " +
+                        formatTransferHistorySpot(event.toServiceSpotId, event.toServiceSpotLabel),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = "${event.actedByDisplayName} | ${formatTransferHistoryTime(event.occurredAtEpochMillis)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
