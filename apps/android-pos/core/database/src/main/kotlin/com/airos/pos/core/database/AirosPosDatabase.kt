@@ -62,7 +62,7 @@ import com.airos.pos.core.database.entity.TicketLocalEntity
         SalesLedgerOutboxLocalEntity::class,
         CachedFloorMapTableEntity::class,
     ],
-    version = 11,
+    version = 12,
     exportSchema = false,
 )
 abstract class AirosPosDatabase : RoomDatabase() {
@@ -461,6 +461,25 @@ abstract class AirosPosDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    ALTER TABLE `cached_floor_map_tables`
+                    ADD COLUMN `backendTableId` INTEGER
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    UPDATE `cached_floor_map_tables`
+                    SET `backendTableId` = CAST(SUBSTR(`id`, 7) AS INTEGER)
+                    WHERE `backendTableId` IS NULL
+                      AND `id` GLOB 'table-[0-9]*'
+                    """.trimIndent(),
+                )
+            }
+        }
+
         private val MIGRATION_9_10 = object : Migration(9, 10) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
@@ -509,6 +528,7 @@ abstract class AirosPosDatabase : RoomDatabase() {
                 MIGRATION_8_9,
                 MIGRATION_9_10,
                 MIGRATION_10_11,
+                MIGRATION_11_12,
             ).build()
         }
     }

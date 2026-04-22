@@ -53,6 +53,7 @@ class FloorMapCacheStore(
 private fun CachedFloorMapTableEntity.toRestaurantTable(): RestaurantTable {
     return RestaurantTable(
         id = id,
+        backendTableId = backendTableId,
         label = label,
         areaName = areaName,
         seats = seats,
@@ -81,6 +82,7 @@ private fun CachedFloorMapTableEntity.toRestaurantTable(): RestaurantTable {
 private fun RestaurantTable.toCacheEntity(sortOrder: Int, cachedAtEpochMillis: Long): CachedFloorMapTableEntity {
     return CachedFloorMapTableEntity(
         id = id,
+        backendTableId = backendTableId,
         label = label,
         areaName = areaName,
         seats = seats,

@@ -198,6 +198,7 @@ data class TablePosition(
 
 data class RestaurantTable(
     val id: String,
+    val backendTableId: Int? = null,
     val label: String,
     val areaName: String,
     val seats: Int,

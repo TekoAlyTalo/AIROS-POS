@@ -28,7 +28,6 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
-private val POS_TABLE_ID_PATTERN = Regex("^table-(\\d+)$")
 private const val BACKEND_FLOOR_MAP_ID = "backend-authoritative-floor"
 private const val BACKEND_FLOOR_MAP_NAME = "Dining room"
 private const val BACKEND_DEFAULT_AREA_NAME = "Dining room"
@@ -56,6 +55,8 @@ class BackendTruthTableRepository(
         pollIntervalMillis = pollIntervalMillis,
     )
     private val lastPublishedOpenBillContextKeys = linkedMapOf<Int, String>()
+    @Volatile
+    private var latestBackendTableIdByServiceSpotId: Map<String, Int> = emptyMap()
 
     override fun observeFloorMap(): Flow<FloorMap> {
         return combine(
@@ -63,8 +64,18 @@ class BackendTruthTableRepository(
             client.observeBackendTableTruth(),
             openSaleRepository.observeOpenSales(),
         ) { floorMap, backendTruthByTableId, openSales ->
+            updateKnownBackendTableMappings(floorMap)
+            val effectiveFloorMap = if (backendTruthByTableId.isEmpty()) {
+                floorMap
+            } else {
+                buildAuthoritativeBackendFloorMap(
+                    currentFloorMap = floorMap,
+                    backendTruthByTableId = backendTruthByTableId,
+                )
+            }
+            updateKnownBackendTableMappings(effectiveFloorMap)
             publishOpenBillContexts(
-                floorMap = floorMap,
+                floorMap = effectiveFloorMap,
                 openSales = openSales,
             )
             if (backendTruthByTableId.isEmpty()) {
@@ -74,10 +85,7 @@ class BackendTruthTableRepository(
                 )
                 return@combine floorMap
             }
-            val authoritativeFloorMap = buildAuthoritativeBackendFloorMap(
-                currentFloorMap = floorMap,
-                backendTruthByTableId = backendTruthByTableId,
-            )
+            val authoritativeFloorMap = effectiveFloorMap
             floorMapSink?.replaceBackendAuthoritativeFloorMap(authoritativeFloorMap)
             authoritativeFloorMap
         }
@@ -104,11 +112,11 @@ class BackendTruthTableRepository(
         actorStaffId: String? = null,
         actorDisplayName: String? = null,
     ): Boolean {
-        val backendTableId = tableId.toBackendTableIdOrNull()
+        val backendTableId = latestBackendTableIdByServiceSpotId[tableId]
         if (backendTableId == null) {
             Log.w(
                 "AIROS",
-                "[BackendTruthTableRepository] CHECK acknowledge rejected for unsupported service spot id=$tableId",
+                "[BackendTruthTableRepository] CHECK acknowledge rejected for unmapped service spot id=$tableId",
             )
             return false
         }
@@ -125,14 +133,25 @@ class BackendTruthTableRepository(
     ) {
         val floorTablesByBackendId = floorMap.tables
             .mapNotNull { table ->
-                table.id.toBackendTableIdOrNull()?.let { backendTableId -> backendTableId to table }
+                table.backendTableId?.let { backendTableId -> backendTableId to table }
             }
             .toMap(linkedMapOf())
+        val backendTableIdByAlias = buildServiceSpotAliasMap(floorMap.tables)
         val openSalesByBackendTableId = openSales
             .mapNotNull { sale ->
-                sale.serviceSpotId
-                    ?.toBackendTableIdOrNull()
-                    ?.let { backendTableId -> backendTableId to sale }
+                val backendTableId = resolveBackendTableIdForOpenSale(
+                    sale = sale,
+                    backendTableIdByAlias = backendTableIdByAlias,
+                )
+                if (backendTableId == null) {
+                    Log.w(
+                        "AIROS",
+                        "[BackendTruthTableRepository] open sale could not be mapped to backend table saleId=${sale.saleId} serviceSpotId=${sale.serviceSpotId} serviceSpotLabel=${sale.serviceSpotLabel}",
+                    )
+                    null
+                } else {
+                    backendTableId to sale
+                }
             }
             .groupBy(
                 keySelector = { it.first },
@@ -174,6 +193,10 @@ class BackendTruthTableRepository(
                 lastPublishedOpenBillContextKeys[backendTableId] = contextKey
             }
         }
+    }
+
+    private fun updateKnownBackendTableMappings(floorMap: FloorMap) {
+        latestBackendTableIdByServiceSpotId = buildServiceSpotAliasMap(floorMap.tables)
     }
 }
 
@@ -402,6 +425,7 @@ private data class BackendTableTruth(
 
 private fun RestaurantTable.withBackendTruth(truth: BackendTableTruth): RestaurantTable {
     return copy(
+        backendTableId = truth.tableId,
         status = truth.tableStatus,
         guestCount = truth.currentPersons,
         attentionFlag = truth.attentionFlag,
@@ -443,6 +467,7 @@ private fun buildAuthoritativeBackendTable(
 ): RestaurantTable {
     val baseTable = RestaurantTable(
         id = backendTruth.posTableId,
+        backendTableId = backendTruth.tableId,
         label = backendTruth.tableName,
         areaName = currentTable?.areaName ?: BACKEND_DEFAULT_AREA_NAME,
         seats = backendTruth.capacity,
@@ -481,14 +506,83 @@ private fun parseAttentionFlag(raw: String): TableAttentionFlag {
     }
 }
 
+private fun buildServiceSpotAliasMap(tables: List<RestaurantTable>): Map<String, Int> {
+    val aliases = linkedMapOf<String, Int>()
+    tables.forEach { table ->
+        val backendTableId = table.backendTableId ?: return@forEach
+        serviceSpotAliases(
+            serviceSpotId = table.id,
+            serviceSpotLabel = table.label,
+            backendTableId = backendTableId,
+        ).forEach { alias ->
+            aliases.putIfAbsent(alias, backendTableId)
+        }
+    }
+    return aliases
+}
+
+private fun resolveBackendTableIdForOpenSale(
+    sale: PersistedOpenSale,
+    backendTableIdByAlias: Map<String, Int>,
+): Int? {
+    serviceSpotAliases(
+        serviceSpotId = sale.serviceSpotId,
+        serviceSpotLabel = sale.serviceSpotLabel,
+        backendTableId = null,
+    ).forEach { alias ->
+        backendTableIdByAlias[alias]?.let { return it }
+    }
+    return null
+}
+
+private fun serviceSpotAliases(
+    serviceSpotId: String?,
+    serviceSpotLabel: String?,
+    backendTableId: Int?,
+): List<String> {
+    val aliases = linkedSetOf<String>()
+
+    fun addAlias(raw: String?) {
+        val normalized = normalizeServiceSpotAlias(raw) ?: return
+        aliases += normalized
+        extractTrailingInteger(normalized)?.let { numeric ->
+            aliases += numeric.toPosTableId()
+            aliases += "t$numeric"
+            aliases += numeric.toString()
+        }
+    }
+
+    addAlias(serviceSpotId)
+    addAlias(serviceSpotLabel)
+    backendTableId?.let { numeric ->
+        aliases += numeric.toPosTableId()
+        aliases += "t$numeric"
+        aliases += numeric.toString()
+    }
+    return aliases.toList()
+}
+
+private fun normalizeServiceSpotAlias(raw: String?): String? {
+    val value = raw
+        ?.trim()
+        ?.lowercase()
+        ?.replace("ö", "o")
+        ?.replace("ä", "a")
+        ?.replace("å", "a")
+        ?.replace(Regex("""\s+"""), "")
+        ?.replace(Regex("""[^a-z0-9_-]"""), "")
+        ?: return null
+    return value.takeIf { it.isNotBlank() }
+}
+
+private fun extractTrailingInteger(raw: String): Int? {
+    val match = Regex("""(\d+)$""").find(raw) ?: return null
+    return match.groupValues[1].toIntOrNull()
+}
+
 private fun JSONObject.optStringOrNull(name: String): String? {
     if (!has(name) || isNull(name)) return null
     return optString(name).takeIf { it.isNotBlank() }
-}
-
-private fun String.toBackendTableIdOrNull(): Int? {
-    val match = POS_TABLE_ID_PATTERN.matchEntire(trim()) ?: return null
-    return match.groupValues.getOrNull(1)?.toIntOrNull()?.takeIf { it > 0 }
 }
 
 private fun Int.toPosTableId(): String = "table-$this"

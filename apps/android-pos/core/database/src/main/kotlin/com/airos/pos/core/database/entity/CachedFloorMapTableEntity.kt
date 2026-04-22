@@ -15,6 +15,7 @@ import androidx.room.PrimaryKey
 @Entity(tableName = "cached_floor_map_tables")
 data class CachedFloorMapTableEntity(
     @PrimaryKey val id: String,
+    val backendTableId: Int?,
     val label: String,
     val areaName: String,
     val seats: Int,

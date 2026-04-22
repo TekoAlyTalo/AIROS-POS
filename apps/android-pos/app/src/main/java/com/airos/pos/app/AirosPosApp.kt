@@ -1314,6 +1314,8 @@ private fun SignedInApp(
                         onCancelReceiptHandoff = viewModel::cancelReceiptHandoff,
                         onOpenCashDrawer = viewModel::openCashDrawerManually,
                         onAssignToServiceSpot = viewModel::requestServiceSpotAssignment,
+                        onScreenShown = viewModel::syncCustomerDisplayToCurrentTicket,
+                        onScreenDisposed = viewModel::clearCustomerDisplay,
                     )
                 }
 
