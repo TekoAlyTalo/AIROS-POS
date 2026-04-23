@@ -127,11 +127,14 @@ private val AppShellAccentText = Color(0xFF85F5E0)
 private const val CustomerDisplayLogTag = "SunmiCustomerDisplay"
 private const val NfcLogTag = "AIROS_NFC"
 private const val SunmiUiResultLogTag = "AIROS_SUNMI_UI_RESULT"
+private const val MenuPlaceResultSpotIdKey = "menu_place_result_spot_id"
+private const val MenuPlaceResultSpotLabelKey = "menu_place_result_spot_label"
 
 private object Routes {
     const val Auth = "auth"
     const val Shift = "shift"
     const val TableMap = "tablemap"
+    const val TableMapPattern = "tablemap?menuPlacePicker={menuPlacePicker}"
     const val Menu = "menu"
     const val Transactions = "transactions"
     const val MenuPattern = "menu?tableId={tableId}&tableLabel={tableLabel}&saleId={saleId}"
@@ -152,6 +155,14 @@ private object Routes {
             Menu
         } else {
             "$Menu?${queryParts.joinToString("&")}"
+        }
+    }
+
+    fun tableMap(menuPlacePicker: Boolean = false): String {
+        return if (menuPlacePicker) {
+            "$TableMap?menuPlacePicker=true"
+        } else {
+            TableMap
         }
     }
 
@@ -1110,8 +1121,17 @@ private fun SignedInApp(
                     )
                 }
 
-                composable(Routes.TableMap) {
+                composable(
+                    route = Routes.TableMapPattern,
+                    arguments = listOf(
+                        navArgument("menuPlacePicker") {
+                            type = NavType.BoolType
+                            defaultValue = false
+                        },
+                    ),
+                ) { entry ->
                     val context = LocalContext.current
+                    val menuPlacePicker = entry.arguments?.getBoolean("menuPlacePicker") ?: false
                     val viewModel: TableMapViewModel = viewModel(
                         key = "tablemap-$currentStaffId",
                         factory = TableMapViewModel.factory(
@@ -1131,8 +1151,16 @@ private fun SignedInApp(
                         state = state,
                         currentStaffId = currentStaffId,
                         preferRichFloorPlanStyle = useRichFloorPlanStyle,
+                        placeSelectionMode = menuPlacePicker,
                         cameraPreviewService = appContainer.cameraPreviewService,
                         onSelectTable = viewModel::selectTable,
+                        onSelectPlace = { tableId, tableLabel ->
+                            if (menuPlacePicker) {
+                                navController.previousBackStackEntry?.savedStateHandle?.set(MenuPlaceResultSpotIdKey, tableId)
+                                navController.previousBackStackEntry?.savedStateHandle?.set(MenuPlaceResultSpotLabelKey, tableLabel)
+                                navController.popBackStack()
+                            }
+                        },
                         onViewModeChange = viewModel::setViewMode,
                         onFloorPlanViewportChange = viewModel::setFloorPlanViewport,
                         onOpenTableSale = { tableId, tableLabel, saleId, source ->
@@ -1148,6 +1176,10 @@ private fun SignedInApp(
                                 }
                             } else if (source == TableSaleOpenSource.TABLE_TAP && transfer?.stage == TableTransferStage.PICKING_TARGET) {
                                 viewModel.transferSelectedBillsTo(tableId)
+                            } else if (menuPlacePicker) {
+                                navController.previousBackStackEntry?.savedStateHandle?.set(MenuPlaceResultSpotIdKey, tableId)
+                                navController.previousBackStackEntry?.savedStateHandle?.set(MenuPlaceResultSpotLabelKey, tableLabel)
+                                navController.popBackStack()
                             } else {
                                 val openBillCount = state.openChecksBySpotId[tableId]?.count ?: 0
                                 val blockTableTapMultiBill =
@@ -1237,6 +1269,7 @@ private fun SignedInApp(
                         },
                     ),
                 ) { entry ->
+                    val context = LocalContext.current
                     val tableId = entry.arguments?.getString("tableId")
                     val tableLabel = entry.arguments?.getString("tableLabel")
                     val saleId = entry.arguments?.getString("saleId")
@@ -1288,6 +1321,18 @@ private fun SignedInApp(
                         ),
                     )
                     val state by viewModel.uiState.collectAsState()
+                    val selectedSpotId by entry.savedStateHandle.getStateFlow<String?>(MenuPlaceResultSpotIdKey, null).collectAsState()
+                    val selectedSpotLabel by entry.savedStateHandle.getStateFlow<String?>(MenuPlaceResultSpotLabelKey, null).collectAsState()
+                    LaunchedEffect(viewModel, selectedSpotId, selectedSpotLabel) {
+                        val resolvedSpotId = selectedSpotId
+                        val resolvedSpotLabel = selectedSpotLabel
+                        if (resolvedSpotId.isNullOrBlank() || resolvedSpotLabel.isNullOrBlank()) {
+                            return@LaunchedEffect
+                        }
+                        entry.savedStateHandle.remove<String>(MenuPlaceResultSpotIdKey)
+                        entry.savedStateHandle.remove<String>(MenuPlaceResultSpotLabelKey)
+                        viewModel.requestServiceSpotAssignment(resolvedSpotId, resolvedSpotLabel)
+                    }
                     LaunchedEffect(viewModel, state.receiptHandoffWaiting) {
                         if (!state.receiptHandoffWaiting) {
                             return@LaunchedEffect
@@ -1313,7 +1358,24 @@ private fun SignedInApp(
                         onStartReceiptHandoff = viewModel::startReceiptHandoff,
                         onCancelReceiptHandoff = viewModel::cancelReceiptHandoff,
                         onOpenCashDrawer = viewModel::openCashDrawerManually,
-                        onAssignToServiceSpot = viewModel::requestServiceSpotAssignment,
+                        onStartNewSale = {
+                            scope.launch {
+                                runCatching {
+                                    appContainer.openSaleRepository.createOpenSale(null, null)
+                                }.onSuccess { sale ->
+                                    navController.navigate(Routes.menu(saleId = sale.saleId))
+                                }.onFailure { error ->
+                                    Toast.makeText(
+                                        context,
+                                        error.message ?: "Uutta laskua ei voitu avata.",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                            }
+                        },
+                        onOpenServiceSpotSelection = {
+                            navController.navigate(Routes.tableMap(menuPlacePicker = true))
+                        },
                         onScreenShown = viewModel::syncCustomerDisplayToCurrentTicket,
                         onScreenDisposed = viewModel::clearCustomerDisplay,
                     )
@@ -1813,6 +1875,7 @@ private fun isRailDestinationSelected(
     destinationRoute: String,
 ): Boolean {
     return when (destinationRoute) {
+        Routes.TableMap -> currentRoute == Routes.TableMap || currentRoute == Routes.TableMapPattern
         Routes.Menu -> currentRoute == Routes.Menu || currentRoute == Routes.MenuPattern
         else -> currentRoute == destinationRoute
     }

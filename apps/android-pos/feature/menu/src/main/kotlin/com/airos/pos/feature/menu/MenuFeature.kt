@@ -76,11 +76,8 @@ import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.model.MenuItem
 import com.airos.pos.core.model.PaymentEntry
 import com.airos.pos.core.model.PaymentMethod
-import com.airos.pos.core.model.RestaurantTable
-import com.airos.pos.core.model.ServiceSpotType
 import com.airos.pos.core.model.TablePaymentRequest
 import com.airos.pos.core.model.TablePaymentResult
-import com.airos.pos.core.model.TableStatus
 import com.airos.pos.core.model.ReceiptDocument
 import com.airos.pos.core.model.ReceiptHandoffPayload
 import com.airos.pos.core.model.TicketLine
@@ -98,6 +95,10 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.math.BigDecimal
 import java.math.RoundingMode
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import kotlin.math.roundToInt
 
 private val MenuShellColor = Color(0xFF0D151E)
@@ -112,6 +113,8 @@ private val MenuAccentTextColor = Color(0xFF85F5E0)
 private val MenuPageTabActiveColor = Color(0xFF235D73)
 private val PageTabShape = RoundedCornerShape(topStart = 18.dp, bottomStart = 18.dp, topEnd = 8.dp, bottomEnd = 8.dp)
 private const val MenuNfcLogTag = "AIROS_NFC"
+private val ReceiptOpenedAtFormatter: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm", Locale.getDefault())
 
 data class ProductGridConfig(
     val rows: Int = 3,
@@ -124,6 +127,7 @@ data class MenuUiState(
     val items: List<MenuItem> = emptyList(),
     val gridConfig: ProductGridConfig = ProductGridConfig(),
     val ticketLines: List<MenuTicketLine> = emptyList(),
+    val openedAtEpochMillis: Long? = null,
     val activeTableId: String? = null,
     val activeTableLabel: String? = null,
     val paymentInProgress: Boolean = false,
@@ -132,8 +136,6 @@ data class MenuUiState(
     val receiptHandoffWaiting: Boolean = false,
     val receiptHandoffMessage: String? = null,
     val manualDrawerInProgress: Boolean = false,
-    /** All floor-map service spots (tables + bar seats + future types) — used by the spot-assignment picker. */
-    val availableServiceSpots: List<RestaurantTable> = emptyList(),
 )
 
 data class MenuTicketLine(
@@ -208,13 +210,6 @@ class MenuViewModel(
                 mutableState.update { it.copy(items = items) }
             }
         }
-        tableRepository?.let { repo ->
-            viewModelScope.launch {
-                repo.observeFloorMap().collect { floorMap ->
-                    mutableState.update { it.copy(availableServiceSpots = floorMap.tables) }
-                }
-            }
-        }
         // Restore persisted open sale lines for this spot so that Menu reflects TableMap truth.
         // A non-null activeTableId means we were launched for a specific service spot; null = walk-in.
         openSaleRepository?.let { repo ->
@@ -236,6 +231,7 @@ class MenuViewModel(
                     }
                     mutableState.update {
                         it.copy(
+                            openedAtEpochMillis = existingSale.createdAtEpochMillis,
                             activeTableId = currentTableId,
                             activeTableLabel = currentTableLabel,
                             ticketLines = restored,
@@ -695,7 +691,10 @@ class MenuViewModel(
         currentTableId?.let(MenuTicketDraftStore::clear)
         customerDisplayService?.updateCustomerTotalDisplay(null)
         mutableState.update { currentState ->
-            currentState.copy(ticketLines = emptyList())
+            currentState.copy(
+                ticketLines = emptyList(),
+                openedAtEpochMillis = null,
+            )
         }
         if (saleId != null) {
             viewModelScope.launch { openSaleRepository?.closeOpenSale(saleId) }
@@ -738,6 +737,9 @@ class MenuViewModel(
             // Lazily create the open sale on first item add.
             val sale = repo.createOpenSale(currentTableId, currentTableLabel)
             currentSaleId = sale.saleId
+            mutableState.update { currentState ->
+                currentState.copy(openedAtEpochMillis = sale.createdAtEpochMillis)
+            }
             sale.saleId
         }
         repo.saveLines(saleId, lines.map { it.toPersistedLine(saleId) })
@@ -795,8 +797,8 @@ fun MenuScreen(
     onStartReceiptHandoff: () -> Unit,
     onCancelReceiptHandoff: () -> Unit,
     onOpenCashDrawer: (String) -> Unit,
-    /** Null when the feature is not wired (e.g. no TableRepository available). */
-    onAssignToServiceSpot: ((tableId: String, tableLabel: String) -> Unit)? = null,
+    onStartNewSale: () -> Unit,
+    onOpenServiceSpotSelection: (() -> Unit)? = null,
     onScreenShown: () -> Unit = {},
     onScreenDisposed: () -> Unit = {},
 ) {
@@ -978,6 +980,7 @@ fun MenuScreen(
             isProductDraggedOver = productDrag.overTicket,
             activeTableId = state.activeTableId,
             activeTableLabel = state.activeTableLabel,
+            openedAtEpochMillis = state.openedAtEpochMillis,
             ticketLines = state.ticketLines,
             totalTicketItems = totalTicketItems,
             ticketSubtotalCents = ticketSubtotalCents,
@@ -987,8 +990,8 @@ fun MenuScreen(
             receiptHandoffWaiting = state.receiptHandoffWaiting,
             receiptHandoffMessage = state.receiptHandoffMessage,
             manualDrawerInProgress = state.manualDrawerInProgress,
-            availableServiceSpots = state.availableServiceSpots,
-            onAssignToServiceSpot = onAssignToServiceSpot,
+            onStartNewSale = onStartNewSale,
+            onOpenServiceSpotSelection = onOpenServiceSpotSelection,
             onDecrementTicketLine = onDecrementTicketLine,
             onRemoveTicketLine = onRemoveTicketLine,
             onApplyLinePercentDiscount = onApplyLinePercentDiscount,
@@ -1435,6 +1438,7 @@ private fun RowScope.TicketPane(
     isProductDraggedOver: Boolean = false,
     activeTableId: String?,
     activeTableLabel: String?,
+    openedAtEpochMillis: Long?,
     ticketLines: List<MenuTicketLine>,
     totalTicketItems: Int,
     ticketSubtotalCents: Int,
@@ -1444,8 +1448,8 @@ private fun RowScope.TicketPane(
     receiptHandoffWaiting: Boolean,
     receiptHandoffMessage: String?,
     manualDrawerInProgress: Boolean,
-    availableServiceSpots: List<RestaurantTable> = emptyList(),
-    onAssignToServiceSpot: ((tableId: String, tableLabel: String) -> Unit)? = null,
+    onStartNewSale: () -> Unit,
+    onOpenServiceSpotSelection: (() -> Unit)? = null,
     onDecrementTicketLine: (String) -> Unit,
     onRemoveTicketLine: (String) -> Unit,
     onApplyLinePercentDiscount: (String, Int) -> Unit,
@@ -1457,7 +1461,6 @@ private fun RowScope.TicketPane(
     onOpenCashDrawer: (String) -> Unit,
 ) {
     var isPaymentDialogOpen by rememberSaveable { mutableStateOf(false) }
-    var isTablePickerOpen by rememberSaveable { mutableStateOf(false) }
     var isDrawerPinDialogOpen by rememberSaveable { mutableStateOf(false) }
     var selectedActionLineId by rememberSaveable { mutableStateOf<String?>(null) }
     var discountEditor by remember { mutableStateOf<LineDiscountEditorState?>(null) }
@@ -1505,40 +1508,52 @@ private fun RowScope.TicketPane(
                 .padding(horizontal = 18.dp, vertical = 20.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Column(
+            Row(
                 modifier = Modifier
                     .fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.Top,
             ) {
-                Text(
-                    text = buildReceiptTitle(activeTableId = activeTableId, activeTableLabel = activeTableLabel),
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MenuTextPrimary,
-                )
-                if (!activeTableLabel.isNullOrBlank() || !activeTableId.isNullOrBlank()) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
                     Text(
-                        text = buildReceiptSubtitle(
-                            activeTableId = activeTableId,
-                            activeTableLabel = activeTableLabel,
-                        ),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MenuTextSecondary,
+                        text = buildReceiptTitle(activeTableId = activeTableId, activeTableLabel = activeTableLabel),
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MenuTextPrimary,
                     )
+                    if (!activeTableLabel.isNullOrBlank() || !activeTableId.isNullOrBlank()) {
+                        Text(
+                            text = buildReceiptSubtitle(
+                                activeTableId = activeTableId,
+                                activeTableLabel = activeTableLabel,
+                            ),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MenuTextSecondary,
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .background(MenuBorderColor),
+                    )
+                    if (isProductDropTargetActive) {
+                        Text(
+                            text = if (isProductDraggedOver) "Drop product to add it to the receipt" else "Long-press and drag a product here",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isProductDraggedOver) MenuAccentTextColor else MenuTextSecondary,
+                        )
+                    }
                 }
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(1.dp)
-                        .background(MenuBorderColor),
+                OutlinedReceiptActionButton(
+                    label = "Uusi lasku",
+                    onClick = onStartNewSale,
+                    enabled = !paymentInProgress,
+                    modifier = Modifier.width(148.dp),
                 )
-                if (isProductDropTargetActive) {
-                    Text(
-                        text = if (isProductDraggedOver) "Drop product to add it to the receipt" else "Long-press and drag a product here",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (isProductDraggedOver) MenuAccentTextColor else MenuTextSecondary,
-                    )
-                }
             }
 
             Box(
@@ -1614,6 +1629,9 @@ private fun RowScope.TicketPane(
                         .height(1.dp)
                         .background(MenuBorderColor),
                 )
+                openedAtEpochMillis?.let { openedAt ->
+                    MenuKeyValueRow("Opened at:", formatReceiptOpenedAt(openedAt))
+                }
                 MenuKeyValueRow("Items", totalTicketItems.toString())
                 MenuKeyValueRow("Lines", ticketLines.size.toString())
                 MenuKeyValueRow("Subtotal", CentsFormatter.format(ticketSubtotalCents), emphasized = true)
@@ -1648,14 +1666,14 @@ private fun RowScope.TicketPane(
                         )
                     }
                 }
-                if (onAssignToServiceSpot != null) {
+                if (onOpenServiceSpotSelection != null) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         OutlinedReceiptActionButton(
-                            label = if (activeTableId == null) "Valitse paikka" else "Vaihda paikka",
-                            onClick = { isTablePickerOpen = true },
+                            label = if (activeTableId == null) "Lisää paikkaan" else "Vaihda paikkaan",
+                            onClick = { onOpenServiceSpotSelection?.invoke() },
                             modifier = Modifier.weight(1f),
                             enabled = !paymentInProgress,
                         )
@@ -1690,18 +1708,6 @@ private fun RowScope.TicketPane(
                         )
                     }
                 }
-            }
-
-            if (isTablePickerOpen && onAssignToServiceSpot != null) {
-                ServiceSpotPickerDialog(
-                    currentSpotId = activeTableId,
-                    spots = availableServiceSpots,
-                    onDismiss = { isTablePickerOpen = false },
-                    onSelectSpot = { spotId, spotLabel ->
-                        isTablePickerOpen = false
-                        onAssignToServiceSpot(spotId, spotLabel)
-                    },
-                )
             }
 
             if (isPaymentDialogOpen) {
@@ -2423,112 +2429,6 @@ private fun MenuKeyValueRow(
 }
 
 
-@Composable
-private fun ServiceSpotPickerDialog(
-    currentSpotId: String?,
-    spots: List<RestaurantTable>,
-    onDismiss: () -> Unit,
-    onSelectSpot: (spotId: String, spotLabel: String) -> Unit,
-) {
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = RoundedCornerShape(24.dp),
-            color = MenuPanelColor,
-            border = BorderStroke(1.dp, MenuBorderColor),
-            contentColor = MenuTextPrimary,
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Text(
-                    text = "Valitse paikka",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = MenuTextPrimary,
-                )
-
-                val otherSpots = spots.filterNot { it.id == currentSpotId }
-
-                if (otherSpots.isEmpty()) {
-                    Text(
-                        text = "Ei paikkoja saatavilla.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MenuTextSecondary,
-                    )
-                } else {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 360.dp)
-                            .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        otherSpots.forEach { spot ->
-                            val isOccupied = spot.status == TableStatus.OCCUPIED
-                            Surface(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { onSelectSpot(spot.id, spot.label) },
-                                shape = RoundedCornerShape(12.dp),
-                                color = if (isOccupied) MenuPanelAltColor.copy(alpha = 0.5f) else MenuPanelAltColor,
-                                border = BorderStroke(1.dp, MenuBorderColor),
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = spot.label,
-                                            style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = if (isOccupied) MenuTextMuted else MenuTextPrimary,
-                                        )
-                                        Text(
-                                            text = buildSpotSubtitle(spot),
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MenuTextSecondary,
-                                        )
-                                    }
-                                    Text(
-                                        text = when (spot.status) {
-                                            TableStatus.AVAILABLE -> "Vapaa"
-                                            TableStatus.OCCUPIED -> "Käytössä"
-                                            TableStatus.DIRTY -> "Siivottava"
-                                            TableStatus.RESERVED -> "Varaus"
-                                        },
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = if (isOccupied) MenuTextMuted else MenuAccentTextColor,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Button(
-                    onClick = onDismiss,
-                    modifier = Modifier.align(Alignment.End),
-                ) {
-                    Text("Peruuta")
-                }
-            }
-        }
-    }
-}
-
-private fun buildSpotSubtitle(spot: RestaurantTable): String {
-    val typeLabel = when (spot.spotType) {
-        ServiceSpotType.TABLE -> "Pöytä"
-        ServiceSpotType.BAR_SEAT -> "Baaripaikka"
-    }
-    return if (spot.areaName.isNotBlank()) "$typeLabel · ${spot.areaName}" else typeLabel
-}
-
 private fun buildReceiptTitle(
     activeTableId: String?,
     activeTableLabel: String?,
@@ -2564,6 +2464,10 @@ private fun buildEmptyReceiptMessage(
     } else {
         "Tap a product tile to start the receipt for $resolvedLabel."
     }
+}
+
+private fun formatReceiptOpenedAt(epochMillis: Long): String {
+    return ReceiptOpenedAtFormatter.format(Instant.ofEpochMilli(epochMillis).atZone(ZoneId.systemDefault()))
 }
 
 private data class MenuCategoryGroup(

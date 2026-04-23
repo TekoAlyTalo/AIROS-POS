@@ -646,8 +646,10 @@ fun TableMapScreen(
     state: TableMapUiState,
     currentStaffId: String?,
     preferRichFloorPlanStyle: Boolean = false,
+    placeSelectionMode: Boolean = false,
     cameraPreviewService: CameraPreviewService,
     onSelectTable: (String) -> Unit,
+    onSelectPlace: ((tableId: String, tableLabel: String) -> Unit)? = null,
     onViewModeChange: (StaffTableMapViewPreference) -> Unit,
     onFloorPlanViewportChange: (StaffFloorPlanViewportPreference) -> Unit,
     onOpenTableSale: (tableId: String, tableLabel: String, saleId: String?, source: TableSaleOpenSource) -> Unit,
@@ -799,6 +801,11 @@ fun TableMapScreen(
                 onTransferTargetSelected(table.id)
                 return
             }
+        }
+
+        if (placeSelectionMode && onSelectPlace != null) {
+            onSelectPlace(table.id, table.label)
+            return
         }
 
         onSelectTable(table.id)
@@ -967,7 +974,7 @@ LaunchedEffect(
                                     openCheckSummary = state.openChecksBySpotId[table.id],
                                     onClick = { handleTableTap(table) },
                                     onLongPress = {
-                                        if (!isPickingTransferTarget) {
+                                        if (!isPickingTransferTarget && !placeSelectionMode) {
                                             onStartTransferMode(table.id)
                                         }
                                     },
@@ -992,7 +999,7 @@ LaunchedEffect(
                                         ?: onSelectTable(tableId)
                                 },
                                 onLongPressTable = { tableId ->
-                                    if (!isPickingTransferTarget) {
+                                    if (!isPickingTransferTarget && !placeSelectionMode) {
                                         onStartTransferMode(tableId)
                                     }
                                 },
@@ -1054,6 +1061,7 @@ LaunchedEffect(
                     openSales = selectedOpenSales,
                     transferHistory = state.openSaleTransferEvents.filter { it.saleId in selectedOpenSaleIds },
                     transferState = transferState,
+                    placeSelectionMode = placeSelectionMode,
                     onOpenSale = { saleId -> onOpenTableSale(selectedTable.id, selectedTable.label, saleId, TableSaleOpenSource.BILL_ROW) },
                     onOpenNewSale = { onOpenTableSale(selectedTable.id, selectedTable.label, null, TableSaleOpenSource.NEW_SALE_BUTTON) },
                     onStartTransfer = { onStartTransferMode(selectedTable.id) },
@@ -1207,6 +1215,7 @@ private fun TableDetailsContent(
     openSales: List<PersistedOpenSale>,
     transferHistory: List<PersistedOpenSaleTransferEvent>,
     transferState: TableTransferState?,
+    placeSelectionMode: Boolean = false,
     onOpenSale: (String) -> Unit,
     onOpenNewSale: () -> Unit,
     onStartTransfer: () -> Unit,
@@ -1420,7 +1429,7 @@ private fun TableDetailsContent(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                                 Button(onClick = onOpenNewSale) {
-                                    Text("Avaa uusi lasku")
+                                    Text(if (placeSelectionMode) "Valitse pöytä" else "Avaa uusi lasku")
                                 }
                             }
                         }
@@ -1445,6 +1454,7 @@ private fun TableDetailsContent(
                                     OpenSaleActionRow(
                                         sale = sale,
                                         actionLabel = when {
+                                            placeSelectionMode -> "Napauta valitaksesi pöytä"
                                             transferForThisTable == null -> "Napauta avataksesi"
                                             selectedForTransfer -> "Valittu"
                                             selectionEnabled -> "Napauta valitaksesi"
@@ -1460,7 +1470,7 @@ private fun TableDetailsContent(
                                             }
                                         },
                                         onLongPress = {
-                                            if (transferForThisTable == null) {
+                                            if (transferForThisTable == null && !placeSelectionMode) {
                                                 onStartTransferForSale(sale.saleId)
                                             } else if (selectionEnabled && !selectedForTransfer) {
                                                 onToggleTransferSale(sale.saleId)
