@@ -131,17 +131,17 @@ class BackendTruthTableRepository(
         floorMap: FloorMap,
         openSales: List<PersistedOpenSale>,
     ) {
+        val backendTableIdByServiceSpotId = buildServiceSpotBackendTableIdMap(floorMap.tables)
         val floorTablesByBackendId = floorMap.tables
             .mapNotNull { table ->
                 table.backendTableId?.let { backendTableId -> backendTableId to table }
             }
             .toMap(linkedMapOf())
-        val backendTableIdByAlias = buildServiceSpotAliasMap(floorMap.tables)
         val openSalesByBackendTableId = openSales
             .mapNotNull { sale ->
                 val backendTableId = resolveBackendTableIdForOpenSale(
                     sale = sale,
-                    backendTableIdByAlias = backendTableIdByAlias,
+                    backendTableIdByServiceSpotId = backendTableIdByServiceSpotId,
                 )
                 if (backendTableId == null) {
                     Log.w(
@@ -196,7 +196,7 @@ class BackendTruthTableRepository(
     }
 
     private fun updateKnownBackendTableMappings(floorMap: FloorMap) {
-        latestBackendTableIdByServiceSpotId = buildServiceSpotAliasMap(floorMap.tables)
+        latestBackendTableIdByServiceSpotId = buildServiceSpotBackendTableIdMap(floorMap.tables)
     }
 }
 
@@ -506,33 +506,23 @@ private fun parseAttentionFlag(raw: String): TableAttentionFlag {
     }
 }
 
-private fun buildServiceSpotAliasMap(tables: List<RestaurantTable>): Map<String, Int> {
-    val aliases = linkedMapOf<String, Int>()
-    tables.forEach { table ->
-        val backendTableId = table.backendTableId ?: return@forEach
-        serviceSpotAliases(
-            serviceSpotId = table.id,
-            serviceSpotLabel = table.label,
-            backendTableId = backendTableId,
-        ).forEach { alias ->
-            aliases.putIfAbsent(alias, backendTableId)
+private fun buildServiceSpotBackendTableIdMap(tables: List<RestaurantTable>): Map<String, Int> {
+    return tables
+        .mapNotNull { table ->
+            val backendTableId = table.backendTableId ?: return@mapNotNull null
+            table.id
+                .takeIf { it.isNotBlank() }
+                ?.let { serviceSpotId -> serviceSpotId to backendTableId }
         }
-    }
-    return aliases
+        .toMap(linkedMapOf())
 }
 
 private fun resolveBackendTableIdForOpenSale(
     sale: PersistedOpenSale,
-    backendTableIdByAlias: Map<String, Int>,
+    backendTableIdByServiceSpotId: Map<String, Int>,
 ): Int? {
-    serviceSpotAliases(
-        serviceSpotId = sale.serviceSpotId,
-        serviceSpotLabel = sale.serviceSpotLabel,
-        backendTableId = null,
-    ).forEach { alias ->
-        backendTableIdByAlias[alias]?.let { return it }
-    }
-    return null
+    val serviceSpotId = sale.serviceSpotId?.takeIf { it.isNotBlank() } ?: return null
+    return backendTableIdByServiceSpotId[serviceSpotId]
 }
 
 private fun serviceSpotAliases(
