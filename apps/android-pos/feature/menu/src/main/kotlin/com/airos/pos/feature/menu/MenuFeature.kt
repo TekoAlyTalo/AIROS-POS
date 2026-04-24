@@ -76,6 +76,7 @@ import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.model.MenuItem
 import com.airos.pos.core.model.PaymentEntry
 import com.airos.pos.core.model.PaymentMethod
+import com.airos.pos.core.model.TableAttentionFlag
 import com.airos.pos.core.model.TablePaymentRequest
 import com.airos.pos.core.model.TablePaymentResult
 import com.airos.pos.core.model.ReceiptDocument
@@ -91,6 +92,9 @@ import com.airos.pos.domain.TableRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.math.BigDecimal
@@ -113,6 +117,8 @@ private val MenuAccentTextColor = Color(0xFF85F5E0)
 private val MenuPageTabActiveColor = Color(0xFF235D73)
 private val PageTabShape = RoundedCornerShape(topStart = 18.dp, bottomStart = 18.dp, topEnd = 8.dp, bottomEnd = 8.dp)
 private const val MenuNfcLogTag = "AIROS_NFC"
+private const val MenuCheckAddBlockedWarningMessage =
+    "Kuitti on CHECK-tilassa. Kuittaa CHECK ennen tuotteiden lisäämistä."
 private val ReceiptOpenedAtFormatter: DateTimeFormatter =
     DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm", Locale.getDefault())
 
@@ -130,6 +136,8 @@ data class MenuUiState(
     val openedAtEpochMillis: Long? = null,
     val activeTableId: String? = null,
     val activeTableLabel: String? = null,
+    val activeTableRequiresCheckAck: Boolean = false,
+    val showCheckAddBlockedWarning: Boolean = false,
     val paymentInProgress: Boolean = false,
     val paymentMessage: String? = null,
     val receiptHandoffPayload: ReceiptHandoffPayload? = null,
@@ -210,6 +218,55 @@ class MenuViewModel(
                 mutableState.update { it.copy(items = items) }
             }
         }
+        tableRepository?.let { repo ->
+            viewModelScope.launch {
+                mutableState
+                    .map { state -> state.activeTableId?.takeIf { tableId -> tableId.isNotBlank() } }
+                    .distinctUntilChanged()
+                    .collectLatest { tableId ->
+                        if (tableId == null) {
+                            mutableState.update { current ->
+                                if (!current.activeTableRequiresCheckAck && !current.showCheckAddBlockedWarning) {
+                                    current
+                                } else {
+                                    current.copy(
+                                        activeTableRequiresCheckAck = false,
+                                        showCheckAddBlockedWarning = false,
+                                    )
+                                }
+                            }
+                            return@collectLatest
+                        }
+
+                        mutableState.update { current ->
+                            if (!current.showCheckAddBlockedWarning) current
+                            else current.copy(showCheckAddBlockedWarning = false)
+                        }
+
+                        repo.observeTable(tableId).collect { table ->
+                            val requiresCheckAck = table?.attentionFlag == TableAttentionFlag.CHECK_TABLE
+                            mutableState.update { current ->
+                                val nextWarningVisible = if (requiresCheckAck) {
+                                    current.showCheckAddBlockedWarning
+                                } else {
+                                    false
+                                }
+                                if (
+                                    current.activeTableRequiresCheckAck == requiresCheckAck &&
+                                    current.showCheckAddBlockedWarning == nextWarningVisible
+                                ) {
+                                    current
+                                } else {
+                                    current.copy(
+                                        activeTableRequiresCheckAck = requiresCheckAck,
+                                        showCheckAddBlockedWarning = nextWarningVisible,
+                                    )
+                                }
+                            }
+                        }
+                    }
+            }
+        }
         // Restore persisted open sale lines for this spot so that Menu reflects TableMap truth.
         // A non-null activeTableId means we were launched for a specific service spot; null = walk-in.
         openSaleRepository?.let { repo ->
@@ -251,6 +308,13 @@ class MenuViewModel(
         customerDisplayService?.updateCustomerTotalDisplay(null)
     }
 
+    fun clearCheckAddBlockedWarning() {
+        mutableState.update { current ->
+            if (!current.showCheckAddBlockedWarning) current
+            else current.copy(showCheckAddBlockedWarning = false)
+        }
+    }
+
     private fun currentTicketTotalCentsOrNull(): Int? {
         return mutableState.value.ticketLines
             .takeIf { it.isNotEmpty() }
@@ -258,6 +322,13 @@ class MenuViewModel(
     }
 
     fun addToTicket(item: MenuItem) {
+        if (mutableState.value.activeTableRequiresCheckAck) {
+            mutableState.update { current ->
+                if (current.showCheckAddBlockedWarning) current
+                else current.copy(showCheckAddBlockedWarning = true)
+            }
+            return
+        }
         updateTicketLines { currentLines ->
             // A product appears at most once per ticket. When it is already on the ticket,
             // only the quantity is incremented — unitPriceCents is never updated, even if
@@ -799,6 +870,7 @@ fun MenuScreen(
     onOpenCashDrawer: (String) -> Unit,
     onStartNewSale: () -> Unit,
     onOpenServiceSpotSelection: (() -> Unit)? = null,
+    onAcknowledgeCheck: (() -> Unit)? = null,
     onScreenShown: () -> Unit = {},
     onScreenDisposed: () -> Unit = {},
 ) {
@@ -980,6 +1052,8 @@ fun MenuScreen(
             isProductDraggedOver = productDrag.overTicket,
             activeTableId = state.activeTableId,
             activeTableLabel = state.activeTableLabel,
+            activeTableRequiresCheckAck = state.activeTableRequiresCheckAck,
+            showCheckAddBlockedWarning = state.showCheckAddBlockedWarning,
             openedAtEpochMillis = state.openedAtEpochMillis,
             ticketLines = state.ticketLines,
             totalTicketItems = totalTicketItems,
@@ -992,6 +1066,7 @@ fun MenuScreen(
             manualDrawerInProgress = state.manualDrawerInProgress,
             onStartNewSale = onStartNewSale,
             onOpenServiceSpotSelection = onOpenServiceSpotSelection,
+            onAcknowledgeCheck = onAcknowledgeCheck,
             onDecrementTicketLine = onDecrementTicketLine,
             onRemoveTicketLine = onRemoveTicketLine,
             onApplyLinePercentDiscount = onApplyLinePercentDiscount,
@@ -1438,6 +1513,8 @@ private fun RowScope.TicketPane(
     isProductDraggedOver: Boolean = false,
     activeTableId: String?,
     activeTableLabel: String?,
+    activeTableRequiresCheckAck: Boolean,
+    showCheckAddBlockedWarning: Boolean,
     openedAtEpochMillis: Long?,
     ticketLines: List<MenuTicketLine>,
     totalTicketItems: Int,
@@ -1450,6 +1527,7 @@ private fun RowScope.TicketPane(
     manualDrawerInProgress: Boolean,
     onStartNewSale: () -> Unit,
     onOpenServiceSpotSelection: (() -> Unit)? = null,
+    onAcknowledgeCheck: (() -> Unit)? = null,
     onDecrementTicketLine: (String) -> Unit,
     onRemoveTicketLine: (String) -> Unit,
     onApplyLinePercentDiscount: (String, Int) -> Unit,
@@ -1635,6 +1713,45 @@ private fun RowScope.TicketPane(
                 MenuKeyValueRow("Items", totalTicketItems.toString())
                 MenuKeyValueRow("Lines", ticketLines.size.toString())
                 MenuKeyValueRow("Subtotal", CentsFormatter.format(ticketSubtotalCents), emphasized = true)
+                if (activeTableRequiresCheckAck) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(18.dp),
+                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.92f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.7f)),
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Text(
+                                text = MenuCheckAddBlockedWarningMessage,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            if (onAcknowledgeCheck != null) {
+                                Button(
+                                    onClick = onAcknowledgeCheck,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    enabled = !paymentInProgress,
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.error,
+                                        contentColor = MaterialTheme.colorScheme.onError,
+                                    ),
+                                ) {
+                                    Text(
+                                        text = "Kuittaa CHECK",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
                 paymentMessage?.let { message ->
                     Text(
                         text = message,

@@ -1376,6 +1376,56 @@ private fun SignedInApp(
                         onOpenServiceSpotSelection = {
                             navController.navigate(Routes.tableMap(menuPlacePicker = true))
                         },
+                        onAcknowledgeCheck = {
+                            scope.launch {
+                                val backendTruthRepository = appContainer.tableRepository as? BackendTruthTableRepository
+                                if (backendTruthRepository == null) {
+                                    Log.w(
+                                        "AIROS",
+                                        "[AirosPosApp] Menu CHECK acknowledge requested but tableRepository is not BackendTruthTableRepository.",
+                                    )
+                                    Toast.makeText(
+                                        context,
+                                        "CHECK acknowledge is not available in this build.",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                    return@launch
+                                }
+
+                                val backendTableId = state.activeTableId
+                                if (backendTableId.isNullOrBlank()) {
+                                    Toast.makeText(
+                                        context,
+                                        "No active table is selected for CHECK acknowledge.",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                    return@launch
+                                }
+
+                                val session = appContainer.authRepository.activeSession.value
+                                val acknowledged = withContext(Dispatchers.IO) {
+                                    backendTruthRepository.acknowledgeCheckTable(
+                                        tableId = backendTableId,
+                                        actorStaffId = session?.staffId,
+                                        actorDisplayName = session?.displayName,
+                                    )
+                                }
+
+                                if (acknowledged) {
+                                    viewModel.clearCheckAddBlockedWarning()
+                                }
+
+                                Toast.makeText(
+                                    context,
+                                    if (acknowledged) {
+                                        "CHECK acknowledged"
+                                    } else {
+                                        "CHECK acknowledge failed"
+                                    },
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                        },
                         onScreenShown = viewModel::syncCustomerDisplayToCurrentTicket,
                         onScreenDisposed = viewModel::clearCustomerDisplay,
                     )
@@ -1925,7 +1975,22 @@ private fun AppRail(
                     iconContainerColor = destination.iconContainerColor,
                     iconTint = destination.iconTint,
                     selected = isRailDestinationSelected(currentRoute, destination.route),
-                    onClick = { navController.navigate(destination.route) },
+                    onClick = {
+                        if (destination.route == Routes.TableMap) {
+                            val previousRoute = navController.previousBackStackEntry?.destination?.route
+                            when {
+                                isRailDestinationSelected(currentRoute, destination.route) -> Unit
+                                previousRoute == Routes.TableMap || previousRoute == Routes.TableMapPattern ->
+                                    navController.popBackStack()
+                                else ->
+                                    navController.navigate(Routes.tableMap()) {
+                                        launchSingleTop = true
+                                    }
+                            }
+                        } else {
+                            navController.navigate(destination.route)
+                        }
+                    },
                 )
             }
 
