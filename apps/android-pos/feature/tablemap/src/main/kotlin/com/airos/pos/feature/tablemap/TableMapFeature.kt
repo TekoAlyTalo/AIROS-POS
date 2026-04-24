@@ -1376,11 +1376,7 @@ private fun TableDetailsContent(
                 .fillMaxWidth()
                 .weight(1.25f, fill = true),
             shape = RoundedCornerShape(24.dp),
-            color = if (transferForThisTable != null) {
-                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
-            } else {
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
-            },
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
         ) {
             Column(
                 modifier = Modifier
@@ -1388,26 +1384,56 @@ private fun TableDetailsContent(
                     .padding(horizontal = 8.dp, vertical = 6.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                if (transferForThisTable != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Avoimet laskut",
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    transferForThisTable?.let { transfer ->
+                        Surface(
+                            shape = RoundedCornerShape(999.dp),
+                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+                        ) {
+                            Text(
+                                text = when (transfer.stage) {
+                                    TableTransferStage.SELECTING_BILLS -> "Valitse laskut"
+                                    TableTransferStage.PICKING_TARGET -> "Valitse kohdep\u00f6yt\u00e4"
+                                },
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                        TextButton(
+                            onClick = onCancelTransferMode,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                            modifier = Modifier.height(32.dp),
+                        ) {
+                            Text("Peruuta")
+                        }
+                    }
+                }
+                if (false && transferForThisTable != null) {
                     Text(
                         text = "Siirtotila",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        text = if (transferForThisTable.stage == TableTransferStage.PICKING_TARGET) {
+                        text = if (transferForThisTable?.stage == TableTransferStage.PICKING_TARGET) {
                             "Valitse kohdepöytä gridistä tai floor planista."
                         } else {
                             "Napauta siirrettävät laskut. Kun valinta on tehty, napauta kohdepöytää gridistä tai floor planista."
                         },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    Text(
-                        text = "Avoimet laskut",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
                     )
                 }
 
@@ -1486,7 +1512,7 @@ private fun TableDetailsContent(
                     }
                 }
 
-                if (transferForThisTable != null) {
+                if (false && transferForThisTable != null) {
                     OutlinedButton(
                         onClick = onCancelTransferMode,
                         modifier = Modifier.fillMaxWidth(),
