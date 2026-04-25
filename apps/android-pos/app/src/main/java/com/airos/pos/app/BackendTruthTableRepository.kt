@@ -7,6 +7,7 @@ import com.airos.pos.core.model.PersistedOpenSale
 import com.airos.pos.core.model.RestaurantTable
 import com.airos.pos.core.model.ServiceSpotType
 import com.airos.pos.core.model.TableAttentionFlag
+import com.airos.pos.core.model.TableOperationalFlag
 import com.airos.pos.core.model.TablePosition
 import com.airos.pos.core.model.TableStatus
 import com.airos.pos.core.model.TableTruthSource
@@ -121,6 +122,26 @@ class BackendTruthTableRepository(
             return false
         }
         return client.postAcknowledgeCheck(
+            backendTableId = backendTableId,
+            actorStaffId = actorStaffId,
+            actorDisplayName = actorDisplayName,
+        )
+    }
+
+    suspend fun markCleanedTable(
+        tableId: String,
+        actorStaffId: String? = null,
+        actorDisplayName: String? = null,
+    ): Boolean {
+        val backendTableId = latestBackendTableIdByServiceSpotId[tableId]
+        if (backendTableId == null) {
+            Log.w(
+                "AIROS",
+                "[BackendTruthTableRepository] mark-cleaned rejected for unmapped service spot id=$tableId",
+            )
+            return false
+        }
+        return client.postMarkCleaned(
             backendTableId = backendTableId,
             actorStaffId = actorStaffId,
             actorDisplayName = actorDisplayName,
@@ -279,9 +300,35 @@ private class BackendTableTruthClient(
         backendTableId: Int,
         actorStaffId: String? = null,
         actorDisplayName: String? = null,
+    ): Boolean = postTableAction(
+        backendTableId = backendTableId,
+        pathSegment = "acknowledge-check",
+        logLabel = "acknowledge-check",
+        actorStaffId = actorStaffId,
+        actorDisplayName = actorDisplayName,
+    )
+
+    suspend fun postMarkCleaned(
+        backendTableId: Int,
+        actorStaffId: String? = null,
+        actorDisplayName: String? = null,
+    ): Boolean = postTableAction(
+        backendTableId = backendTableId,
+        pathSegment = "mark-cleaned",
+        logLabel = "mark-cleaned",
+        actorStaffId = actorStaffId,
+        actorDisplayName = actorDisplayName,
+    )
+
+    private suspend fun postTableAction(
+        backendTableId: Int,
+        pathSegment: String,
+        logLabel: String,
+        actorStaffId: String? = null,
+        actorDisplayName: String? = null,
     ): Boolean = withContext(Dispatchers.IO) {
         val baseUrl = normalizedBaseUrl() ?: return@withContext false
-        val urlString = "$baseUrl/tables/$backendTableId/acknowledge-check"
+        val urlString = "$baseUrl/tables/$backendTableId/$pathSegment"
         val payload = JSONObject().apply {
             if (actorStaffId != null) put("actor_staff_id", actorStaffId)
             if (actorDisplayName != null) put("actor_display_name", actorDisplayName)
@@ -305,12 +352,12 @@ private class BackendTableTruthClient(
             val statusCode = connection.responseCode
             readStream(if (statusCode in 200..299) connection.inputStream else connection.errorStream)
             if (statusCode !in 200..299) {
-                log("acknowledge-check rejected status=$statusCode")
+                log("$logLabel rejected status=$statusCode")
                 return@withContext false
             }
             true
         } catch (t: Throwable) {
-            log("acknowledge-check failed: ${t.javaClass.simpleName}: ${t.message.orEmpty()}")
+            log("$logLabel failed: ${t.javaClass.simpleName}: ${t.message.orEmpty()}")
             false
         } finally {
             connection?.disconnect()
@@ -363,6 +410,7 @@ private class BackendTableTruthClient(
                 cameraLabel = item.optStringOrNull("camera_label"),
                 state = item.optString("state", "READY"),
                 attentionFlag = parseAttentionFlag(item.optString("attention_flag", "NONE")),
+                operationalFlags = parseOperationalFlags(item.optJSONArray("operational_flags")),
                 emptyAnchorTime = item.optStringOrNull("empty_anchor_time"),
                 reviewAnchorTime = item.optStringOrNull("review_anchor_time"),
                 reviewFrom = item.optStringOrNull("review_from"),
@@ -405,6 +453,7 @@ private data class BackendTableTruth(
     val cameraLabel: String?,
     val state: String,
     val attentionFlag: TableAttentionFlag,
+    val operationalFlags: Set<TableOperationalFlag>,
     val emptyAnchorTime: String?,
     val reviewAnchorTime: String?,
     val reviewFrom: String?,
@@ -415,11 +464,19 @@ private data class BackendTableTruth(
 
     val tableStatus: TableStatus
         get() = when (state.trim().uppercase()) {
-            "FREE" -> TableStatus.AVAILABLE
+            "FREE" -> if (TableOperationalFlag.NEEDS_CLEANING in operationalFlags) {
+                TableStatus.DIRTY
+            } else {
+                TableStatus.AVAILABLE
+            }
             "OCCUPIED" -> TableStatus.OCCUPIED
             "NEEDS_CLEANING", "DIRTY" -> TableStatus.DIRTY
             "RESERVED" -> TableStatus.RESERVED
-            else -> TableStatus.AVAILABLE
+            else -> if (TableOperationalFlag.NEEDS_CLEANING in operationalFlags) {
+                TableStatus.DIRTY
+            } else {
+                TableStatus.AVAILABLE
+            }
         }
 }
 
@@ -429,6 +486,7 @@ private fun RestaurantTable.withBackendTruth(truth: BackendTableTruth): Restaura
         status = truth.tableStatus,
         guestCount = truth.currentPersons,
         attentionFlag = truth.attentionFlag,
+        operationalFlags = truth.operationalFlags,
         emptyAnchorTime = truth.emptyAnchorTime,
         reviewAnchorTime = truth.reviewAnchorTime,
         reviewFrom = truth.reviewFrom,
@@ -478,6 +536,7 @@ private fun buildAuthoritativeBackendTable(
         cameraId = backendTruth.cameraId,
         cameraLabel = backendTruth.cameraLabel ?: backendTruth.cameraId,
         attentionFlag = backendTruth.attentionFlag,
+        operationalFlags = backendTruth.operationalFlags,
         emptyAnchorTime = backendTruth.emptyAnchorTime,
         reviewAnchorTime = backendTruth.reviewAnchorTime,
         reviewFrom = backendTruth.reviewFrom,
@@ -504,6 +563,18 @@ private fun parseAttentionFlag(raw: String): TableAttentionFlag {
         "CHECK_TABLE" -> TableAttentionFlag.CHECK_TABLE
         else -> TableAttentionFlag.NONE
     }
+}
+
+private fun parseOperationalFlags(raw: JSONArray?): Set<TableOperationalFlag> {
+    if (raw == null || raw.length() == 0) return emptySet()
+    val flags = linkedSetOf<TableOperationalFlag>()
+    for (index in 0 until raw.length()) {
+        when (raw.optString(index).trim().uppercase()) {
+            "CHECK" -> flags += TableOperationalFlag.CHECK
+            "NEEDS_CLEANING" -> flags += TableOperationalFlag.NEEDS_CLEANING
+        }
+    }
+    return flags
 }
 
 private fun buildServiceSpotBackendTableIdMap(tables: List<RestaurantTable>): Map<String, Int> {

@@ -154,6 +154,12 @@ enum class TableSaleOpenSource {
     BILL_ROW,
     NEW_SALE_BUTTON,
 }
+
+enum class TableAcknowledgeActionKind {
+    CHECK,
+    NEEDS_CLEANING,
+}
+
 data class TableTransferState(
     val sourceSpotId: String,
     val sourceSpotLabel: String,
@@ -662,7 +668,7 @@ fun TableMapScreen(
     onOpenLivePreview: () -> Unit,
     onRetryLivePreview: () -> Unit,
     onCloseLivePreview: () -> Unit,
-    onAcknowledgeCheck: ((String) -> Unit)? = null,
+    onAcknowledgeTableAction: ((String, TableAcknowledgeActionKind) -> Unit)? = null,
 ) {
     val viewMode = state.viewMode.toTableMapViewMode()
     val floorPlanStyle = if (preferRichFloorPlanStyle) FloorPlanVisualStyle.RICH else FloorPlanVisualStyle.SIMPLE
@@ -1070,8 +1076,8 @@ LaunchedEffect(
                     onBeginTransferTargetSelection = onBeginTransferTargetSelection,
                     onCancelTransferMode = onCancelTransferMode,
                     onOpenLivePreview = onOpenLivePreview,
-                    onAcknowledgeCheck = onAcknowledgeCheck?.let { callback ->
-                        { callback(selectedTable.id) }
+                    onAcknowledgeTableAction = onAcknowledgeTableAction?.let { callback ->
+                        { actionKind -> callback(selectedTable.id, actionKind) }
                     },
                     onBillDragStartInRoot = { saleCount, positionInRoot ->
                         billDrag = BillDragUiState(
@@ -1224,7 +1230,7 @@ private fun TableDetailsContent(
     onBeginTransferTargetSelection: () -> Unit,
     onCancelTransferMode: () -> Unit,
     onOpenLivePreview: () -> Unit,
-    onAcknowledgeCheck: (() -> Unit)? = null,
+    onAcknowledgeTableAction: ((TableAcknowledgeActionKind) -> Unit)? = null,
     onBillDragStartInRoot: (selectedSaleCount: Int, positionInRoot: Offset) -> Unit = { _, _ -> },
     onBillDragMoveInRoot: (positionInRoot: Offset) -> Unit = {},
     onBillDragEnd: () -> Unit = {},
@@ -1235,6 +1241,7 @@ private fun TableDetailsContent(
         attentionFlag = table.attentionFlag,
     )
     val statusTick = rememberStatusTickPresentation(displayStatus)
+    val acknowledgeActionKind = displayStatus.acknowledgeActionFor(statusTick.label)
     val mergedHint = mergedHintFor(table)
     val physicalReviewDetail = remember(
         table.emptyAnchorTime,
@@ -1358,15 +1365,15 @@ private fun TableDetailsContent(
                 }
             }
 
-            if (displayStatus.hasCheckAttention) {
+            if (acknowledgeActionKind != null) {
                 OutlinedButton(
-                    onClick = { onAcknowledgeCheck?.invoke() },
-                    enabled = onAcknowledgeCheck != null,
+                    onClick = { onAcknowledgeTableAction?.invoke(acknowledgeActionKind) },
+                    enabled = onAcknowledgeTableAction != null,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(42.dp),
                 ) {
-                    Text("Acknowledge CHECK")
+                    Text(acknowledgeActionKind.buttonLabel())
                 }
             }
         }
@@ -1926,6 +1933,25 @@ private fun filterTablesForArea(
         return tables
     }
     return tables.filter { it.areaName.trim().ifBlank { "Unassigned" } == selectedAreaName }
+}
+
+private fun TableDisplayStatus.acknowledgeActionFor(
+    statusTickLabel: String,
+): TableAcknowledgeActionKind? {
+    val showingCheckTick = hasCheckAttention && statusTickLabel.equals("CHECK", ignoreCase = true)
+    return when {
+        showingCheckTick -> TableAcknowledgeActionKind.CHECK
+        kind == TableDisplayStatusKind.DIRTY -> TableAcknowledgeActionKind.NEEDS_CLEANING
+        hasCheckAttention -> TableAcknowledgeActionKind.CHECK
+        else -> null
+    }
+}
+
+private fun TableAcknowledgeActionKind.buttonLabel(): String {
+    return when (this) {
+        TableAcknowledgeActionKind.CHECK -> "Acknowledge CHECK"
+        TableAcknowledgeActionKind.NEEDS_CLEANING -> "Mark cleaned"
+    }
 }
 
 private fun TableDisplayStatus.tickerKinds(): List<TableTickerEntryKind> {

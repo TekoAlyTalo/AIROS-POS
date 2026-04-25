@@ -99,6 +99,7 @@ import com.airos.pos.feature.settings.SettingsViewModel
 import com.airos.pos.feature.shift.DeviceDiagnosticsScreen
 import com.airos.pos.feature.shift.ShiftScreen
 import com.airos.pos.feature.shift.ShiftViewModel
+import com.airos.pos.feature.tablemap.TableAcknowledgeActionKind
 import com.airos.pos.feature.tablemap.TableMapScreen
 import com.airos.pos.feature.tablemap.TableMapViewModel
 import com.airos.pos.feature.tablemap.TableSaleOpenSource
@@ -1206,17 +1207,17 @@ private fun SignedInApp(
                         onOpenLivePreview = viewModel::openLivePreview,
                         onRetryLivePreview = viewModel::retryLivePreview,
                         onCloseLivePreview = viewModel::closeLivePreview,
-                        onAcknowledgeCheck = { tableId ->
+                        onAcknowledgeTableAction = { tableId, actionKind ->
                             scope.launch {
                                 val backendTruthRepository = appContainer.tableRepository as? BackendTruthTableRepository
                                 if (backendTruthRepository == null) {
                                     Log.w(
                                         "AIROS",
-                                        "[AirosPosApp] CHECK acknowledge requested but tableRepository is not BackendTruthTableRepository.",
+                                        "[AirosPosApp] table action acknowledge requested but tableRepository is not BackendTruthTableRepository.",
                                     )
                                     Toast.makeText(
                                         context,
-                                        "CHECK acknowledge is not available in this build.",
+                                        "Table acknowledgement is not available in this build.",
                                         Toast.LENGTH_SHORT,
                                     ).show()
                                     return@launch
@@ -1224,19 +1225,32 @@ private fun SignedInApp(
 
                                 val session = appContainer.authRepository.activeSession.value
                                 val acknowledged = withContext(Dispatchers.IO) {
-                                    backendTruthRepository.acknowledgeCheckTable(
-                                        tableId = tableId,
-                                        actorStaffId = session?.staffId,
-                                        actorDisplayName = session?.displayName,
-                                    )
+                                    when (actionKind) {
+                                        TableAcknowledgeActionKind.CHECK ->
+                                            backendTruthRepository.acknowledgeCheckTable(
+                                                tableId = tableId,
+                                                actorStaffId = session?.staffId,
+                                                actorDisplayName = session?.displayName,
+                                            )
+                                        TableAcknowledgeActionKind.NEEDS_CLEANING ->
+                                            backendTruthRepository.markCleanedTable(
+                                                tableId = tableId,
+                                                actorStaffId = session?.staffId,
+                                                actorDisplayName = session?.displayName,
+                                            )
+                                    }
+                                }
+                                val actionLabel = when (actionKind) {
+                                    TableAcknowledgeActionKind.CHECK -> "CHECK"
+                                    TableAcknowledgeActionKind.NEEDS_CLEANING -> "Cleaning"
                                 }
 
                                 Toast.makeText(
                                     context,
                                     if (acknowledged) {
-                                        "CHECK acknowledged"
+                                        "$actionLabel acknowledged"
                                     } else {
-                                        "CHECK acknowledge failed"
+                                        "$actionLabel acknowledge failed"
                                     },
                                     Toast.LENGTH_SHORT,
                                 ).show()

@@ -172,6 +172,11 @@ enum class TableAttentionFlag {
     CHECK_TABLE,
 }
 
+enum class TableOperationalFlag {
+    CHECK,
+    NEEDS_CLEANING,
+}
+
 enum class TableTruthSource {
     LOCAL,
     BACKEND,
@@ -209,6 +214,7 @@ data class RestaurantTable(
     val cameraId: String? = null,
     val cameraLabel: String? = null,
     val attentionFlag: TableAttentionFlag = TableAttentionFlag.NONE,
+    val operationalFlags: Set<TableOperationalFlag> = emptySet(),
     val emptyAnchorTime: String? = null,
     val reviewAnchorTime: String? = null,
     val reviewFrom: String? = null,
