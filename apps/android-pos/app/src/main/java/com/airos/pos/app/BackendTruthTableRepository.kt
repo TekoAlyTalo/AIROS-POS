@@ -445,49 +445,80 @@ private class BackendTableTruthClient(
         if (items.length() == 0) return null
         val item = items.optJSONObject(0) ?: return null
         val mapId = item.optStringOrNull("map_id") ?: item.optStringOrNull("mapId") ?: return null
-        val name = item.optStringOrNull("name") ?: "Floor plan"
+        val name = item.optStringOrNull("name") ?: return null
+        val mapWidth = item.optFloatOrNull("width") ?: return null
+        val mapHeight = item.optFloatOrNull("height") ?: return null
+        val pxPerMeter = item.optFloatOrNull("px_per_meter") ?: item.optFloatOrNull("pxPerMeter")
+        val scaleStatus = item.optStringOrNull("scale_status") ?: item.optStringOrNull("scaleStatus")
+
         val floorTiles = item.optJSONArray("floor_tiles") ?: item.optJSONArray("floorTiles")
         val areas = mutableListOf<FloorMapArea>()
         if (floorTiles != null) {
             for (index in 0 until floorTiles.length()) {
                 val tile = floorTiles.optJSONObject(index) ?: continue
-                val shape = tile.optString("shape", "rectangle").trim().lowercase()
-                if (shape != "rectangle") continue
-                val label = tile.optStringOrNull("label") ?: "Area ${index + 1}"
+                val x = tile.optFloatOrNull("x") ?: continue
+                val y = tile.optFloatOrNull("y") ?: continue
+                val width = tile.optFloatOrNull("width") ?: continue
+                val height = tile.optFloatOrNull("height") ?: continue
                 areas += FloorMapArea(
-                    id = tile.optStringOrNull("id") ?: "area-$index",
-                    label = label,
-                    x = tile.optDouble("x", 0.0).roundToInt(),
-                    y = tile.optDouble("y", 0.0).roundToInt(),
-                    width = tile.optDouble("width", 0.0).roundToInt().coerceAtLeast(1),
-                    height = tile.optDouble("height", 0.0).roundToInt().coerceAtLeast(1),
+                    id = tile.optStringOrNull("id") ?: return null,
+                    label = tile.optStringOrNull("label").orEmpty(),
+                    x = x.roundToInt(),
+                    y = y.roundToInt(),
+                    width = width.roundToInt().coerceAtLeast(1),
+                    height = height.roundToInt().coerceAtLeast(1),
+                    xPx = x,
+                    yPx = y,
+                    widthPx = width.coerceAtLeast(0.01f),
+                    heightPx = height.coerceAtLeast(0.01f),
+                    shape = tile.optStringOrNull("shape") ?: "rectangle",
+                    rotation = tile.optFloatOrNull("rotation") ?: 0f,
+                    locked = tile.optBoolean("locked", false),
+                    hidden = tile.optBoolean("hidden", false),
+                    areaType = tile.optStringOrNull("areaType") ?: tile.optStringOrNull("area_type"),
+                    surfaceMaterial = tile.optStringOrNull("surfaceMaterial") ?: tile.optStringOrNull("surface_material"),
+                    p1XPercent = tile.optFloatOrNull("p1XPercent") ?: tile.optFloatOrNull("p1_x_percent"),
+                    p1YPercent = tile.optFloatOrNull("p1YPercent") ?: tile.optFloatOrNull("p1_y_percent"),
+                    p2XPercent = tile.optFloatOrNull("p2XPercent") ?: tile.optFloatOrNull("p2_x_percent"),
+                    p2YPercent = tile.optFloatOrNull("p2YPercent") ?: tile.optFloatOrNull("p2_y_percent"),
+                    p3XPercent = tile.optFloatOrNull("p3XPercent") ?: tile.optFloatOrNull("p3_x_percent"),
+                    p3YPercent = tile.optFloatOrNull("p3YPercent") ?: tile.optFloatOrNull("p3_y_percent"),
+                    apexXPercent = tile.optFloatOrNull("apexXPercent") ?: tile.optFloatOrNull("apex_x_percent"),
                 )
             }
         }
+
         val objects = item.optJSONArray("objects")
         val floorPlanObjects = mutableListOf<FloorMapObject>()
         val tableObjects = mutableListOf<BackendFloorPlanTableObject>()
         if (objects != null) {
             for (index in 0 until objects.length()) {
                 val obj = objects.optJSONObject(index) ?: continue
-                val type = obj.optString("type", "").trim().lowercase()
-                if (type.isBlank()) continue
-                val objectId = obj.optStringOrNull("id") ?: "floor-object-$index"
-                val label = obj.optStringOrNull("label") ?: type
-                val x = obj.optDouble("x", 0.0).toFloat()
-                val y = obj.optDouble("y", 0.0).toFloat()
-                val width = obj.optDouble("width", if (type == "table") BACKEND_TABLE_WIDTH.toDouble() else 1.0).toFloat()
-                val height = obj.optDouble("height", if (type == "table") BACKEND_TABLE_HEIGHT.toDouble() else 1.0).toFloat()
+                val type = obj.optStringOrNull("type")?.trim()?.lowercase() ?: continue
+                val objectId = obj.optStringOrNull("id") ?: return null
+                val label = obj.optStringOrNull("label").orEmpty()
+                val x = obj.optFloatOrNull("x") ?: continue
+                val y = obj.optFloatOrNull("y") ?: continue
+                val width = obj.optFloatOrNull("width") ?: continue
+                val height = obj.optFloatOrNull("height") ?: continue
+                val rotation = obj.optFloatOrNull("rotation") ?: 0f
+                val tableNumber = obj.optIntOrNull("tableNumber") ?: obj.optIntOrNull("table_number")
+                val capacity = obj.optIntOrNull("capacity")
+                val shape = obj.optStringOrNull("shape")
+                val chairLayout = obj.optStringOrNull("chairLayout") ?: obj.optStringOrNull("chair_layout")
                 if (type == "table") {
                     tableObjects += BackendFloorPlanTableObject(
                         id = objectId,
                         label = label,
-                        tableNumber = obj.optIntOrNull("tableNumber") ?: obj.optIntOrNull("table_number"),
-                        capacity = obj.optIntOrNull("capacity"),
+                        tableNumber = tableNumber,
+                        capacity = capacity,
                         x = x,
                         y = y,
                         width = width,
                         height = height,
+                        rotation = rotation,
+                        shape = shape,
+                        chairLayout = chairLayout,
                     )
                 } else {
                     floorPlanObjects += FloorMapObject(
@@ -498,8 +529,21 @@ private class BackendTableTruthClient(
                         y = y.roundToInt(),
                         width = width.roundToInt().coerceAtLeast(1),
                         height = height.roundToInt().coerceAtLeast(1),
-                        rotation = obj.optDouble("rotation", 0.0).toFloat(),
+                        xPx = x,
+                        yPx = y,
+                        widthPx = width.coerceAtLeast(0.01f),
+                        heightPx = height.coerceAtLeast(0.01f),
+                        rotation = rotation,
+                        locked = obj.optBoolean("locked", false),
                         hidden = obj.optBoolean("hidden", false),
+                        shape = shape,
+                        chairLayout = chairLayout,
+                        capacity = capacity,
+                        tableNumber = tableNumber,
+                        cameraId = obj.optStringOrNull("cameraId") ?: obj.optStringOrNull("camera_id"),
+                        coverageType = obj.optStringOrNull("coverageType") ?: obj.optStringOrNull("coverage_type"),
+                        linkedTargetType = obj.optStringOrNull("linkedTargetType") ?: obj.optStringOrNull("linked_target_type"),
+                        linkedTargetId = obj.optStringOrNull("linkedTargetId") ?: obj.optStringOrNull("linked_target_id"),
                         doorHingeSide = obj.optStringOrNull("doorHingeSide") ?: obj.optStringOrNull("door_hinge_side"),
                         doorSwingDirection = obj.optStringOrNull("doorSwingDirection") ?: obj.optStringOrNull("door_swing_direction"),
                     )
@@ -509,14 +553,15 @@ private class BackendTableTruthClient(
         return BackendFloorPlanSnapshot(
             mapId = mapId,
             name = name,
-            width = item.optInt("width", 0),
-            height = item.optInt("height", 0),
+            width = mapWidth,
+            height = mapHeight,
+            pxPerMeter = pxPerMeter,
+            scaleStatus = scaleStatus,
             areas = areas,
             objects = floorPlanObjects,
             tableObjects = tableObjects,
         )
     }
-
     private fun parseTableOverview(body: String): Map<Int, BackendTableTruth> {
         if (body.isBlank()) return emptyMap()
         val root = JSONObject(body)
@@ -572,8 +617,10 @@ private class BackendTableTruthClient(
 private data class BackendFloorPlanSnapshot(
     val mapId: String,
     val name: String,
-    val width: Int,
-    val height: Int,
+    val width: Float,
+    val height: Float,
+    val pxPerMeter: Float?,
+    val scaleStatus: String?,
     val areas: List<FloorMapArea>,
     val objects: List<FloorMapObject>,
     val tableObjects: List<BackendFloorPlanTableObject>,
@@ -588,11 +635,13 @@ private data class BackendFloorPlanTableObject(
     val y: Float,
     val width: Float,
     val height: Float,
+    val rotation: Float,
+    val shape: String?,
+    val chairLayout: String?,
 ) {
     val inferredBackendTableId: Int?
-        get() = extractTrailingInteger(label) ?: tableNumber
+        get() = tableNumber ?: extractTrailingInteger(label)
 }
-
 private data class BackendTableTruth(
     val tableId: Int,
     val tableName: String,
@@ -649,87 +698,92 @@ private fun buildAuthoritativeBackendFloorMap(
     backendTruthByTableId: Map<Int, BackendTableTruth>,
     floorPlan: BackendFloorPlanSnapshot?,
 ): FloorMap {
-    val currentTablesById = currentFloorMap.tables.associateBy(RestaurantTable::id)
-    val floorPlanTables = floorPlan?.tableObjects
-        .orEmpty()
-        .map { tableObject ->
-            val backendTableId = tableObject.inferredBackendTableId
-            val backendTruth = backendTableId?.let { backendTruthByTableId[it] }
-            val truthTableId = backendTruth?.posTableId
-            val serviceSpotId = truthTableId ?: tableObject.id
-            val currentTable = currentTablesById[serviceSpotId]
-            val position = TablePosition(
-                x = tableObject.x.roundToInt(),
-                y = tableObject.y.roundToInt(),
-                width = tableObject.width.roundToInt().coerceAtLeast(1),
-                height = tableObject.height.roundToInt().coerceAtLeast(1),
-            )
-            val areaName = resolveAreaNameForPosition(
-                areas = floorPlan?.areas.orEmpty(),
-                position = position,
-            ) ?: currentTable?.areaName ?: BACKEND_DEFAULT_AREA_NAME
-            RestaurantTable(
-                id = serviceSpotId,
-                backendTableId = backendTruth?.tableId,
-                label = tableObject.label.ifBlank { backendTruth?.tableName ?: "Table" },
-                areaName = areaName,
-                seats = tableObject.capacity?.takeIf { it > 0 } ?: backendTruth?.capacity ?: 1,
-                status = backendTruth?.tableStatus ?: currentTable?.status ?: TableStatus.AVAILABLE,
-                guestCount = backendTruth?.currentPersons ?: currentTable?.guestCount ?: 0,
-                activeTicketId = currentTable?.activeTicketId,
-                position = position,
-                cameraId = backendTruth?.cameraId ?: currentTable?.cameraId,
-                cameraLabel = backendTruth?.cameraLabel ?: backendTruth?.cameraId ?: currentTable?.cameraLabel,
-                attentionFlag = backendTruth?.attentionFlag ?: currentTable?.attentionFlag ?: TableAttentionFlag.NONE,
-                operationalFlags = backendTruth?.operationalFlags ?: currentTable?.operationalFlags ?: emptySet(),
-                emptyAnchorTime = backendTruth?.emptyAnchorTime ?: currentTable?.emptyAnchorTime,
-                reviewAnchorTime = backendTruth?.reviewAnchorTime ?: currentTable?.reviewAnchorTime,
-                reviewFrom = backendTruth?.reviewFrom ?: currentTable?.reviewFrom,
-                reviewTo = backendTruth?.reviewTo ?: currentTable?.reviewTo,
-                truthSource = if (backendTruth != null) TableTruthSource.BACKEND else currentTable?.truthSource ?: TableTruthSource.LOCAL,
-                spotType = currentTable?.spotType ?: ServiceSpotType.TABLE,
-            )
-        }
+    if (floorPlan == null) {
+        return FloorMap(
+            id = BACKEND_FLOOR_MAP_ID,
+            name = BACKEND_FLOOR_MAP_NAME,
+            tables = emptyList(),
+            isAuthoritativeFloorPlan = false,
+            floorPlanError = "Authoritative in-use floor plan is unavailable.",
+        )
+    }
 
-    val authoritativeTables = if (floorPlan != null) {
-        floorPlanTables
-    } else {
-        backendTruthByTableId.values
-            .sortedBy(BackendTableTruth::tableId)
-            .mapIndexed { index, backendTruth ->
-                val currentTable = currentTablesById[backendTruth.posTableId]
-                buildAuthoritativeBackendTable(
-                    backendTruth = backendTruth,
-                    currentTable = currentTable,
-                    index = index,
-                )
-            }
+    val currentTablesById = currentFloorMap.tables.associateBy(RestaurantTable::id)
+    val floorPlanTables = floorPlan.tableObjects.map { tableObject ->
+        val backendTableId = tableObject.inferredBackendTableId
+        val backendTruth = backendTableId?.let { backendTruthByTableId[it] }
+        val truthTableId = backendTruth?.posTableId
+        val serviceSpotId = truthTableId ?: tableObject.id
+        val currentTable = currentTablesById[serviceSpotId]
+        val position = TablePosition(
+            x = tableObject.x.roundToInt(),
+            y = tableObject.y.roundToInt(),
+            width = tableObject.width.roundToInt().coerceAtLeast(1),
+            height = tableObject.height.roundToInt().coerceAtLeast(1),
+        )
+        val areaName = resolveAreaNameForPosition(
+            areas = floorPlan.areas,
+            centerX = tableObject.x + (tableObject.width / 2f),
+            centerY = tableObject.y + (tableObject.height / 2f),
+        ) ?: currentTable?.areaName ?: BACKEND_DEFAULT_AREA_NAME
+        RestaurantTable(
+            id = serviceSpotId,
+            backendTableId = backendTruth?.tableId,
+            label = tableObject.label.ifBlank { backendTruth?.tableName.orEmpty() },
+            areaName = areaName,
+            seats = tableObject.capacity?.takeIf { it > 0 } ?: backendTruth?.capacity ?: currentTable?.seats ?: 1,
+            status = backendTruth?.tableStatus ?: currentTable?.status ?: TableStatus.AVAILABLE,
+            guestCount = backendTruth?.currentPersons ?: currentTable?.guestCount ?: 0,
+            activeTicketId = currentTable?.activeTicketId,
+            position = position,
+            cameraId = backendTruth?.cameraId ?: currentTable?.cameraId,
+            cameraLabel = backendTruth?.cameraLabel ?: backendTruth?.cameraId ?: currentTable?.cameraLabel,
+            attentionFlag = backendTruth?.attentionFlag ?: currentTable?.attentionFlag ?: TableAttentionFlag.NONE,
+            operationalFlags = backendTruth?.operationalFlags ?: currentTable?.operationalFlags ?: emptySet(),
+            emptyAnchorTime = backendTruth?.emptyAnchorTime ?: currentTable?.emptyAnchorTime,
+            reviewAnchorTime = backendTruth?.reviewAnchorTime ?: currentTable?.reviewAnchorTime,
+            reviewFrom = backendTruth?.reviewFrom ?: currentTable?.reviewFrom,
+            reviewTo = backendTruth?.reviewTo ?: currentTable?.reviewTo,
+            truthSource = if (backendTruth != null) TableTruthSource.BACKEND else currentTable?.truthSource ?: TableTruthSource.LOCAL,
+            spotType = currentTable?.spotType ?: ServiceSpotType.TABLE,
+            floorPlanX = tableObject.x,
+            floorPlanY = tableObject.y,
+            floorPlanWidth = tableObject.width,
+            floorPlanHeight = tableObject.height,
+            floorPlanRotation = tableObject.rotation,
+            floorPlanShape = tableObject.shape,
+            chairLayout = tableObject.chairLayout,
+            tableNumber = tableObject.tableNumber,
+        )
     }
 
     return FloorMap(
-        id = floorPlan?.mapId ?: BACKEND_FLOOR_MAP_ID,
-        name = floorPlan?.name ?: BACKEND_FLOOR_MAP_NAME,
-        tables = authoritativeTables,
-        areas = floorPlan?.areas.orEmpty(),
-        objects = floorPlan?.objects.orEmpty(),
-        width = floorPlan?.width?.takeIf { it > 0 },
-        height = floorPlan?.height?.takeIf { it > 0 },
+        id = floorPlan.mapId,
+        name = floorPlan.name,
+        tables = floorPlanTables,
+        areas = floorPlan.areas,
+        objects = floorPlan.objects,
+        width = floorPlan.width.roundToInt().takeIf { it > 0 },
+        height = floorPlan.height.roundToInt().takeIf { it > 0 },
+        widthPx = floorPlan.width.takeIf { it > 0f },
+        heightPx = floorPlan.height.takeIf { it > 0f },
+        pxPerMeter = floorPlan.pxPerMeter,
+        scaleStatus = floorPlan.scaleStatus,
+        isAuthoritativeFloorPlan = true,
+        floorPlanError = null,
     )
 }
-
 private fun resolveAreaNameForPosition(
     areas: List<FloorMapArea>,
-    position: TablePosition,
+    centerX: Float,
+    centerY: Float,
 ): String? {
     if (areas.isEmpty()) return null
-    val centerX = position.x + (position.width / 2f)
-    val centerY = position.y + (position.height / 2f)
     return areas.firstOrNull { area ->
-        centerX >= area.x && centerX <= area.x + area.width &&
-            centerY >= area.y && centerY <= area.y + area.height
+        centerX >= area.xPx && centerX <= area.xPx + area.widthPx &&
+            centerY >= area.yPx && centerY <= area.yPx + area.heightPx
     }?.label
 }
-
 private fun buildAuthoritativeBackendTable(
     backendTruth: BackendTableTruth,
     currentTable: RestaurantTable?,
@@ -858,6 +912,12 @@ private fun JSONObject.optStringOrNull(name: String): String? {
     return optString(name).takeIf { it.isNotBlank() }
 }
 
+private fun JSONObject.optFloatOrNull(name: String): Float? {
+    if (!has(name) || isNull(name)) return null
+    val value = optDouble(name, Double.NaN)
+    if (!value.isFinite()) return null
+    return value.toFloat()
+}
 private fun JSONObject.optIntOrNull(name: String): Int? {
     if (!has(name) || isNull(name)) return null
     return optInt(name).takeIf { optString(name).isNotBlank() }

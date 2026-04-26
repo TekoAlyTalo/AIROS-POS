@@ -222,27 +222,67 @@ data class RestaurantTable(
     val truthSource: TableTruthSource = TableTruthSource.LOCAL,
     /** Functional type of this service spot. Defaults to TABLE for backward compatibility. */
     val spotType: ServiceSpotType = ServiceSpotType.TABLE,
+    /** Editor floor-plan truth. Existing Int [position] remains only for legacy table flows. */
+    val floorPlanX: Float? = null,
+    val floorPlanY: Float? = null,
+    val floorPlanWidth: Float? = null,
+    val floorPlanHeight: Float? = null,
+    val floorPlanRotation: Float = 0f,
+    val floorPlanShape: String? = null,
+    val chairLayout: String? = null,
+    val tableNumber: Int? = null,
 )
-
 data class FloorMapArea(
     val id: String,
     val label: String,
+    /** Legacy rounded coordinates. Renderer must prefer the exact Float fields below. */
     val x: Int,
     val y: Int,
     val width: Int,
     val height: Int,
+    val xPx: Float = x.toFloat(),
+    val yPx: Float = y.toFloat(),
+    val widthPx: Float = width.toFloat(),
+    val heightPx: Float = height.toFloat(),
+    val shape: String = "rectangle",
+    val rotation: Float = 0f,
+    val locked: Boolean = false,
+    val hidden: Boolean = false,
+    val areaType: String? = null,
+    val surfaceMaterial: String? = null,
+    val p1XPercent: Float? = null,
+    val p1YPercent: Float? = null,
+    val p2XPercent: Float? = null,
+    val p2YPercent: Float? = null,
+    val p3XPercent: Float? = null,
+    val p3YPercent: Float? = null,
+    val apexXPercent: Float? = null,
 )
 
 data class FloorMapObject(
     val id: String,
     val type: String,
     val label: String,
+    /** Legacy rounded coordinates. Renderer must prefer the exact Float fields below. */
     val x: Int,
     val y: Int,
     val width: Int,
     val height: Int,
+    val xPx: Float = x.toFloat(),
+    val yPx: Float = y.toFloat(),
+    val widthPx: Float = width.toFloat(),
+    val heightPx: Float = height.toFloat(),
     val rotation: Float = 0f,
+    val locked: Boolean = false,
     val hidden: Boolean = false,
+    val shape: String? = null,
+    val chairLayout: String? = null,
+    val capacity: Int? = null,
+    val tableNumber: Int? = null,
+    val cameraId: String? = null,
+    val coverageType: String? = null,
+    val linkedTargetType: String? = null,
+    val linkedTargetId: String? = null,
     val doorHingeSide: String? = null,
     val doorSwingDirection: String? = null,
 )
@@ -255,8 +295,13 @@ data class FloorMap(
     val objects: List<FloorMapObject> = emptyList(),
     val width: Int? = null,
     val height: Int? = null,
+    val widthPx: Float? = width?.toFloat(),
+    val heightPx: Float? = height?.toFloat(),
+    val pxPerMeter: Float? = null,
+    val scaleStatus: String? = null,
+    val isAuthoritativeFloorPlan: Boolean = false,
+    val floorPlanError: String? = null,
 )
-
 enum class TicketStatus {
     OPEN,
     SENT_TO_KITCHEN,
