@@ -75,6 +75,8 @@ import com.airos.pos.core.model.CameraConnectionState
 import com.airos.pos.core.model.CameraPreviewRequest
 import com.airos.pos.core.model.CameraPreviewState
 import com.airos.pos.core.model.FloorMap
+import com.airos.pos.core.model.FloorMapArea
+import com.airos.pos.core.model.FloorMapObject
 import com.airos.pos.core.model.PersistedOpenSale
 import com.airos.pos.core.model.PersistedOpenSaleLine
 import com.airos.pos.core.model.PersistedOpenSaleTransferEvent
@@ -676,14 +678,25 @@ fun TableMapScreen(
     val floorPlanViewpoint = remember(floorPlanRotationDeg) {
         DefaultFloorPlanViewpoint.copy(defaultRotationDeg = floorPlanRotationDeg)
     }
-    val allTables = state.floorMap?.tables.orEmpty()
+    val activeFloorMap = state.floorMap
+    val allTables = activeFloorMap?.tables.orEmpty()
+    val floorAreas = activeFloorMap?.areas.orEmpty()
+    val floorObjects = activeFloorMap?.objects.orEmpty()
     val hasRealFloorMap = allTables.isNotEmpty()
-    val availableAreas = remember(allTables) { buildAreaFilterOptions(allTables) }
+    val availableAreas = remember(allTables, floorAreas) { buildAreaFilterOptions(allTables, floorAreas) }
     var selectedAreaName by rememberSaveable { mutableStateOf(AREA_FILTER_ALL) }
     val activeAreaName = selectedAreaName.takeIf { it in availableAreas } ?: AREA_FILTER_ALL
-    val visibleTables = remember(allTables, activeAreaName) {
+    val visibleTables = remember(allTables, floorAreas, activeAreaName) {
         filterTablesForArea(
             tables = allTables,
+            floorAreas = floorAreas,
+            selectedAreaName = activeAreaName,
+        )
+    }
+    val visibleFloorObjects = remember(floorObjects, floorAreas, activeAreaName) {
+        filterFloorObjectsForArea(
+            floorObjects = floorObjects,
+            floorAreas = floorAreas,
             selectedAreaName = activeAreaName,
         )
     }
@@ -934,6 +947,7 @@ LaunchedEffect(
                             selectedAreaName = areaName
                             val areaTables = filterTablesForArea(
                                 tables = allTables,
+                                floorAreas = floorAreas,
                                 selectedAreaName = areaName,
                             )
                             when {
@@ -998,6 +1012,8 @@ LaunchedEffect(
                         ) {
                             FloorPlanTableMap(
                                 tables = visibleTables,
+                                floorAreas = visibleFloorAreasForSelection(floorAreas, activeAreaName),
+                                floorObjects = visibleFloorObjects,
                                 selectedTableId = selectedTable?.id,
                                 onSelectTable = { tableId ->
                                     visibleTables.firstOrNull { it.id == tableId }
@@ -1909,11 +1925,17 @@ private fun OpenSaleSummaryColumn(
 }
 
 
-private fun buildAreaFilterOptions(tables: List<RestaurantTable>): List<String> {
-    val areaNames = tables
-        .map { it.areaName.trim().ifBlank { "Unassigned" } }
+private fun buildAreaFilterOptions(
+    tables: List<RestaurantTable>,
+    floorAreas: List<FloorMapArea>,
+): List<String> {
+    val areaNames = if (floorAreas.isNotEmpty()) {
+        floorAreas.map { it.label.trim().ifBlank { "Unassigned" } }
+    } else {
+        tables.map { it.areaName.trim().ifBlank { "Unassigned" } }
+    }
         .distinct()
-        .sorted()
+        .sortedWith(String.CASE_INSENSITIVE_ORDER)
 
     return if (areaNames.isEmpty()) {
         listOf(AREA_FILTER_ALL)
@@ -1927,13 +1949,58 @@ private fun buildAreaFilterOptions(tables: List<RestaurantTable>): List<String> 
 
 private fun filterTablesForArea(
     tables: List<RestaurantTable>,
+    floorAreas: List<FloorMapArea>,
     selectedAreaName: String,
 ): List<RestaurantTable> {
     if (selectedAreaName == AREA_FILTER_ALL) {
         return tables
     }
+    val selectedArea = floorAreas.firstOrNull {
+        it.label.trim().ifBlank { "Unassigned" }.equals(selectedAreaName, ignoreCase = true)
+    }
+    if (selectedArea != null) {
+        return tables.filter { table -> table.centerPointInside(selectedArea) }
+    }
     return tables.filter { it.areaName.trim().ifBlank { "Unassigned" } == selectedAreaName }
 }
+
+private fun filterFloorObjectsForArea(
+    floorObjects: List<FloorMapObject>,
+    floorAreas: List<FloorMapArea>,
+    selectedAreaName: String,
+): List<FloorMapObject> {
+    val visibleObjects = floorObjects.filterNot { it.hidden }
+    if (selectedAreaName == AREA_FILTER_ALL) {
+        return visibleObjects
+    }
+    val selectedArea = floorAreas.firstOrNull {
+        it.label.trim().ifBlank { "Unassigned" }.equals(selectedAreaName, ignoreCase = true)
+    } ?: return visibleObjects
+    return visibleObjects.filter { floorObject -> floorObject.centerPointInside(selectedArea) }
+}
+
+private fun visibleFloorAreasForSelection(
+    floorAreas: List<FloorMapArea>,
+    selectedAreaName: String,
+): List<FloorMapArea> {
+    if (selectedAreaName == AREA_FILTER_ALL) return floorAreas
+    return floorAreas.filter { it.label.trim().ifBlank { "Unassigned" }.equals(selectedAreaName, ignoreCase = true) }
+}
+
+private fun RestaurantTable.centerPointInside(area: FloorMapArea): Boolean {
+    val centerX = position.x + (position.width / 2f)
+    val centerY = position.y + (position.height / 2f)
+    return centerX >= area.x && centerX <= area.x + area.width &&
+        centerY >= area.y && centerY <= area.y + area.height
+}
+
+private fun FloorMapObject.centerPointInside(area: FloorMapArea): Boolean {
+    val centerX = x + (width / 2f)
+    val centerY = y + (height / 2f)
+    return centerX >= area.x && centerX <= area.x + area.width &&
+        centerY >= area.y && centerY <= area.y + area.height
+}
+
 
 private fun TableDisplayStatus.acknowledgeActionFor(
     statusTickLabel: String,

@@ -224,10 +224,37 @@ data class RestaurantTable(
     val spotType: ServiceSpotType = ServiceSpotType.TABLE,
 )
 
+data class FloorMapArea(
+    val id: String,
+    val label: String,
+    val x: Int,
+    val y: Int,
+    val width: Int,
+    val height: Int,
+)
+
+data class FloorMapObject(
+    val id: String,
+    val type: String,
+    val label: String,
+    val x: Int,
+    val y: Int,
+    val width: Int,
+    val height: Int,
+    val rotation: Float = 0f,
+    val hidden: Boolean = false,
+    val doorHingeSide: String? = null,
+    val doorSwingDirection: String? = null,
+)
+
 data class FloorMap(
     val id: String,
     val name: String,
     val tables: List<RestaurantTable>,
+    val areas: List<FloorMapArea> = emptyList(),
+    val objects: List<FloorMapObject> = emptyList(),
+    val width: Int? = null,
+    val height: Int? = null,
 )
 
 enum class TicketStatus {

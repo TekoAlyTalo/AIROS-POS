@@ -1,5 +1,4 @@
 package com.airos.pos.feature.tablemap
-
 import android.util.Log
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
@@ -35,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
@@ -49,6 +49,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import com.airos.pos.core.model.FloorMapArea
+import com.airos.pos.core.model.FloorMapObject
 import com.airos.pos.core.model.RestaurantTable
 import com.airos.pos.core.model.StaffFloorPlanViewportPreference
 import kotlin.math.abs
@@ -128,7 +130,7 @@ internal val DefaultFloorPlanViewpoint = FloorPlanViewpoint(
     stationId = "main-pos",
     defaultCenterX = 760f,
     defaultCenterY = 452f,
-    defaultRotationDeg = 180f,
+    defaultRotationDeg = 0f,
 )
 
 private data class FloorPlanContentBounds(
@@ -162,6 +164,11 @@ private data class FloorPlanZoneLabelPlacement(
     val yPx: Float,
 )
 
+private data class FloorPlanAreaPlacement(
+    val area: FloorMapArea,
+    val rect: FloorPlanRect,
+)
+
 private data class FloorPlanBarLayout(
     val horizontalRect: FloorPlanRect,
     val verticalRect: FloorPlanRect,
@@ -175,12 +182,20 @@ private data class FloorPlanTablePlacement(
     val rect: FloorPlanRect,
 )
 
+private data class FloorPlanObjectPlacement(
+    val floorObject: FloorMapObject,
+    val rect: FloorPlanRect,
+)
+
 private data class FloorPlanLayoutModel(
     val rawBounds: FloorPlanContentBounds,
     val normalizedViewpoint: FloorPlanViewpoint,
     val zoneLabels: List<FloorPlanZoneLabelPlacement>,
+    val areas: List<FloorPlanAreaPlacement>,
     val bar: FloorPlanBarLayout,
     val tables: List<FloorPlanTablePlacement>,
+    val objects: List<FloorPlanObjectPlacement>,
+    val showStaticScaffold: Boolean,
     val contentWidthPx: Float,
     val contentHeightPx: Float,
     val rotationQuarter: Int,
@@ -302,6 +317,8 @@ internal fun FloorPlanVisualStyleToggle(
 @Composable
 internal fun FloorPlanTableMap(
     tables: List<RestaurantTable>,
+    floorAreas: List<FloorMapArea> = emptyList(),
+    floorObjects: List<FloorMapObject> = emptyList(),
     selectedTableId: String?,
     onSelectTable: (String) -> Unit,
     onLongPressTable: (String) -> Unit = {},
@@ -325,6 +342,8 @@ internal fun FloorPlanTableMap(
         FloorPlanVisualStyle.SIMPLE -> {
             SimpleFloorPlanTableMap(
                 tables = tables,
+                floorAreas = floorAreas,
+                floorObjects = floorObjects,
                 selectedTableId = selectedTableId,
                 onSelectTable = onSelectTable,
                 onLongPressTable = onLongPressTable,
@@ -345,6 +364,8 @@ internal fun FloorPlanTableMap(
         FloorPlanVisualStyle.RICH -> {
             SimpleFloorPlanTableMap(
                 tables = tables,
+                floorAreas = floorAreas,
+                floorObjects = floorObjects,
                 selectedTableId = selectedTableId,
                 onSelectTable = onSelectTable,
                 onLongPressTable = onLongPressTable,
@@ -368,6 +389,8 @@ internal fun FloorPlanTableMap(
 @Composable
 private fun SimpleFloorPlanTableMap(
     tables: List<RestaurantTable>,
+    floorAreas: List<FloorMapArea>,
+    floorObjects: List<FloorMapObject>,
     selectedTableId: String?,
     onSelectTable: (String) -> Unit,
     onLongPressTable: (String) -> Unit,
@@ -393,9 +416,11 @@ private fun SimpleFloorPlanTableMap(
         val density = LocalDensity.current
         val viewportWidthPx = constraints.maxWidth.toFloat()
         val viewportHeightPx = constraints.maxHeight.toFloat()
-        val layoutModel = remember(tables, viewpoint) {
+        val layoutModel = remember(tables, floorAreas, floorObjects, viewpoint) {
             buildFloorPlanLayoutModel(
                 tables = tables,
+                floorAreas = floorAreas,
+                floorObjects = floorObjects,
                 viewpoint = viewpoint,
             )
         }
@@ -603,10 +628,18 @@ private fun SimpleFloorPlanTableMap(
                         modifier = Modifier.requiredSize(contentWidthDp, contentHeightDp),
                     ) {
                         FloorPlanBackdrop()
+                        layoutModel.areas.forEach { areaPlacement ->
+                            FloorPlanAreaSurface(areaPlacement)
+                        }
                         layoutModel.zoneLabels.forEach { labelPlacement ->
                             FloorPlanZoneLabel(labelPlacement)
                         }
-                        FloorPlanBarCounter(layoutModel.bar)
+                        if (layoutModel.showStaticScaffold) {
+                            FloorPlanBarCounter(layoutModel.bar)
+                        }
+                        layoutModel.objects.forEach { placement ->
+                            FloorPlanObjectNode(placement)
+                        }
                         layoutModel.tables.forEach { placement ->
                             FloorPlanTableNode(
                                 table = placement.table,
@@ -729,6 +762,224 @@ private fun FloorPlanZoneLabel(labelPlacement: FloorPlanZoneLabelPlacement) {
 }
 
 @Composable
+private fun FloorPlanAreaSurface(areaPlacement: FloorPlanAreaPlacement) {
+    val density = LocalDensity.current
+    Surface(
+        modifier = Modifier
+            .graphicsLayer {
+                translationX = areaPlacement.rect.left
+                translationY = areaPlacement.rect.top
+            }
+            .requiredSize(
+                width = areaPlacement.rect.width.toDp(density),
+                height = areaPlacement.rect.height.toDp(density),
+            ),
+        shape = RoundedCornerShape(0.dp),
+        color = Color(0xFF55613B).copy(alpha = 0.42f),
+        border = BorderStroke(1.dp, Color(0xFFB6922F).copy(alpha = 0.70f)),
+    ) {}
+}
+
+@Composable
+private fun FloorPlanObjectNode(placement: FloorPlanObjectPlacement) {
+    val density = LocalDensity.current
+    val floorObject = placement.floorObject
+    val rect = placement.rect
+    val widthDp = rect.width.coerceAtLeast(1f).toDp(density)
+    val heightDp = rect.height.coerceAtLeast(1f).toDp(density)
+    val baseModifier = Modifier.graphicsLayer {
+        translationX = rect.left
+        translationY = rect.top
+        rotationZ = floorObject.rotation
+        transformOrigin = TransformOrigin(0.5f, 0.5f)
+    }
+    when (floorObject.type.lowercase()) {
+        "wall" -> {
+            Surface(
+                modifier = baseModifier.requiredSize(widthDp, heightDp),
+                shape = RoundedCornerShape(0.dp),
+                color = Color(0xFF4A2415),
+                border = BorderStroke(1.dp, Color(0x995B2A13)),
+            ) {}
+            FloorPlanObjectSideLabel(floorObject.label, rect, floorObject.rotation)
+        }
+        "door" -> {
+            FloorPlanDoorObjectNode(
+                floorObject = floorObject,
+                rect = rect,
+                modifier = baseModifier,
+            )
+        }
+        "bar-counter" -> {
+            FloorPlanLabeledObjectSurface(
+                label = floorObject.label,
+                rect = rect,
+                modifier = baseModifier,
+                shape = RoundedCornerShape(0.dp),
+                color = Color(0xFF3B1C10),
+                borderColor = Color(0xFF8A4A1E),
+            )
+        }
+        "sofa" -> {
+            FloorPlanLabeledObjectSurface(
+                label = floorObject.label,
+                rect = rect,
+                modifier = baseModifier,
+                shape = RoundedCornerShape(0.dp),
+                color = Color(0xFF3A2117),
+                borderColor = Color(0xFF7A3D18),
+            )
+        }
+        "chair", "armchair" -> {
+            FloorPlanLabeledObjectSurface(
+                label = floorObject.label,
+                rect = rect,
+                modifier = baseModifier,
+                shape = RoundedCornerShape(999.dp),
+                color = Color(0xFF29353D),
+                borderColor = FloorPlanAvailableColor.copy(alpha = 0.72f),
+                showLabel = rect.width >= 14f && rect.height >= 10f,
+            )
+        }
+        "pos-marker", "camera", "text-label" -> {
+            FloorPlanLabeledObjectSurface(
+                label = floorObject.label,
+                rect = rect,
+                modifier = baseModifier,
+                shape = RoundedCornerShape(0.dp),
+                color = Color(0xFF24313A),
+                borderColor = FloorPlanSelectionColor.copy(alpha = 0.48f),
+            )
+        }
+        else -> {
+            FloorPlanLabeledObjectSurface(
+                label = floorObject.label,
+                rect = rect,
+                modifier = baseModifier,
+                shape = RoundedCornerShape(0.dp),
+                color = Color(0xFF25303A),
+                borderColor = Color(0x4466F6E8),
+            )
+        }
+    }
+}
+
+@Composable
+private fun FloorPlanLabeledObjectSurface(
+    label: String,
+    rect: FloorPlanRect,
+    modifier: Modifier,
+    shape: Shape,
+    color: Color,
+    borderColor: Color,
+    showLabel: Boolean = true,
+) {
+    val density = LocalDensity.current
+    Surface(
+        modifier = modifier.requiredSize(
+            width = rect.width.coerceAtLeast(1f).toDp(density),
+            height = rect.height.coerceAtLeast(1f).toDp(density),
+        ),
+        shape = shape,
+        color = color.copy(alpha = 0.94f),
+        border = BorderStroke(1.dp, borderColor),
+    ) {
+        if (showLabel) {
+            Box(contentAlignment = Alignment.Center) {
+                Text(
+                    text = label,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TableMapVisualTokens.TextSecondary,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 2,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FloorPlanDoorObjectNode(
+    floorObject: FloorMapObject,
+    rect: FloorPlanRect,
+    modifier: Modifier,
+) {
+    val density = LocalDensity.current
+    val symbolHeightPx = max(rect.width, rect.height * 5f).coerceAtLeast(24f)
+    val symbolHeightDp = symbolHeightPx.toDp(density)
+    val widthDp = rect.width.coerceAtLeast(1f).toDp(density)
+    Box(modifier = modifier.requiredSize(widthDp, symbolHeightDp)) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val stroke = 1.6.dp.toPx()
+            val hingeLeft = floorObject.doorHingeSide?.equals("right", ignoreCase = true) != true
+            val swingOut = floorObject.doorSwingDirection?.equals("out", ignoreCase = true) == true
+            val hingeX = if (hingeLeft) 0f else size.width
+            val leafEndX = if (hingeLeft) size.width else 0f
+            val baseY = if (swingOut) size.height * 0.76f else size.height * 0.24f
+            val arcTop = if (swingOut) baseY - size.width else baseY
+            drawLine(
+                color = FloorPlanSelectionColor.copy(alpha = 0.92f),
+                start = Offset(hingeX, baseY),
+                end = Offset(leafEndX, baseY),
+                strokeWidth = stroke,
+            )
+            drawRect(
+                color = FloorPlanSelectionColor.copy(alpha = 0.92f),
+                topLeft = Offset(hingeX - 2.5.dp.toPx(), baseY - 2.5.dp.toPx()),
+                size = Size(5.dp.toPx(), 5.dp.toPx()),
+            )
+            drawArc(
+                color = FloorPlanSelectionColor.copy(alpha = 0.48f),
+                startAngle = if (hingeLeft) if (swingOut) 270f else 0f else if (swingOut) 180f else 90f,
+                sweepAngle = if (hingeLeft) 90f else -90f,
+                useCenter = false,
+                topLeft = Offset(if (hingeLeft) hingeX else hingeX - size.width, arcTop),
+                size = Size(size.width, size.width),
+                style = Stroke(width = stroke),
+            )
+        }
+        Text(
+            text = floorObject.label.uppercase(),
+            modifier = Modifier
+                .align(Alignment.Center)
+                .offset(y = (-10).dp)
+                .background(FloorPlanHintSurface, RoundedCornerShape(999.dp))
+                .padding(horizontal = 5.dp, vertical = 2.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = TableMapVisualTokens.TextPrimary,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun FloorPlanObjectSideLabel(
+    label: String,
+    rect: FloorPlanRect,
+    rotation: Float,
+) {
+    val vertical = rect.height >= rect.width
+    if (!vertical || label.isBlank()) return
+    Text(
+        text = label.uppercase(),
+        modifier = Modifier.graphicsLayer {
+            translationX = rect.left - 26f
+            translationY = rect.top + (rect.height / 2f)
+            rotationZ = -90f + rotation
+        }
+            .background(FloorPlanHintSurface, RoundedCornerShape(999.dp))
+            .padding(horizontal = 5.dp, vertical = 2.dp),
+        style = MaterialTheme.typography.labelSmall,
+        color = TableMapVisualTokens.TextSecondary,
+        fontWeight = FontWeight.Bold,
+        maxLines = 1,
+    )
+}
+
+@Composable
 private fun FloorPlanBarCounter(bar: FloorPlanBarLayout) {
     Box(modifier = Modifier.fillMaxSize()) {
         FloorPlanBarSurfaceNode(
@@ -847,7 +1098,7 @@ private fun FloorPlanTableNode(
     val attentionTint = displayStatus.attentionVisualTint()
     val accent = displayStatus.floorPlanAccent()
     val selectedTint = attentionTint ?: accent
-    val shape: Shape = if (isRound) CircleShape else RoundedCornerShape(if (isMerged) 28.dp else 22.dp)
+    val shape: Shape = if (isRound) CircleShape else RoundedCornerShape(0.dp)
 
     Surface(
         modifier = Modifier
@@ -860,7 +1111,7 @@ private fun FloorPlanTableNode(
                 height = rect.height.toDp(density),
             ),
         shape = shape,
-        color = if (selected && attentionTint == null) Color(0xFF16272C) else FloorPlanTableSurface,
+        color = Color(0xFF3B1C10).copy(alpha = 0.96f),
         border = BorderStroke(
             width = when {
                 dropHovered -> 3.dp
@@ -872,27 +1123,16 @@ private fun FloorPlanTableNode(
                 attentionTint != null -> attentionTint
                 selected -> selectedTint
                 dropHovered -> FloorPlanSelectionColor
-                else -> accent.copy(alpha = 0.56f)
+                else -> Color(0xFFC6942E).copy(alpha = 0.78f)
             },
         ),
-        shadowElevation = when {
-            dropHovered -> 10.dp
-            selected -> 6.dp
-            else -> 1.dp
-        },
+        shadowElevation = if (selected || dropHovered) 3.dp else 0.dp,
     ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(
-                            (attentionTint ?: accent).copy(alpha = if (attentionTint != null) 0.30f else 0.24f),
-                            FloorPlanTableCore.copy(alpha = 0.98f),
-                        ),
-                    ),
-                )
-                .padding(horizontal = 10.dp, vertical = 8.dp),
+                .background(Color(0xFF3B1C10).copy(alpha = 0.96f))
+                .padding(horizontal = 4.dp, vertical = 2.dp),
         ) {
             Column(
                 modifier = Modifier.fillMaxSize(),
@@ -934,35 +1174,10 @@ private fun FloorPlanTableNode(
                     )
                 }
 
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    when {
-                        openSaleTotalLabels.isNotEmpty() -> {
-                            FloorPlanOpenSaleAmountChips(
-                                labels = openSaleTotalLabels,
-                                maxVisible = if (rect.width < 150f) 1 else 2,
-                            )
-                        }
-                        openTotalLabel != null -> {
-                            FloorPlanOpenSaleAmountChips(
-                                labels = listOf(openTotalLabel),
-                                maxVisible = if (rect.width < 150f) 1 else 2,
-                            )
-                        }
-                    }
-                    if (isMerged) {
-                        Text(
-                            text = "Merged",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = TableMapVisualTokens.TextMuted,
-                            fontWeight = FontWeight.Medium,
-                        )
-                    }
-                    Text(
-                        text = "${table.guestCount}C · ${table.seats}S",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = TableMapVisualTokens.TextSecondary,
-                        textAlign = TextAlign.Center,
-                        fontWeight = FontWeight.Medium,
+                if (openSaleTotalLabels.isNotEmpty() || openTotalLabel != null) {
+                    FloorPlanOpenSaleAmountChips(
+                        labels = openSaleTotalLabels.ifEmpty { listOfNotNull(openTotalLabel) },
+                        maxVisible = 1,
                     )
                 }
             }
@@ -1159,13 +1374,25 @@ private fun rotateFloorPlanRect(
 
 private fun buildFloorPlanLayoutModel(
     tables: List<RestaurantTable>,
+    floorAreas: List<FloorMapArea>,
+    floorObjects: List<FloorMapObject>,
     viewpoint: FloorPlanViewpoint,
 ): FloorPlanLayoutModel {
     val tablePlacementsSource = tables.map { table ->
         table to rawFloorPlanRectForTable(table)
     }
+    val objectPlacementsSource = floorObjects
+        .filterNot { it.hidden }
+        .map { floorObject -> floorObject to rawFloorPlanRectForObject(floorObject) }
+    val areaPlacementsSource = floorAreas.map { area ->
+        area to rawFloorPlanRectForArea(area)
+    }
+    val showStaticScaffold = areaPlacementsSource.isEmpty()
     val rawBounds = buildRawFloorPlanBounds(
         tableRects = tablePlacementsSource.map { (_, rect) -> rect },
+        areaRects = areaPlacementsSource.map { (_, rect) -> rect },
+        objectRects = objectPlacementsSource.map { (_, rect) -> rect },
+        includeStaticScaffold = showStaticScaffold,
     )
     val canonicalContentWidth = rawBounds.width
     val canonicalContentHeight = rawBounds.height
@@ -1182,12 +1409,22 @@ private fun buildFloorPlanLayoutModel(
         )
     }
 
-    val canonicalZoneLabels = listOf(
-        FloorPlanZoneLabelPlacement("WINDOW", normalizeX(96f), normalizeY(40f)),
-        FloorPlanZoneLabelPlacement("MAIN DINING", normalizeX(118f), normalizeY(222f)),
-        FloorPlanZoneLabelPlacement("TERRACE", normalizeX(102f), normalizeY(656f)),
-        FloorPlanZoneLabelPlacement("LOUNGE", normalizeX(1016f), normalizeY(930f)),
-    )
+    val canonicalZoneLabels = if (areaPlacementsSource.isNotEmpty()) {
+        areaPlacementsSource.map { (area, rect) ->
+            FloorPlanZoneLabelPlacement(
+                label = area.label.uppercase(),
+                xPx = normalizeX(rect.left + 10f),
+                yPx = normalizeY(rect.top + 10f),
+            )
+        }
+    } else {
+        listOf(
+            FloorPlanZoneLabelPlacement("WINDOW", normalizeX(96f), normalizeY(40f)),
+            FloorPlanZoneLabelPlacement("MAIN DINING", normalizeX(118f), normalizeY(222f)),
+            FloorPlanZoneLabelPlacement("TERRACE", normalizeX(102f), normalizeY(656f)),
+            FloorPlanZoneLabelPlacement("LOUNGE", normalizeX(1016f), normalizeY(930f)),
+        )
+    }
 
     val canonicalBar = FloorPlanBarLayout(
         horizontalRect = normalizeRect(FloorPlanRect(left = 1012f, top = 72f, right = 1400f, bottom = 168f)),
@@ -1204,9 +1441,23 @@ private fun buildFloorPlanLayoutModel(
         },
     )
 
+    val canonicalAreaPlacements = areaPlacementsSource.map { (area, rawRect) ->
+        FloorPlanAreaPlacement(
+            area = area,
+            rect = normalizeRect(rawRect),
+        )
+    }
+
     val canonicalTablePlacements = tablePlacementsSource.map { (table, rawRect) ->
         FloorPlanTablePlacement(
             table = table,
+            rect = normalizeRect(rawRect),
+        )
+    }
+
+    val canonicalObjectPlacements = objectPlacementsSource.map { (floorObject, rawRect) ->
+        FloorPlanObjectPlacement(
+            floorObject = floorObject,
             rect = normalizeRect(rawRect),
         )
     }
@@ -1217,11 +1468,16 @@ private fun buildFloorPlanLayoutModel(
         rotationQuarter = rotationQuarter,
     )
 
-    val rotatedViewpointCenter = rotateFloorPlanPoint(
-        point = Offset(
+    val canonicalViewpointCenter = if (areaPlacementsSource.isNotEmpty() || objectPlacementsSource.isNotEmpty() || tablePlacementsSource.isNotEmpty()) {
+        Offset(x = canonicalContentWidth / 2f, y = canonicalContentHeight / 2f)
+    } else {
+        Offset(
             x = normalizeX(viewpoint.defaultCenterX),
             y = normalizeY(viewpoint.defaultCenterY),
-        ),
+        )
+    }
+    val rotatedViewpointCenter = rotateFloorPlanPoint(
+        point = canonicalViewpointCenter,
         width = canonicalContentWidth,
         height = canonicalContentHeight,
         rotationQuarter = rotationQuarter,
@@ -1275,7 +1531,29 @@ private fun buildFloorPlanLayoutModel(
         },
     )
 
+    val areaPlacements = canonicalAreaPlacements.map { placement ->
+        placement.copy(
+            rect = rotateFloorPlanRect(
+                rect = placement.rect,
+                width = canonicalContentWidth,
+                height = canonicalContentHeight,
+                rotationQuarter = rotationQuarter,
+            ),
+        )
+    }
+
     val tablePlacements = canonicalTablePlacements.map { placement ->
+        placement.copy(
+            rect = rotateFloorPlanRect(
+                rect = placement.rect,
+                width = canonicalContentWidth,
+                height = canonicalContentHeight,
+                rotationQuarter = rotationQuarter,
+            ),
+        )
+    }
+
+    val objectPlacements = canonicalObjectPlacements.map { placement ->
         placement.copy(
             rect = rotateFloorPlanRect(
                 rect = placement.rect,
@@ -1293,8 +1571,11 @@ private fun buildFloorPlanLayoutModel(
             defaultCenterY = rotatedViewpointCenter.y,
         ),
         zoneLabels = zoneLabels,
+        areas = areaPlacements,
         bar = bar,
         tables = tablePlacements,
+        objects = objectPlacements,
+        showStaticScaffold = showStaticScaffold,
         contentWidthPx = rotatedSize.width,
         contentHeightPx = rotatedSize.height,
         rotationQuarter = rotationQuarter,
@@ -1303,8 +1584,11 @@ private fun buildFloorPlanLayoutModel(
 
 private fun buildRawFloorPlanBounds(
     tableRects: List<FloorPlanRect>,
+    areaRects: List<FloorPlanRect>,
+    objectRects: List<FloorPlanRect>,
+    includeStaticScaffold: Boolean,
 ): FloorPlanContentBounds {
-    val allRects = tableRects + FloorPlanStaticBounds
+    val allRects = tableRects + areaRects + objectRects + if (includeStaticScaffold) FloorPlanStaticBounds else emptyList()
     val left = allRects.minOfOrNull { it.left } ?: 0f
     val top = allRects.minOfOrNull { it.top } ?: 0f
     val right = allRects.maxOfOrNull { it.right } ?: 0f
@@ -1317,6 +1601,17 @@ private fun buildRawFloorPlanBounds(
     )
 }
 
+private fun rawFloorPlanRectForArea(
+    area: FloorMapArea,
+): FloorPlanRect {
+    return FloorPlanRect(
+        left = area.x.toFloat(),
+        top = area.y.toFloat(),
+        right = (area.x + area.width).toFloat(),
+        bottom = (area.y + area.height).toFloat(),
+    )
+}
+
 private fun rawFloorPlanRectForTable(
     table: RestaurantTable,
 ): FloorPlanRect {
@@ -1325,6 +1620,17 @@ private fun rawFloorPlanRectForTable(
         top = table.position.y.toFloat(),
         right = (table.position.x + table.position.width).toFloat(),
         bottom = (table.position.y + table.position.height).toFloat(),
+    )
+}
+
+private fun rawFloorPlanRectForObject(
+    floorObject: FloorMapObject,
+): FloorPlanRect {
+    return FloorPlanRect(
+        left = floorObject.x.toFloat(),
+        top = floorObject.y.toFloat(),
+        right = (floorObject.x + floorObject.width).toFloat(),
+        bottom = (floorObject.y + floorObject.height).toFloat(),
     )
 }
 

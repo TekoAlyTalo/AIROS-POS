@@ -3,6 +3,8 @@ package com.airos.pos.app
 import android.util.Log
 import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.model.FloorMap
+import com.airos.pos.core.model.FloorMapArea
+import com.airos.pos.core.model.FloorMapObject
 import com.airos.pos.core.model.PersistedOpenSale
 import com.airos.pos.core.model.RestaurantTable
 import com.airos.pos.core.model.ServiceSpotType
@@ -28,6 +30,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlin.math.roundToInt
 
 private const val BACKEND_FLOOR_MAP_ID = "backend-authoritative-floor"
 private const val BACKEND_FLOOR_MAP_NAME = "Dining room"
@@ -63,8 +66,9 @@ class BackendTruthTableRepository(
         return combine(
             delegate.observeFloorMap(),
             client.observeBackendTableTruth(),
+            client.observeInUseFloorPlan(),
             openSaleRepository.observeOpenSales(),
-        ) { floorMap, backendTruthByTableId, openSales ->
+        ) { floorMap, backendTruthByTableId, inUseFloorPlan, openSales ->
             updateKnownBackendTableMappings(floorMap)
             val effectiveFloorMap = if (backendTruthByTableId.isEmpty()) {
                 floorMap
@@ -72,6 +76,7 @@ class BackendTruthTableRepository(
                 buildAuthoritativeBackendFloorMap(
                     currentFloorMap = floorMap,
                     backendTruthByTableId = backendTruthByTableId,
+                    floorPlan = inUseFloorPlan,
                 )
             }
             updateKnownBackendTableMappings(effectiveFloorMap)
@@ -240,6 +245,19 @@ private class BackendTableTruthClient(
         }
     }
 
+    fun observeInUseFloorPlan(): Flow<BackendFloorPlanSnapshot?> = flow {
+        var latest: BackendFloorPlanSnapshot? = null
+        emit(latest)
+        while (true) {
+            val next = fetchInUseFloorPlan()
+            if (next != null || latest != null) {
+                latest = next
+                emit(latest)
+            }
+            delay(pollIntervalMillis * 2)
+        }
+    }
+
     suspend fun postOpenBillContext(
         backendTableId: Int,
         serviceSpotId: String,
@@ -364,6 +382,34 @@ private class BackendTableTruthClient(
         }
     }
 
+    private suspend fun fetchInUseFloorPlan(): BackendFloorPlanSnapshot? = withContext(Dispatchers.IO) {
+        val baseUrl = normalizedBaseUrl() ?: return@withContext null
+        val urlString = "$baseUrl/api/dashboard/floor-plans?restaurant_key=ravintola_default&in_use=true"
+        var connection: HttpURLConnection? = null
+        try {
+            connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = connectTimeoutMs
+                readTimeout = readTimeoutMs
+                doInput = true
+                useCaches = false
+                setRequestProperty("Accept", "application/json")
+            }
+            val statusCode = connection.responseCode
+            val body = readStream(if (statusCode in 200..299) connection.inputStream else connection.errorStream)
+            if (statusCode !in 200..299) {
+                log("in-use floor plan fetch failed status=$statusCode")
+                return@withContext null
+            }
+            parseInUseFloorPlan(body)
+        } catch (t: Throwable) {
+            log("in-use floor plan fetch failed: ${t.javaClass.simpleName}: ${t.message.orEmpty()}")
+            null
+        } finally {
+            connection?.disconnect()
+        }
+    }
+
     private suspend fun fetchTableOverviewTruth(): Map<Int, BackendTableTruth>? = withContext(Dispatchers.IO) {
         val baseUrl = normalizedBaseUrl() ?: return@withContext null
         val urlString = "$baseUrl/tables/overview"
@@ -390,6 +436,85 @@ private class BackendTableTruthClient(
         } finally {
             connection?.disconnect()
         }
+    }
+
+    private fun parseInUseFloorPlan(body: String): BackendFloorPlanSnapshot? {
+        if (body.isBlank()) return null
+        val root = JSONObject(body)
+        val items = root.optJSONArray("items") ?: return null
+        if (items.length() == 0) return null
+        val item = items.optJSONObject(0) ?: return null
+        val mapId = item.optStringOrNull("map_id") ?: item.optStringOrNull("mapId") ?: return null
+        val name = item.optStringOrNull("name") ?: "Floor plan"
+        val floorTiles = item.optJSONArray("floor_tiles") ?: item.optJSONArray("floorTiles")
+        val areas = mutableListOf<FloorMapArea>()
+        if (floorTiles != null) {
+            for (index in 0 until floorTiles.length()) {
+                val tile = floorTiles.optJSONObject(index) ?: continue
+                val shape = tile.optString("shape", "rectangle").trim().lowercase()
+                if (shape != "rectangle") continue
+                val label = tile.optStringOrNull("label") ?: "Area ${index + 1}"
+                areas += FloorMapArea(
+                    id = tile.optStringOrNull("id") ?: "area-$index",
+                    label = label,
+                    x = tile.optDouble("x", 0.0).roundToInt(),
+                    y = tile.optDouble("y", 0.0).roundToInt(),
+                    width = tile.optDouble("width", 0.0).roundToInt().coerceAtLeast(1),
+                    height = tile.optDouble("height", 0.0).roundToInt().coerceAtLeast(1),
+                )
+            }
+        }
+        val objects = item.optJSONArray("objects")
+        val floorPlanObjects = mutableListOf<FloorMapObject>()
+        val tableObjects = mutableListOf<BackendFloorPlanTableObject>()
+        if (objects != null) {
+            for (index in 0 until objects.length()) {
+                val obj = objects.optJSONObject(index) ?: continue
+                val type = obj.optString("type", "").trim().lowercase()
+                if (type.isBlank()) continue
+                val objectId = obj.optStringOrNull("id") ?: "floor-object-$index"
+                val label = obj.optStringOrNull("label") ?: type
+                val x = obj.optDouble("x", 0.0).toFloat()
+                val y = obj.optDouble("y", 0.0).toFloat()
+                val width = obj.optDouble("width", if (type == "table") BACKEND_TABLE_WIDTH.toDouble() else 1.0).toFloat()
+                val height = obj.optDouble("height", if (type == "table") BACKEND_TABLE_HEIGHT.toDouble() else 1.0).toFloat()
+                if (type == "table") {
+                    tableObjects += BackendFloorPlanTableObject(
+                        id = objectId,
+                        label = label,
+                        tableNumber = obj.optIntOrNull("tableNumber") ?: obj.optIntOrNull("table_number"),
+                        capacity = obj.optIntOrNull("capacity"),
+                        x = x,
+                        y = y,
+                        width = width,
+                        height = height,
+                    )
+                } else {
+                    floorPlanObjects += FloorMapObject(
+                        id = objectId,
+                        type = type,
+                        label = label,
+                        x = x.roundToInt(),
+                        y = y.roundToInt(),
+                        width = width.roundToInt().coerceAtLeast(1),
+                        height = height.roundToInt().coerceAtLeast(1),
+                        rotation = obj.optDouble("rotation", 0.0).toFloat(),
+                        hidden = obj.optBoolean("hidden", false),
+                        doorHingeSide = obj.optStringOrNull("doorHingeSide") ?: obj.optStringOrNull("door_hinge_side"),
+                        doorSwingDirection = obj.optStringOrNull("doorSwingDirection") ?: obj.optStringOrNull("door_swing_direction"),
+                    )
+                }
+            }
+        }
+        return BackendFloorPlanSnapshot(
+            mapId = mapId,
+            name = name,
+            width = item.optInt("width", 0),
+            height = item.optInt("height", 0),
+            areas = areas,
+            objects = floorPlanObjects,
+            tableObjects = tableObjects,
+        )
     }
 
     private fun parseTableOverview(body: String): Map<Int, BackendTableTruth> {
@@ -442,6 +567,30 @@ private class BackendTableTruthClient(
     private fun log(message: String) {
         Log.d("AIROS", "[BackendTruthTableRepository] $message")
     }
+}
+
+private data class BackendFloorPlanSnapshot(
+    val mapId: String,
+    val name: String,
+    val width: Int,
+    val height: Int,
+    val areas: List<FloorMapArea>,
+    val objects: List<FloorMapObject>,
+    val tableObjects: List<BackendFloorPlanTableObject>,
+)
+
+private data class BackendFloorPlanTableObject(
+    val id: String,
+    val label: String,
+    val tableNumber: Int?,
+    val capacity: Int?,
+    val x: Float,
+    val y: Float,
+    val width: Float,
+    val height: Float,
+) {
+    val inferredBackendTableId: Int?
+        get() = extractTrailingInteger(label) ?: tableNumber
 }
 
 private data class BackendTableTruth(
@@ -498,24 +647,87 @@ private fun RestaurantTable.withBackendTruth(truth: BackendTableTruth): Restaura
 private fun buildAuthoritativeBackendFloorMap(
     currentFloorMap: FloorMap,
     backendTruthByTableId: Map<Int, BackendTableTruth>,
+    floorPlan: BackendFloorPlanSnapshot?,
 ): FloorMap {
     val currentTablesById = currentFloorMap.tables.associateBy(RestaurantTable::id)
-    val authoritativeTables = backendTruthByTableId.values
-        .sortedBy(BackendTableTruth::tableId)
-        .mapIndexed { index, backendTruth ->
-            val currentTable = currentTablesById[backendTruth.posTableId]
-            buildAuthoritativeBackendTable(
-                backendTruth = backendTruth,
-                currentTable = currentTable,
-                index = index,
+    val floorPlanTables = floorPlan?.tableObjects
+        .orEmpty()
+        .map { tableObject ->
+            val backendTableId = tableObject.inferredBackendTableId
+            val backendTruth = backendTableId?.let { backendTruthByTableId[it] }
+            val truthTableId = backendTruth?.posTableId
+            val serviceSpotId = truthTableId ?: tableObject.id
+            val currentTable = currentTablesById[serviceSpotId]
+            val position = TablePosition(
+                x = tableObject.x.roundToInt(),
+                y = tableObject.y.roundToInt(),
+                width = tableObject.width.roundToInt().coerceAtLeast(1),
+                height = tableObject.height.roundToInt().coerceAtLeast(1),
+            )
+            val areaName = resolveAreaNameForPosition(
+                areas = floorPlan?.areas.orEmpty(),
+                position = position,
+            ) ?: currentTable?.areaName ?: BACKEND_DEFAULT_AREA_NAME
+            RestaurantTable(
+                id = serviceSpotId,
+                backendTableId = backendTruth?.tableId,
+                label = tableObject.label.ifBlank { backendTruth?.tableName ?: "Table" },
+                areaName = areaName,
+                seats = tableObject.capacity?.takeIf { it > 0 } ?: backendTruth?.capacity ?: 1,
+                status = backendTruth?.tableStatus ?: currentTable?.status ?: TableStatus.AVAILABLE,
+                guestCount = backendTruth?.currentPersons ?: currentTable?.guestCount ?: 0,
+                activeTicketId = currentTable?.activeTicketId,
+                position = position,
+                cameraId = backendTruth?.cameraId ?: currentTable?.cameraId,
+                cameraLabel = backendTruth?.cameraLabel ?: backendTruth?.cameraId ?: currentTable?.cameraLabel,
+                attentionFlag = backendTruth?.attentionFlag ?: currentTable?.attentionFlag ?: TableAttentionFlag.NONE,
+                operationalFlags = backendTruth?.operationalFlags ?: currentTable?.operationalFlags ?: emptySet(),
+                emptyAnchorTime = backendTruth?.emptyAnchorTime ?: currentTable?.emptyAnchorTime,
+                reviewAnchorTime = backendTruth?.reviewAnchorTime ?: currentTable?.reviewAnchorTime,
+                reviewFrom = backendTruth?.reviewFrom ?: currentTable?.reviewFrom,
+                reviewTo = backendTruth?.reviewTo ?: currentTable?.reviewTo,
+                truthSource = if (backendTruth != null) TableTruthSource.BACKEND else currentTable?.truthSource ?: TableTruthSource.LOCAL,
+                spotType = currentTable?.spotType ?: ServiceSpotType.TABLE,
             )
         }
 
+    val authoritativeTables = if (floorPlan != null) {
+        floorPlanTables
+    } else {
+        backendTruthByTableId.values
+            .sortedBy(BackendTableTruth::tableId)
+            .mapIndexed { index, backendTruth ->
+                val currentTable = currentTablesById[backendTruth.posTableId]
+                buildAuthoritativeBackendTable(
+                    backendTruth = backendTruth,
+                    currentTable = currentTable,
+                    index = index,
+                )
+            }
+    }
+
     return FloorMap(
-        id = BACKEND_FLOOR_MAP_ID,
-        name = BACKEND_FLOOR_MAP_NAME,
+        id = floorPlan?.mapId ?: BACKEND_FLOOR_MAP_ID,
+        name = floorPlan?.name ?: BACKEND_FLOOR_MAP_NAME,
         tables = authoritativeTables,
+        areas = floorPlan?.areas.orEmpty(),
+        objects = floorPlan?.objects.orEmpty(),
+        width = floorPlan?.width?.takeIf { it > 0 },
+        height = floorPlan?.height?.takeIf { it > 0 },
     )
+}
+
+private fun resolveAreaNameForPosition(
+    areas: List<FloorMapArea>,
+    position: TablePosition,
+): String? {
+    if (areas.isEmpty()) return null
+    val centerX = position.x + (position.width / 2f)
+    val centerY = position.y + (position.height / 2f)
+    return areas.firstOrNull { area ->
+        centerX >= area.x && centerX <= area.x + area.width &&
+            centerY >= area.y && centerY <= area.y + area.height
+    }?.label
 }
 
 private fun buildAuthoritativeBackendTable(
@@ -644,6 +856,11 @@ private fun extractTrailingInteger(raw: String): Int? {
 private fun JSONObject.optStringOrNull(name: String): String? {
     if (!has(name) || isNull(name)) return null
     return optString(name).takeIf { it.isNotBlank() }
+}
+
+private fun JSONObject.optIntOrNull(name: String): Int? {
+    if (!has(name) || isNull(name)) return null
+    return optInt(name).takeIf { optString(name).isNotBlank() }
 }
 
 private fun Int.toPosTableId(): String = "table-$this"
