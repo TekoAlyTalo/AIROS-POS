@@ -1,9 +1,10 @@
-package com.airos.pos.feature.tablemap
+﻿package com.airos.pos.feature.tablemap
 import android.util.Log
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -530,7 +531,50 @@ private fun SimpleFloorPlanTableMap(
                         },
                     )
                 }
+                .pointerInput("floor-plan-drag-pan-v2", viewportWidthPx, viewportHeightPx, contentWidthPx, contentHeightPx, zoomScale) {
+
+                    detectDragGestures { change, dragAmount ->
+
+                        change.consume()
+
+                        val nextOffset = clampPanOffset(
+
+                            offset = currentClampedOffset + dragAmount,
+
+                            viewportWidthPx = viewportWidthPx,
+
+                            viewportHeightPx = viewportHeightPx,
+
+                            contentWidthPx = contentWidthPx * currentZoomScale,
+
+                            contentHeightPx = contentHeightPx * currentZoomScale,
+
+                        )
+
+                        panOffset = nextOffset
+
+                        userChangedViewport = true
+
+                        currentOnFloorPlanViewportChange(
+
+                            StaffFloorPlanViewportPreference(
+
+                                zoomScale = currentZoomScale,
+
+                                panX = nextOffset.x,
+
+                                panY = nextOffset.y,
+
+                            ),
+
+                        )
+
+                    }
+
+                }
+
                 .pointerInput(viewportWidthPx, viewportHeightPx, contentWidthPx, contentHeightPx) {
+
                     detectTransformGestures { centroid, pan, zoom, _ ->
                         val previousScale = zoomScale
                         val adjustedZoom = 1f + ((zoom - 1f) * FLOOR_PLAN_ZOOM_SENSITIVITY)
@@ -606,7 +650,7 @@ private fun SimpleFloorPlanTableMap(
                     onClick = onRotate,
                 ) {
                     Text(
-                        text = "Rotate 90°",
+                        text = "Rotate 90Â°",
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                         style = MaterialTheme.typography.labelLarge,
                         color = TableMapVisualTokens.TextSecondary,
@@ -1672,3 +1716,5 @@ private data class FloorPlanTableHitTarget(
         return position.x in left..right && position.y in top..bottom
     }
 }
+
+
