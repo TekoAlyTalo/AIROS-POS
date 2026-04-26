@@ -70,29 +70,24 @@ class BackendTruthTableRepository(
             openSaleRepository.observeOpenSales(),
         ) { floorMap, backendTruthByTableId, inUseFloorPlan, openSales ->
             updateKnownBackendTableMappings(floorMap)
-            val effectiveFloorMap = if (backendTruthByTableId.isEmpty()) {
-                floorMap
-            } else {
-                buildAuthoritativeBackendFloorMap(
-                    currentFloorMap = floorMap,
-                    backendTruthByTableId = backendTruthByTableId,
-                    floorPlan = inUseFloorPlan,
-                )
-            }
-            updateKnownBackendTableMappings(effectiveFloorMap)
+            val authoritativeFloorMap = buildAuthoritativeBackendFloorMap(
+                currentFloorMap = floorMap,
+                backendTruthByTableId = backendTruthByTableId,
+                floorPlan = inUseFloorPlan,
+            )
+            updateKnownBackendTableMappings(authoritativeFloorMap)
             publishOpenBillContexts(
-                floorMap = effectiveFloorMap,
+                floorMap = authoritativeFloorMap,
                 openSales = openSales,
             )
-            if (backendTruthByTableId.isEmpty()) {
+            if (authoritativeFloorMap.isAuthoritativeFloorPlan) {
+                floorMapSink?.replaceBackendAuthoritativeFloorMap(authoritativeFloorMap)
+            } else {
                 Log.i(
                     "AIROS",
-                    "[BackendTruthTableRepository] backend table truth unavailable; keeping current delegate floor map tables=${floorMap.tables.size}",
+                    "[BackendTruthTableRepository] authoritative in-use floor plan unavailable; surfacing explicit error state",
                 )
-                return@combine floorMap
             }
-            val authoritativeFloorMap = effectiveFloorMap
-            floorMapSink?.replaceBackendAuthoritativeFloorMap(authoritativeFloorMap)
             authoritativeFloorMap
         }
     }
