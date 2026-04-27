@@ -1285,13 +1285,13 @@ private fun FloorPlanLabeledObjectSurface(
                         y = min(10f, size.height * 0.22f),
                     )
                     drawRoundRect(
-                        color = Color(0xFF3A2117).copy(alpha = 0.96f),
+                        color = Color(0xFF343A40).copy(alpha = 0.96f),
                         topLeft = Offset.Zero,
                         size = size,
                         cornerRadius = radius,
                     )
                     drawRoundRect(
-                        color = Color(0xFF9A5A24).copy(alpha = 0.76f),
+                        color = Color(0xFF8A949E).copy(alpha = 0.76f),
                         topLeft = Offset.Zero,
                         size = size,
                         cornerRadius = radius,
@@ -1299,7 +1299,7 @@ private fun FloorPlanLabeledObjectSurface(
                     )
                     val backHeight = size.height * 0.28f
                     drawRoundRect(
-                        color = Color(0xFF5A2E18).copy(alpha = 0.72f),
+                        color = Color(0xFF4A5158).copy(alpha = 0.72f),
                         topLeft = Offset(0f, 0f),
                         size = Size(size.width, backHeight),
                         cornerRadius = radius,
@@ -1309,7 +1309,7 @@ private fun FloorPlanLabeledObjectSurface(
                     for (index in 1 until cushionCount) {
                         val x = step * index
                         drawLine(
-                            color = Color(0xFFD99B4A).copy(alpha = 0.28f),
+                            color = Color(0xFFCBD3DA).copy(alpha = 0.28f),
                             start = Offset(x, backHeight),
                             end = Offset(x, size.height - stroke),
                             strokeWidth = stroke,
