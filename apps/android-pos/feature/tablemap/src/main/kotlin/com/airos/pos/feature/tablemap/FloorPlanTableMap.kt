@@ -733,7 +733,7 @@ private fun FloorPlanAreaSurface(
     val screen = placement.rect.toScreenRect(panOffset, zoom)
     val widthDp = screen.width.coerceAtLeast(1f).toDp(density)
     val heightDp = screen.height.coerceAtLeast(1f).toDp(density)
-    val baseModifier = Modifier
+    val modifier = Modifier
         .graphicsLayer {
             translationX = screen.left
             translationY = screen.top
@@ -741,40 +741,76 @@ private fun FloorPlanAreaSurface(
             transformOrigin = TransformOrigin(0.5f, 0.5f)
         }
         .requiredSize(widthDp, heightDp)
-    val fillColor = areaSurfaceColor(area).copy(alpha = 0.42f)
-    val borderColor = areaSurfaceBorderColor(area).copy(alpha = 0.70f)
-    when (area.shape.lowercase()) {
-        "triangle" -> {
-            FloorPlanTriangleAreaSurface(
-                modifier = baseModifier,
-                area = area,
-                fillColor = fillColor,
-                borderColor = borderColor,
-            )
-        }
-        "circle", "ellipse" -> {
-            Surface(
-                modifier = baseModifier,
-                shape = CircleShape,
-                color = fillColor,
-                border = BorderStroke(1.dp, borderColor),
-            ) {}
-        }
-        "roundedrectangle", "rounded-rectangle", "rounded_rect" -> {
-            Surface(
-                modifier = baseModifier,
-                shape = RoundedCornerShape(8.dp),
-                color = fillColor,
-                border = BorderStroke(1.dp, borderColor),
-            ) {}
-        }
-        else -> {
-            Surface(
-                modifier = baseModifier,
-                shape = RoundedCornerShape(0.dp),
-                color = fillColor,
-                border = BorderStroke(1.dp, borderColor),
-            ) {}
+    val fillTop = Color(0xFFCD9D4A).copy(alpha = 0.26f)
+    val fillBottom = areaSurfaceColor(area).copy(alpha = 0.24f)
+    val borderColor = areaSurfaceBorderColor(area).copy(alpha = 0.46f)
+    Canvas(modifier = modifier) {
+        val fillBrush = Brush.verticalGradient(
+            colors = listOf(fillTop, fillBottom),
+            startY = 0f,
+            endY = size.height,
+        )
+        val stroke = max(1f, 1.dp.toPx())
+        when (area.shape.lowercase()) {
+            "triangle" -> {
+                val p1x = (area.p1XPercent ?: 0f) / 100f
+                val p1y = (area.p1YPercent ?: 100f) / 100f
+                val p2x = (area.p2XPercent ?: 100f) / 100f
+                val p2y = (area.p2YPercent ?: 100f) / 100f
+                val p3x = (area.p3XPercent
+                    ?: area.apexXPercent
+                    ?: 50f) / 100f
+                val p3y = (area.p3YPercent ?: 0f) / 100f
+                val path = androidx.compose.ui.graphics.Path().apply {
+                    moveTo(size.width * p1x, size.height * p1y)
+                    lineTo(size.width * p2x, size.height * p2y)
+                    lineTo(size.width * p3x, size.height * p3y)
+                    close()
+                }
+                drawPath(path = path, brush = fillBrush)
+                drawPath(path = path, color = borderColor, style = Stroke(width = stroke))
+            }
+            "circle", "ellipse" -> {
+                drawOval(
+                    brush = fillBrush,
+                    topLeft = Offset.Zero,
+                    size = size,
+                )
+                drawOval(
+                    color = borderColor,
+                    topLeft = Offset.Zero,
+                    size = size,
+                    style = Stroke(width = stroke),
+                )
+            }
+            "roundedrectangle", "rounded-rectangle", "rounded_rect" -> {
+                drawRoundRect(
+                    brush = fillBrush,
+                    topLeft = Offset.Zero,
+                    size = size,
+                    cornerRadius = CornerRadius(14f, 14f),
+                )
+                drawRoundRect(
+                    color = borderColor,
+                    topLeft = Offset.Zero,
+                    size = size,
+                    cornerRadius = CornerRadius(14f, 14f),
+                    style = Stroke(width = stroke),
+                )
+            }
+            else -> {
+                drawRect(
+                    brush = fillBrush,
+                    topLeft = Offset.Zero,
+                    size = size,
+                )
+                drawRect(
+                    color = borderColor,
+                    topLeft = Offset.Zero,
+                    size = size,
+                    style = Stroke(width = stroke),
+                )
+            }
         }
     }
 }
@@ -846,23 +882,35 @@ private fun FloorPlanObjectNode(
     val density = LocalDensity.current
     val floorObject = placement.floorObject
     val screen = placement.rect.toScreenRect(panOffset, zoom)
-    val widthDp = screen.width.coerceAtLeast(1f).toDp(density)
-    val heightDp = screen.height.coerceAtLeast(1f).toDp(density)
+    val objectType = floorObject.type.lowercase()
+    val isCamera = objectType == "camera"
+    val objectWidthPx = if (isCamera) {
+        40f
+    } else if (objectType == "wall" || objectType == "door") {
+        screen.width.coerceAtLeast(1f)
+    } else {
+        screen.width.coerceAtLeast(28f)
+    }
+    val objectHeightPx = if (isCamera) {
+        40f
+    } else if (objectType == "wall" || objectType == "door") {
+        screen.height.coerceAtLeast(1f)
+    } else {
+        screen.height.coerceAtLeast(24f)
+    }
+    val widthDp = objectWidthPx.toDp(density)
+    val heightDp = objectHeightPx.toDp(density)
     val baseModifier = Modifier.graphicsLayer {
         translationX = screen.left
         translationY = screen.top
-        rotationZ = placement.effectiveRotationDeg
+        rotationZ = if (isCamera) {
+            0f
+        } else {
+            placement.effectiveRotationDeg
+        }
         transformOrigin = TransformOrigin(0.5f, 0.5f)
     }
-    when (floorObject.type.lowercase()) {
-        "wall" -> {
-            Surface(
-                modifier = baseModifier.requiredSize(widthDp, heightDp),
-                shape = RoundedCornerShape(0.dp),
-                color = Color(0xFF4A2415),
-                border = BorderStroke(1.dp, Color(0x995B2A13)),
-            ) {}
-        }
+    when (objectType) {
         "door" -> {
             FloorPlanDoorObjectNode(
                 floorObject = floorObject,
@@ -871,62 +919,14 @@ private fun FloorPlanObjectNode(
                 modifier = baseModifier,
             )
         }
-        "bar-counter" -> {
-            FloorPlanLabeledObjectSurface(
-                label = floorObject.label,
-                widthDp = widthDp,
-                heightDp = heightDp,
-                screenWidthPx = screen.width,
-                modifier = baseModifier,
-                shape = RoundedCornerShape(0.dp),
-                color = Color(0xFF3B1C10),
-                borderColor = Color(0xFF8A4A1E),
-            )
-        }
-        "sofa" -> {
-            FloorPlanLabeledObjectSurface(
-                label = floorObject.label,
-                widthDp = widthDp,
-                heightDp = heightDp,
-                screenWidthPx = screen.width,
-                modifier = baseModifier,
-                shape = RoundedCornerShape(4.dp),
-                color = Color(0xFF3A2117),
-                borderColor = Color(0xFF7A3D18),
-            )
-        }
-        "chair", "armchair" -> {
-            FloorPlanLabeledObjectSurface(
-                label = floorObject.label,
-                widthDp = widthDp,
-                heightDp = heightDp,
-                screenWidthPx = screen.width,
-                modifier = baseModifier,
-                shape = RoundedCornerShape(999.dp),
-                color = Color(0xFF29353D),
-                borderColor = FloorPlanAvailableColor.copy(alpha = 0.72f),
-                showLabel = screen.width >= 36f && screen.height >= 24f,
-            )
-        }
         "camera" -> {
-            val cameraSymbolPx = 40f
-            val cameraSymbolDp = cameraSymbolPx.toDp(density)
             FloorPlanCameraSymbol(
-                modifier = baseModifier.requiredSize(cameraSymbolDp, cameraSymbolDp),
+                modifier = baseModifier.requiredSize(widthDp, heightDp).graphicsLayer {
+                    rotationZ = placement.effectiveRotationDeg
+                    transformOrigin = TransformOrigin(0.5f, 0.5f)
+                },
                 label = floorObject.label,
-                screenWidthPx = cameraSymbolPx,
-            )
-        }
-        "pos-marker", "text-label" -> {
-            FloorPlanLabeledObjectSurface(
-                label = floorObject.label,
-                widthDp = widthDp,
-                heightDp = heightDp,
-                screenWidthPx = screen.width,
-                modifier = baseModifier,
-                shape = RoundedCornerShape(0.dp),
-                color = Color(0xFF24313A),
-                borderColor = FloorPlanSelectionColor.copy(alpha = 0.48f),
+                screenWidthPx = objectWidthPx,
             )
         }
         else -> {
@@ -934,11 +934,11 @@ private fun FloorPlanObjectNode(
                 label = floorObject.label,
                 widthDp = widthDp,
                 heightDp = heightDp,
-                screenWidthPx = screen.width,
+                screenWidthPx = objectWidthPx,
                 modifier = baseModifier,
-                shape = RoundedCornerShape(0.dp),
-                color = Color(0xFF25303A),
-                borderColor = Color(0x4466F6E8),
+                objectType = objectType,
+                showLabel = objectType != "wall" && objectType != "door" &&
+                    (objectType != "chair" && objectType != "armchair" || objectWidthPx >= 36f && objectHeightPx >= 24f),
             )
         }
     }
@@ -951,22 +951,166 @@ private fun FloorPlanLabeledObjectSurface(
     heightDp: androidx.compose.ui.unit.Dp,
     screenWidthPx: Float,
     modifier: Modifier,
-    shape: Shape,
-    color: Color,
-    borderColor: Color,
+    objectType: String,
     showLabel: Boolean = true,
 ) {
-    Surface(
-        modifier = modifier.requiredSize(widthDp, heightDp),
-        shape = shape,
-        color = color.copy(alpha = 0.94f),
-        border = BorderStroke(1.dp, borderColor),
-    ) {
+    val normalizedType = objectType.lowercase()
+    Box(modifier = modifier.requiredSize(widthDp, heightDp)) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val stroke = max(1f, 1.dp.toPx())
+            when (normalizedType) {
+                "wall" -> {
+                    drawRect(
+                        color = Color(0xFF3A1E0E).copy(alpha = 0.96f),
+                        topLeft = Offset.Zero,
+                        size = size,
+                    )
+                    drawRect(
+                        color = Color(0x99E0A64A),
+                        topLeft = Offset.Zero,
+                        size = size,
+                        style = Stroke(width = stroke),
+                    )
+                }
+                "bar-counter" -> {
+                    val radius = CornerRadius(4f, 4f)
+                    val fill = Brush.verticalGradient(
+                        colors = listOf(
+                            Color(0xFF51290F).copy(alpha = 0.96f),
+                            Color(0xFF2B1508).copy(alpha = 0.96f),
+                        ),
+                    )
+                    drawRoundRect(
+                        brush = fill,
+                        topLeft = Offset.Zero,
+                        size = size,
+                        cornerRadius = radius,
+                    )
+                    drawRoundRect(
+                        color = Color(0xFFB8782A).copy(alpha = 0.78f),
+                        topLeft = Offset.Zero,
+                        size = size,
+                        cornerRadius = radius,
+                        style = Stroke(width = stroke),
+                    )
+                    val railInset = max(3f, min(size.width, size.height) * 0.10f)
+                    drawLine(
+                        color = Color(0xFFE6C47A).copy(alpha = 0.28f),
+                        start = Offset(railInset, railInset),
+                        end = Offset(size.width - railInset, railInset),
+                        strokeWidth = stroke,
+                    )
+                    drawLine(
+                        color = Color(0xFF1B0D05).copy(alpha = 0.44f),
+                        start = Offset(railInset, size.height - railInset),
+                        end = Offset(size.width - railInset, size.height - railInset),
+                        strokeWidth = stroke,
+                    )
+                }
+                "sofa" -> {
+                    val radius = CornerRadius(
+                        x = min(10f, size.width * 0.16f),
+                        y = min(10f, size.height * 0.22f),
+                    )
+                    drawRoundRect(
+                        color = Color(0xFF3A2117).copy(alpha = 0.96f),
+                        topLeft = Offset.Zero,
+                        size = size,
+                        cornerRadius = radius,
+                    )
+                    drawRoundRect(
+                        color = Color(0xFF9A5A24).copy(alpha = 0.76f),
+                        topLeft = Offset.Zero,
+                        size = size,
+                        cornerRadius = radius,
+                        style = Stroke(width = stroke),
+                    )
+                    val backHeight = size.height * 0.28f
+                    drawRoundRect(
+                        color = Color(0xFF5A2E18).copy(alpha = 0.72f),
+                        topLeft = Offset(0f, 0f),
+                        size = Size(size.width, backHeight),
+                        cornerRadius = radius,
+                    )
+                    val cushionCount = if (size.width >= 120f) 3 else 2
+                    val step = size.width / cushionCount
+                    for (index in 1 until cushionCount) {
+                        val x = step * index
+                        drawLine(
+                            color = Color(0xFFD99B4A).copy(alpha = 0.28f),
+                            start = Offset(x, backHeight),
+                            end = Offset(x, size.height - stroke),
+                            strokeWidth = stroke,
+                        )
+                    }
+                }
+                "chair", "armchair" -> {
+                    val isArmchair = normalizedType == "armchair"
+                    val bodyInset = if (isArmchair) size.minDimension * 0.08f else size.minDimension * 0.14f
+                    val bodyTopLeft = Offset(bodyInset, bodyInset)
+                    val bodySize = Size(
+                        width = (size.width - bodyInset * 2f).coerceAtLeast(1f),
+                        height = (size.height - bodyInset * 2f).coerceAtLeast(1f),
+                    )
+                    drawRoundRect(
+                        color = Color(0xFF29353D).copy(alpha = 0.92f),
+                        topLeft = bodyTopLeft,
+                        size = bodySize,
+                        cornerRadius = CornerRadius(999f, 999f),
+                    )
+                    drawRoundRect(
+                        color = FloorPlanAvailableColor.copy(alpha = 0.72f),
+                        topLeft = bodyTopLeft,
+                        size = bodySize,
+                        cornerRadius = CornerRadius(999f, 999f),
+                        style = Stroke(width = stroke),
+                    )
+                    val backY = if (size.height >= size.width) bodyTopLeft.y else bodyTopLeft.y + bodySize.height * 0.18f
+                    drawLine(
+                        color = Color(0xFFE9D2A0).copy(alpha = 0.45f),
+                        start = Offset(bodyTopLeft.x + bodySize.width * 0.22f, backY),
+                        end = Offset(bodyTopLeft.x + bodySize.width * 0.78f, backY),
+                        strokeWidth = max(stroke, 1.2.dp.toPx()),
+                    )
+                }
+                "pos-marker", "text-label" -> {
+                    drawRect(
+                        color = Color.Transparent,
+                        topLeft = Offset.Zero,
+                        size = size,
+                    )
+                    drawRect(
+                        color = FloorPlanSelectionColor.copy(alpha = 0.48f),
+                        topLeft = Offset.Zero,
+                        size = size,
+                        style = Stroke(width = stroke),
+                    )
+                }
+                else -> {
+                    drawRoundRect(
+                        color = Color(0xFF25303A).copy(alpha = 0.88f),
+                        topLeft = Offset.Zero,
+                        size = size,
+                        cornerRadius = CornerRadius(2f, 2f),
+                    )
+                    drawRoundRect(
+                        color = Color(0x4466F6E8),
+                        topLeft = Offset.Zero,
+                        size = size,
+                        cornerRadius = CornerRadius(2f, 2f),
+                        style = Stroke(width = stroke),
+                    )
+                }
+            }
+        }
+
         if (showLabel && label.isNotBlank() && screenWidthPx >= 36f) {
-            Box(contentAlignment = Alignment.Center) {
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                 Text(
                     text = label,
-                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                    modifier = Modifier
+                        .background(FloorPlanHintSurface, RoundedCornerShape(999.dp))
+                        .padding(horizontal = 5.dp, vertical = 2.dp),
                     style = floorPlanLabelStyle(screenWidthPx),
                     color = TableMapVisualTokens.TextSecondary,
                     fontWeight = FontWeight.SemiBold,
@@ -1087,33 +1231,79 @@ private fun FloorPlanDoorObjectNode(
 ) {
     Box(modifier = modifier.requiredSize(widthDp, heightDp)) {
         Canvas(modifier = Modifier.fillMaxSize()) {
-            val stroke = 1.4.dp.toPx()
-            val hingeLeft = floorObject.doorHingeSide?.equals("right", ignoreCase = true) != true
-            val swingOut = floorObject.doorSwingDirection?.equals("out", ignoreCase = true) == true
-            val hingeX = if (hingeLeft) 0f else size.width
-            val leafEndX = if (hingeLeft) size.width else 0f
-            val baseY = if (swingOut) size.height * 0.85f else size.height * 0.15f
-            val arcRadius = min(size.width, size.height * 1.2f)
-            val arcTop = if (swingOut) baseY - arcRadius else baseY
+            val isVertical = size.height >= size.width
+            val lengthPx = max(1f, if (isVertical) size.height else size.width)
+            val thicknessPx = max(1f, if (isVertical) size.width else size.height)
+            val hingeIsEnd = floorObject.doorHingeSide?.equals("right", ignoreCase = true) == true
+            val swingSign = if (floorObject.doorSwingDirection?.equals("in", ignoreCase = true) == true) -1f else 1f
+            val leafStroke = max(2f, min(6f, thicknessPx * 0.72f))
+            val thresholdStroke = max(1f, min(3f, thicknessPx * 0.32f))
+            val hingeMarkerSize = max(4f, min(8f, leafStroke + 2f))
+            val arcStroke = max(1f, min(2f, leafStroke * 0.45f))
+
+            val hingeX = if (isVertical) size.width / 2f else if (hingeIsEnd) size.width else 0f
+            val hingeY = if (isVertical) {
+                if (hingeIsEnd) size.height else 0f
+            } else {
+                size.height / 2f
+            }
+            val closedEndX = if (isVertical) {
+                hingeX
+            } else if (hingeIsEnd) {
+                hingeX - lengthPx
+            } else {
+                hingeX + lengthPx
+            }
+            val closedEndY = if (isVertical) {
+                if (hingeIsEnd) hingeY - lengthPx else hingeY + lengthPx
+            } else {
+                hingeY
+            }
+            val openEndX = if (isVertical) hingeX + swingSign * lengthPx else hingeX
+            val openEndY = if (isVertical) hingeY else hingeY + swingSign * lengthPx
+
             drawLine(
-                color = FloorPlanSelectionColor.copy(alpha = 0.92f),
-                start = Offset(hingeX, baseY),
-                end = Offset(leafEndX, baseY),
-                strokeWidth = stroke,
+                color = Color(0xFFF1DC9C).copy(alpha = 0.72f),
+                start = Offset(hingeX, hingeY),
+                end = Offset(closedEndX, closedEndY),
+                strokeWidth = thresholdStroke,
+            )
+
+            val arcTopLeft = Offset(
+                x = if (isVertical) min(hingeX, openEndX) else if (hingeIsEnd) hingeX - lengthPx else hingeX,
+                y = if (isVertical) if (hingeIsEnd) hingeY - lengthPx else hingeY else min(hingeY, openEndY),
+            )
+            val startAngle = if (isVertical) {
+                if (hingeIsEnd) if (swingSign < 0f) 90f else 180f else if (swingSign < 0f) 270f else 0f
+            } else {
+                if (hingeIsEnd) if (swingSign < 0f) 0f else 90f else if (swingSign < 0f) 180f else 270f
+            }
+            drawArc(
+                color = Color(0xFFF1DC9C).copy(alpha = 0.56f),
+                startAngle = startAngle,
+                sweepAngle = if (hingeIsEnd) -90f else 90f,
+                useCenter = false,
+                topLeft = arcTopLeft,
+                size = Size(lengthPx, lengthPx),
+                style = Stroke(width = arcStroke),
+            )
+
+            drawLine(
+                color = Color(0xFFFFF2D4).copy(alpha = 0.95f),
+                start = Offset(hingeX, hingeY),
+                end = Offset(openEndX, openEndY),
+                strokeWidth = leafStroke,
             )
             drawRect(
-                color = FloorPlanSelectionColor.copy(alpha = 0.92f),
-                topLeft = Offset(hingeX - 2.dp.toPx(), baseY - 2.dp.toPx()),
-                size = Size(4.dp.toPx(), 4.dp.toPx()),
+                color = Color(0xFF201108),
+                topLeft = Offset(hingeX - hingeMarkerSize / 2f, hingeY - hingeMarkerSize / 2f),
+                size = Size(hingeMarkerSize, hingeMarkerSize),
             )
-            drawArc(
-                color = FloorPlanSelectionColor.copy(alpha = 0.48f),
-                startAngle = if (hingeLeft) if (swingOut) 270f else 0f else if (swingOut) 180f else 90f,
-                sweepAngle = if (hingeLeft) 90f else -90f,
-                useCenter = false,
-                topLeft = Offset(if (hingeLeft) hingeX else hingeX - arcRadius, arcTop),
-                size = Size(arcRadius, arcRadius),
-                style = Stroke(width = stroke),
+            drawRect(
+                color = Color(0xFFFFF2D4).copy(alpha = 0.90f),
+                topLeft = Offset(hingeX - hingeMarkerSize / 2f, hingeY - hingeMarkerSize / 2f),
+                size = Size(hingeMarkerSize, hingeMarkerSize),
+                style = Stroke(width = max(1f, 1.dp.toPx())),
             )
         }
     }
