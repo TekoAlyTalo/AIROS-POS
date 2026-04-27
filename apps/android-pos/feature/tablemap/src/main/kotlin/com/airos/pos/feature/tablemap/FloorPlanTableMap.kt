@@ -6,10 +6,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.calculateCentroid
-import androidx.compose.foundation.gestures.calculatePan
-import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -594,55 +590,31 @@ private fun SimpleFloorPlanTableMap(
 
                     }
 
-                }                .pointerInput("floor-plan-pinch-zoom-v3", viewportWidthPx, viewportHeightPx, contentWidthPx, contentHeightPx) {
-                    awaitEachGesture {
-                        var hadMultiTouch = false
-
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            val pressedCount = event.changes.count { it.pressed }
-
-                            if (pressedCount == 0) {
-                                break
-                            }
-
-                            if (pressedCount < 2 && !hadMultiTouch) {
-                                continue
-                            }
-
-                            if (pressedCount >= 2) {
-                                hadMultiTouch = true
-
-                                val centroid = event.calculateCentroid(useCurrent = true)
-                                val pan = event.calculatePan()
-                                val gestureZoom = event.calculateZoom()
-                                val previousScale = zoomScale
-                                val adjustedZoom = 1f + ((gestureZoom - 1f) * FLOOR_PLAN_ZOOM_SENSITIVITY)
-                                val nextScale = (previousScale * adjustedZoom).coerceIn(FLOOR_PLAN_MIN_ZOOM, FLOOR_PLAN_MAX_ZOOM)
-                                val scaleChange = nextScale / previousScale
-                                val transformedOffset = centroid + (panOffset - centroid) * scaleChange + pan
-                                val nextOffset = clampPanOffset(
-                                    offset = transformedOffset,
-                                    viewportWidthPx = viewportWidthPx,
-                                    viewportHeightPx = viewportHeightPx,
-                                    contentWidthPx = contentWidthPx * nextScale,
-                                    contentHeightPx = contentHeightPx * nextScale,
-                                )
-
-                                zoomScale = nextScale
-                                panOffset = nextOffset
-                                userChangedViewport = true
-                                currentOnFloorPlanViewportChange(
-                                    StaffFloorPlanViewportPreference(
-                                        zoomScale = nextScale,
-                                        panX = nextOffset.x,
-                                        panY = nextOffset.y,
-                                    ),
-                                )
-
-                                event.changes.forEach { it.consume() }
-                            }
-                        }
+                }
+                .pointerInput(viewportWidthPx, viewportHeightPx, contentWidthPx, contentHeightPx) {
+                    detectTransformGestures { centroid, pan, zoom, _ ->
+                        val previousScale = zoomScale
+                        val adjustedZoom = 1f + ((zoom - 1f) * FLOOR_PLAN_ZOOM_SENSITIVITY)
+                        val nextScale = (previousScale * adjustedZoom).coerceIn(FLOOR_PLAN_MIN_ZOOM, FLOOR_PLAN_MAX_ZOOM)
+                        val scaleChange = nextScale / previousScale
+                        val transformedOffset = centroid + (panOffset - centroid) * scaleChange + pan
+                        val nextOffset = clampPanOffset(
+                            offset = transformedOffset,
+                            viewportWidthPx = viewportWidthPx,
+                            viewportHeightPx = viewportHeightPx,
+                            contentWidthPx = contentWidthPx * nextScale,
+                            contentHeightPx = contentHeightPx * nextScale,
+                        )
+                        zoomScale = nextScale
+                        panOffset = nextOffset
+                        userChangedViewport = true
+                        currentOnFloorPlanViewportChange(
+                            StaffFloorPlanViewportPreference(
+                                zoomScale = nextScale,
+                                panX = nextOffset.x,
+                                panY = nextOffset.y,
+                            ),
+                        )
                     }
                 },
         ) {
