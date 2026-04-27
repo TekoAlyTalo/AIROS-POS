@@ -6,6 +6,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -42,7 +46,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -223,9 +229,10 @@ private val FloorPlanReservedColor = TableMapVisualTokens.ReservedColor
 private val FloorPlanBoundsPadding = 48f
 private const val FLOOR_PLAN_DEBUG_TAG = "FloorPlanDebug"
 private const val FLOOR_PLAN_MIN_ZOOM = 0.20f
-private const val FLOOR_PLAN_MAX_ZOOM = 4.0f
+private const val FLOOR_PLAN_MAX_ZOOM = 8.0f
 private const val FLOOR_PLAN_ZOOM_SENSITIVITY = 1.0f
 private const val FLOOR_PLAN_DEBUG_MARKER = "FLOORPLAN RENDERER WORLD-TO-SCREEN V1"
+private const val FLOOR_PLAN_CAMERA_SYMBOL_PX = 40f
 
 @Composable
 internal fun TableMapViewModeToggle(
@@ -300,6 +307,8 @@ internal fun FloorPlanTableMap(
     tables: List<RestaurantTable>,
     floorAreas: List<FloorMapArea> = emptyList(),
     floorObjects: List<FloorMapObject> = emptyList(),
+    floorMapWidthPx: Float? = null,
+    floorMapHeightPx: Float? = null,
     selectedTableId: String?,
     onSelectTable: (String) -> Unit,
     onLongPressTable: (String) -> Unit = {},
@@ -325,6 +334,8 @@ internal fun FloorPlanTableMap(
                 tables = tables,
                 floorAreas = floorAreas,
                 floorObjects = floorObjects,
+                floorMapWidthPx = floorMapWidthPx,
+                floorMapHeightPx = floorMapHeightPx,
                 selectedTableId = selectedTableId,
                 onSelectTable = onSelectTable,
                 onLongPressTable = onLongPressTable,
@@ -347,6 +358,8 @@ internal fun FloorPlanTableMap(
                 tables = tables,
                 floorAreas = floorAreas,
                 floorObjects = floorObjects,
+                floorMapWidthPx = floorMapWidthPx,
+                floorMapHeightPx = floorMapHeightPx,
                 selectedTableId = selectedTableId,
                 onSelectTable = onSelectTable,
                 onLongPressTable = onLongPressTable,
@@ -371,6 +384,8 @@ private fun SimpleFloorPlanTableMap(
     tables: List<RestaurantTable>,
     floorAreas: List<FloorMapArea>,
     floorObjects: List<FloorMapObject>,
+    floorMapWidthPx: Float? = null,
+    floorMapHeightPx: Float? = null,
     selectedTableId: String?,
     onSelectTable: (String) -> Unit,
     onLongPressTable: (String) -> Unit,
@@ -395,11 +410,13 @@ private fun SimpleFloorPlanTableMap(
         val density = LocalDensity.current
         val viewportWidthPx = constraints.maxWidth.toFloat()
         val viewportHeightPx = constraints.maxHeight.toFloat()
-        val layoutModel = remember(tables, floorAreas, floorObjects, viewpoint) {
+        val layoutModel = remember(tables, floorAreas, floorObjects, floorMapWidthPx, floorMapHeightPx, viewpoint) {
             buildFloorPlanLayoutModel(
                 tables = tables,
                 floorAreas = floorAreas,
                 floorObjects = floorObjects,
+                floorMapWidthPx = floorMapWidthPx,
+                floorMapHeightPx = floorMapHeightPx,
                 viewpoint = viewpoint,
             )
         }
@@ -577,45 +594,69 @@ private fun SimpleFloorPlanTableMap(
 
                     }
 
-                }
+                }                .pointerInput("floor-plan-pinch-zoom-v3", viewportWidthPx, viewportHeightPx, contentWidthPx, contentHeightPx) {
+                    awaitEachGesture {
+                        var hadMultiTouch = false
 
-                .pointerInput(viewportWidthPx, viewportHeightPx, contentWidthPx, contentHeightPx) {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val pressedCount = event.changes.count { it.pressed }
 
-                    detectTransformGestures { centroid, pan, zoom, _ ->
-                        val previousScale = zoomScale
-                        val adjustedZoom = 1f + ((zoom - 1f) * FLOOR_PLAN_ZOOM_SENSITIVITY)
-                        val nextScale = (previousScale * adjustedZoom).coerceIn(FLOOR_PLAN_MIN_ZOOM, FLOOR_PLAN_MAX_ZOOM)
-                        val scaleChange = nextScale / previousScale
-                        val transformedOffset = centroid + (panOffset - centroid) * scaleChange + pan
-                        val nextOffset = clampPanOffset(
-                            offset = transformedOffset,
-                            viewportWidthPx = viewportWidthPx,
-                            viewportHeightPx = viewportHeightPx,
-                            contentWidthPx = contentWidthPx * nextScale,
-                            contentHeightPx = contentHeightPx * nextScale,
-                        )
-                        zoomScale = nextScale
-                        panOffset = nextOffset
-                        userChangedViewport = true
-                        currentOnFloorPlanViewportChange(
-                            StaffFloorPlanViewportPreference(
-                                zoomScale = nextScale,
-                                panX = nextOffset.x,
-                                panY = nextOffset.y,
-                            ),
-                        )
+                            if (pressedCount == 0) {
+                                break
+                            }
+
+                            if (pressedCount < 2 && !hadMultiTouch) {
+                                continue
+                            }
+
+                            if (pressedCount >= 2) {
+                                hadMultiTouch = true
+
+                                val centroid = event.calculateCentroid(useCurrent = true)
+                                val pan = event.calculatePan()
+                                val gestureZoom = event.calculateZoom()
+                                val previousScale = zoomScale
+                                val adjustedZoom = 1f + ((gestureZoom - 1f) * FLOOR_PLAN_ZOOM_SENSITIVITY)
+                                val nextScale = (previousScale * adjustedZoom).coerceIn(FLOOR_PLAN_MIN_ZOOM, FLOOR_PLAN_MAX_ZOOM)
+                                val scaleChange = nextScale / previousScale
+                                val transformedOffset = centroid + (panOffset - centroid) * scaleChange + pan
+                                val nextOffset = clampPanOffset(
+                                    offset = transformedOffset,
+                                    viewportWidthPx = viewportWidthPx,
+                                    viewportHeightPx = viewportHeightPx,
+                                    contentWidthPx = contentWidthPx * nextScale,
+                                    contentHeightPx = contentHeightPx * nextScale,
+                                )
+
+                                zoomScale = nextScale
+                                panOffset = nextOffset
+                                userChangedViewport = true
+                                currentOnFloorPlanViewportChange(
+                                    StaffFloorPlanViewportPreference(
+                                        zoomScale = nextScale,
+                                        panX = nextOffset.x,
+                                        panY = nextOffset.y,
+                                    ),
+                                )
+
+                                event.changes.forEach { it.consume() }
+                            }
+                        }
                     }
                 },
         ) {
-            FloorPlanBackdrop()
-
-            layoutModel.areas.forEach { areaPlacement ->
-                FloorPlanAreaSurface(
-                    placement = areaPlacement,
-                    panOffset = clampedOffset,
-                    zoom = zoomScale,
-                )
-            }
+            FloorPlanBackdrop(
+                panOffset = clampedOffset,
+                zoom = zoomScale,
+                contentWidthPx = contentWidthPx,
+                contentHeightPx = contentHeightPx,
+            )
+            FloorPlanAreasLayer(
+                placements = layoutModel.areas,
+                panOffset = clampedOffset,
+                zoom = zoomScale,
+            )
             layoutModel.zoneLabels.forEach { labelPlacement ->
                 FloorPlanZoneLabel(
                     labelPlacement = labelPlacement,
@@ -623,13 +664,20 @@ private fun SimpleFloorPlanTableMap(
                     zoom = zoomScale,
                 )
             }
-            layoutModel.objects.forEach { placement ->
-                FloorPlanObjectNode(
-                    placement = placement,
-                    panOffset = clampedOffset,
-                    zoom = zoomScale,
-                )
-            }
+            FloorPlanWorldObjectsLayer(
+                placements = layoutModel.objects.filter { it.floorObject.shouldRenderInWorldObjectLayer() },
+                panOffset = clampedOffset,
+                zoom = zoomScale,
+            )
+            layoutModel.objects
+                .filterNot { it.floorObject.shouldRenderInWorldObjectLayer() }
+                .forEach { placement ->
+                    FloorPlanObjectNode(
+                        placement = placement,
+                        panOffset = clampedOffset,
+                        zoom = zoomScale,
+                    )
+                }
             layoutModel.tables.forEach { placement ->
                 FloorPlanTableNode(
                     table = placement.table,
@@ -669,31 +717,44 @@ private fun SimpleFloorPlanTableMap(
 }
 
 @Composable
-private fun FloorPlanBackdrop() {
+private fun FloorPlanBackdrop(
+    panOffset: Offset,
+    zoom: Float,
+    contentWidthPx: Float,
+    contentHeightPx: Float,
+) {
     Canvas(modifier = Modifier.fillMaxSize()) {
         drawRect(brush = FloorPlanBackgroundBrush)
 
-        val gridStep = 120f
-        var x = 0f
-        while (x <= size.width) {
-            drawLine(
-                color = FloorPlanMapLineColor,
-                start = Offset(x, 0f),
-                end = Offset(x, size.height),
-                strokeWidth = 1.dp.toPx(),
-            )
-            x += gridStep
+        val gridStepWorldPx = 120f
+        val strokeWidth = 1.dp.toPx()
+
+        var worldX = 0f
+        while (worldX <= contentWidthPx) {
+            val screenX = panOffset.x + worldX * zoom
+            if (screenX >= -strokeWidth && screenX <= size.width + strokeWidth) {
+                drawLine(
+                    color = FloorPlanMapLineColor,
+                    start = Offset(screenX, 0f),
+                    end = Offset(screenX, size.height),
+                    strokeWidth = strokeWidth,
+                )
+            }
+            worldX += gridStepWorldPx
         }
 
-        var y = 0f
-        while (y <= size.height) {
-            drawLine(
-                color = FloorPlanMapLineColor,
-                start = Offset(0f, y),
-                end = Offset(size.width, y),
-                strokeWidth = 1.dp.toPx(),
-            )
-            y += gridStep
+        var worldY = 0f
+        while (worldY <= contentHeightPx) {
+            val screenY = panOffset.y + worldY * zoom
+            if (screenY >= -strokeWidth && screenY <= size.height + strokeWidth) {
+                drawLine(
+                    color = FloorPlanMapLineColor,
+                    start = Offset(0f, screenY),
+                    end = Offset(size.width, screenY),
+                    strokeWidth = strokeWidth,
+                )
+            }
+            worldY += gridStepWorldPx
         }
     }
 }
@@ -722,6 +783,115 @@ private fun FloorPlanZoneLabel(
     )
 }
 
+@Composable
+private fun FloorPlanAreasLayer(
+    placements: List<FloorPlanAreaPlacement>,
+    panOffset: Offset,
+    zoom: Float,
+) {
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        placements.forEach { placement ->
+            val screen = placement.rect.toScreenRect(panOffset, zoom)
+            val areaWidthPx = screen.width.coerceAtLeast(1f)
+            val areaHeightPx = screen.height.coerceAtLeast(1f)
+
+            withTransform({
+                translate(left = screen.left, top = screen.top)
+                rotate(
+                    degrees = placement.effectiveRotationDeg,
+                    pivot = Offset(areaWidthPx / 2f, areaHeightPx / 2f),
+                )
+            }) {
+                drawFloorPlanAreaShape(
+                    area = placement.area,
+                    targetSize = Size(areaWidthPx, areaHeightPx),
+                )
+            }
+        }
+    }
+}
+
+private fun DrawScope.drawFloorPlanAreaShape(
+    area: FloorMapArea,
+    targetSize: Size,
+) {
+    val fillTop = Color(0xFFCD9D4A).copy(alpha = 0.26f)
+    val fillBottom = areaSurfaceColor(area).copy(alpha = 0.24f)
+    val borderColor = areaSurfaceBorderColor(area).copy(alpha = 0.46f)
+    val fillBrush = Brush.verticalGradient(
+        colors = listOf(fillTop, fillBottom),
+        startY = 0f,
+        endY = targetSize.height,
+    )
+    val stroke = max(1f, 1.dp.toPx())
+
+    when (area.shape.lowercase()) {
+        "triangle" -> {
+            val p1x = (area.p1XPercent ?: 0f) / 100f
+            val p1y = (area.p1YPercent ?: 100f) / 100f
+            val p2x = (area.p2XPercent ?: 100f) / 100f
+            val p2y = (area.p2YPercent ?: 100f) / 100f
+            val p3x = (area.p3XPercent
+                ?: area.apexXPercent
+                ?: 50f) / 100f
+            val p3y = (area.p3YPercent ?: 0f) / 100f
+
+            val path = androidx.compose.ui.graphics.Path().apply {
+                moveTo(targetSize.width * p1x, targetSize.height * p1y)
+                lineTo(targetSize.width * p2x, targetSize.height * p2y)
+                lineTo(targetSize.width * p3x, targetSize.height * p3y)
+                close()
+            }
+
+            drawPath(path = path, brush = fillBrush)
+            drawPath(path = path, color = borderColor, style = Stroke(width = stroke))
+        }
+
+        "circle", "ellipse" -> {
+            drawOval(
+                brush = fillBrush,
+                topLeft = Offset.Zero,
+                size = targetSize,
+            )
+            drawOval(
+                color = borderColor,
+                topLeft = Offset.Zero,
+                size = targetSize,
+                style = Stroke(width = stroke),
+            )
+        }
+
+        "roundedrectangle", "rounded-rectangle", "rounded_rect" -> {
+            drawRoundRect(
+                brush = fillBrush,
+                topLeft = Offset.Zero,
+                size = targetSize,
+                cornerRadius = CornerRadius(14f, 14f),
+            )
+            drawRoundRect(
+                color = borderColor,
+                topLeft = Offset.Zero,
+                size = targetSize,
+                cornerRadius = CornerRadius(14f, 14f),
+                style = Stroke(width = stroke),
+            )
+        }
+
+        else -> {
+            drawRect(
+                brush = fillBrush,
+                topLeft = Offset.Zero,
+                size = targetSize,
+            )
+            drawRect(
+                color = borderColor,
+                topLeft = Offset.Zero,
+                size = targetSize,
+                style = Stroke(width = stroke),
+            )
+        }
+    }
+}
 @Composable
 private fun FloorPlanAreaSurface(
     placement: FloorPlanAreaPlacement,
@@ -873,6 +1043,147 @@ private fun FloorPlanRect.toScreenRect(panOffset: Offset, zoom: Float): FloorPla
     )
 }
 
+private fun floorPlanCanvasBoundsOrNull(
+    widthPx: Float?,
+    heightPx: Float?,
+): FloorPlanContentBounds? {
+    val safeWidth = widthPx?.takeIf { it > 0f } ?: return null
+    val safeHeight = heightPx?.takeIf { it > 0f } ?: return null
+    return FloorPlanContentBounds(
+        left = 0f,
+        top = 0f,
+        right = safeWidth,
+        bottom = safeHeight,
+    )
+}
+
+private fun FloorPlanRect.withTopLeftVisualSize(widthPx: Float, heightPx: Float): FloorPlanRect {
+    return FloorPlanRect(
+        left = left,
+        top = top,
+        right = left + widthPx,
+        bottom = top + heightPx,
+    )
+}
+
+
+private fun FloorMapObject.editorVisualWidthPx(worldScreen: FloorPlanRect): Float {
+    return when {
+        type.equals("camera", ignoreCase = true) -> FLOOR_PLAN_CAMERA_SYMBOL_PX
+        else -> worldScreen.width.coerceAtLeast(1f)
+    }
+}
+
+private fun FloorMapObject.editorVisualHeightPx(worldScreen: FloorPlanRect): Float {
+    return when {
+        type.equals("camera", ignoreCase = true) -> FLOOR_PLAN_CAMERA_SYMBOL_PX
+        else -> worldScreen.height.coerceAtLeast(1f)
+    }
+}
+
+private fun FloorMapObject.shouldRenderInWorldObjectLayer(): Boolean {
+    return when (type.lowercase()) {
+        "wall", "bar-counter" -> true
+        else -> false
+    }
+}
+private fun FloorMapObject.visualScreenRectForObject(worldScreen: FloorPlanRect): FloorPlanRect {
+    return worldScreen.withTopLeftVisualSize(
+        widthPx = editorVisualWidthPx(worldScreen),
+        heightPx = editorVisualHeightPx(worldScreen),
+    )
+}
+
+@Composable
+private fun FloorPlanWorldObjectsLayer(
+    placements: List<FloorPlanObjectPlacement>,
+    panOffset: Offset,
+    zoom: Float,
+) {
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        placements.forEach { placement ->
+            val floorObject = placement.floorObject
+            val worldScreen = placement.rect.toScreenRect(panOffset, zoom)
+            val screen = floorObject.visualScreenRectForObject(worldScreen)
+            val objectWidthPx = screen.width.coerceAtLeast(1f)
+            val objectHeightPx = screen.height.coerceAtLeast(1f)
+
+            withTransform({
+                translate(left = screen.left, top = screen.top)
+                rotate(
+                    degrees = placement.effectiveRotationDeg,
+                    pivot = Offset(objectWidthPx / 2f, objectHeightPx / 2f),
+                )
+            }) {
+                drawFloorPlanWorldObjectShape(
+                    floorObject = floorObject,
+                    targetSize = Size(objectWidthPx, objectHeightPx),
+                )
+            }
+        }
+    }
+}
+
+private fun DrawScope.drawFloorPlanWorldObjectShape(
+    floorObject: FloorMapObject,
+    targetSize: Size,
+) {
+    val stroke = max(1f, 1.dp.toPx())
+
+    when (floorObject.type.lowercase()) {
+        "wall" -> {
+            drawRect(
+                color = Color(0xFF3A1E0E).copy(alpha = 0.96f),
+                topLeft = Offset.Zero,
+                size = targetSize,
+            )
+            drawRect(
+                color = Color(0x99E0A64A),
+                topLeft = Offset.Zero,
+                size = targetSize,
+                style = Stroke(width = stroke),
+            )
+        }
+
+        "bar-counter" -> {
+            val radius = CornerRadius(4f, 4f)
+            val fill = Brush.verticalGradient(
+                colors = listOf(
+                    Color(0xFF51290F).copy(alpha = 0.96f),
+                    Color(0xFF2B1508).copy(alpha = 0.96f),
+                ),
+            )
+
+            drawRoundRect(
+                brush = fill,
+                topLeft = Offset.Zero,
+                size = targetSize,
+                cornerRadius = radius,
+            )
+            drawRoundRect(
+                color = Color(0xFFB8782A).copy(alpha = 0.78f),
+                topLeft = Offset.Zero,
+                size = targetSize,
+                cornerRadius = radius,
+                style = Stroke(width = stroke),
+            )
+
+            val railInset = max(3f, min(targetSize.width, targetSize.height) * 0.10f)
+            drawLine(
+                color = Color(0xFFE6C47A).copy(alpha = 0.28f),
+                start = Offset(railInset, railInset),
+                end = Offset(targetSize.width - railInset, railInset),
+                strokeWidth = stroke,
+            )
+            drawLine(
+                color = Color(0xFF1B0D05).copy(alpha = 0.44f),
+                start = Offset(railInset, targetSize.height - railInset),
+                end = Offset(targetSize.width - railInset, targetSize.height - railInset),
+                strokeWidth = stroke,
+            )
+        }
+    }
+}
 @Composable
 private fun FloorPlanObjectNode(
     placement: FloorPlanObjectPlacement,
@@ -881,28 +1192,17 @@ private fun FloorPlanObjectNode(
 ) {
     val density = LocalDensity.current
     val floorObject = placement.floorObject
-    val screen = placement.rect.toScreenRect(panOffset, zoom)
+    val worldScreen = placement.rect.toScreenRect(panOffset, zoom)
     val objectType = floorObject.type.lowercase()
     val isCamera = objectType == "camera"
-    val objectWidthPx = if (isCamera) {
-        40f
-    } else if (objectType == "wall" || objectType == "door") {
-        screen.width.coerceAtLeast(1f)
-    } else {
-        screen.width.coerceAtLeast(28f)
-    }
-    val objectHeightPx = if (isCamera) {
-        40f
-    } else if (objectType == "wall" || objectType == "door") {
-        screen.height.coerceAtLeast(1f)
-    } else {
-        screen.height.coerceAtLeast(24f)
-    }
+    val visualScreen = floorObject.visualScreenRectForObject(worldScreen)
+    val objectWidthPx = visualScreen.width
+    val objectHeightPx = visualScreen.height
     val widthDp = objectWidthPx.toDp(density)
     val heightDp = objectHeightPx.toDp(density)
     val baseModifier = Modifier.graphicsLayer {
-        translationX = screen.left
-        translationY = screen.top
+        translationX = visualScreen.left
+        translationY = visualScreen.top
         rotationZ = if (isCamera) {
             0f
         } else {
@@ -1903,6 +2203,8 @@ private fun buildFloorPlanLayoutModel(
     tables: List<RestaurantTable>,
     floorAreas: List<FloorMapArea>,
     floorObjects: List<FloorMapObject>,
+    floorMapWidthPx: Float? = null,
+    floorMapHeightPx: Float? = null,
     viewpoint: FloorPlanViewpoint,
 ): FloorPlanLayoutModel {
     val tablePlacementsSource = tables.map { table ->
@@ -1914,12 +2216,18 @@ private fun buildFloorPlanLayoutModel(
     val areaPlacementsSource = floorAreas
         .filterNot { it.hidden }
         .map { area -> Triple(area, rawFloorPlanRectForArea(area), area.rotation) }
-    val rawBounds = buildRawFloorPlanBounds(
+    val derivedRawBounds = buildRawFloorPlanBounds(
         tableRects = tablePlacementsSource.map { it.second },
         areaRects = areaPlacementsSource.map { it.second },
-        objectRects = objectPlacementsSource.map { it.second },
+        objectRects = objectPlacementsSource.map { (floorObject, rawRect, _) ->
+            rawFloorPlanLayoutBoundsForObject(floorObject, rawRect)
+        },
     )
-    val canonicalContentWidth = rawBounds.width
+    val rawBounds = floorPlanCanvasBoundsOrNull(
+        widthPx = floorMapWidthPx,
+        heightPx = floorMapHeightPx,
+    ) ?: derivedRawBounds
+val canonicalContentWidth = rawBounds.width
     val canonicalContentHeight = rawBounds.height
     val rotationQuarter = normalizedQuarterRotation(viewpoint.defaultRotationDeg)
     val viewportRotationDeg = (rotationQuarter * 90f) % 360f
@@ -2090,6 +2398,21 @@ private fun rawFloorPlanRectForObject(
         right = floorObject.xPx + floorObject.widthPx,
         bottom = floorObject.yPx + floorObject.heightPx,
     )
+}
+
+private fun rawFloorPlanLayoutBoundsForObject(
+    floorObject: FloorMapObject,
+    rawRect: FloorPlanRect,
+): FloorPlanRect {
+    return when {
+        floorObject.type.equals("camera", ignoreCase = true) -> {
+            rawRect.withTopLeftVisualSize(
+                widthPx = FLOOR_PLAN_CAMERA_SYMBOL_PX,
+                heightPx = FLOOR_PLAN_CAMERA_SYMBOL_PX,
+            )
+        }
+        else -> rawRect
+    }
 }
 
 private fun Float.debugPx(): String = roundToInt().toString()

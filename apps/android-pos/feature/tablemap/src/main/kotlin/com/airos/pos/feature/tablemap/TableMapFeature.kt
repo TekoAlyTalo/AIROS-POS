@@ -1,4 +1,4 @@
-package com.airos.pos.feature.tablemap
+﻿package com.airos.pos.feature.tablemap
 
 import android.content.Context
 import android.os.Handler
@@ -1014,6 +1014,8 @@ LaunchedEffect(
                                 tables = visibleTables,
                                 floorAreas = visibleFloorAreasForSelection(floorAreas, activeAreaName),
                                 floorObjects = visibleFloorObjects,
+                            floorMapWidthPx = activeFloorMap?.widthPx ?: activeFloorMap?.width?.toFloat(),
+                            floorMapHeightPx = activeFloorMap?.heightPx ?: activeFloorMap?.height?.toFloat(),
                                 selectedTableId = selectedTable?.id,
                                 onSelectTable = { tableId ->
                                     visibleTables.firstOrNull { it.id == tableId }
