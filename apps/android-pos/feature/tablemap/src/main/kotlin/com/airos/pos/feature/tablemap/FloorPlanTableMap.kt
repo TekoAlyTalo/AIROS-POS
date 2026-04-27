@@ -34,6 +34,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -162,6 +163,11 @@ private data class FloorPlanZoneLabelPlacement(
     val label: String,
     val xPx: Float,
     val yPx: Float,
+)
+
+private data class FloorPlanTableSeatMarker(
+    val leftPx: Float,
+    val topPx: Float,
 )
 
 private data class FloorPlanAreaPlacement(
@@ -903,10 +909,12 @@ private fun FloorPlanObjectNode(
             )
         }
         "camera" -> {
+            val cameraSymbolPx = 40f
+            val cameraSymbolDp = cameraSymbolPx.toDp(density)
             FloorPlanCameraSymbol(
-                modifier = baseModifier.requiredSize(widthDp, heightDp),
+                modifier = baseModifier.requiredSize(cameraSymbolDp, cameraSymbolDp),
                 label = floorObject.label,
-                screenWidthPx = screen.width,
+                screenWidthPx = cameraSymbolPx,
             )
         }
         "pos-marker", "text-label" -> {
@@ -978,21 +986,79 @@ private fun FloorPlanCameraSymbol(
 ) {
     Box(modifier = modifier) {
         Canvas(modifier = Modifier.fillMaxSize()) {
-            val stroke = 1.dp.toPx()
-            val r = min(size.width, size.height) * 0.42f
-            val cx = size.width / 2f
-            val cy = size.height / 2f
-            drawCircle(color = Color(0xFF24313A).copy(alpha = 0.94f), radius = r, center = Offset(cx, cy))
-            drawCircle(
-                color = FloorPlanSelectionColor.copy(alpha = 0.62f),
-                radius = r,
-                center = Offset(cx, cy),
+            val stroke = 1.55.dp.toPx()
+            val bodyLeft = size.width * 0.12f
+            val bodyTop = size.height * 0.43f
+            val bodyWidth = size.width * 0.53f
+            val bodyHeight = size.height * 0.28f
+            val bodyRadius = CornerRadius(size.width * 0.055f, size.height * 0.055f)
+            val lensCenter = Offset(
+                x = bodyLeft + bodyWidth * 0.50f,
+                y = bodyTop + bodyHeight * 0.52f,
+            )
+            val lensRadius = min(bodyWidth, bodyHeight) * 0.20f
+            val hornPath = androidx.compose.ui.graphics.Path().apply {
+                moveTo(bodyLeft + bodyWidth, bodyTop + bodyHeight * 0.30f)
+                lineTo(size.width * 0.90f, size.height * 0.31f)
+                lineTo(size.width * 0.90f, size.height * 0.78f)
+                lineTo(bodyLeft + bodyWidth, bodyTop + bodyHeight * 0.70f)
+                close()
+            }
+            val cameraColor = Color(0xFFF9E8B5)
+            val cameraFill = Color(0xFF201108).copy(alpha = 0.92f)
+            val legColor = cameraColor.copy(alpha = 0.72f)
+
+            drawRoundRect(
+                color = cameraFill,
+                topLeft = Offset(bodyLeft, bodyTop),
+                size = Size(bodyWidth, bodyHeight),
+                cornerRadius = bodyRadius,
+            )
+            drawRoundRect(
+                color = cameraColor,
+                topLeft = Offset(bodyLeft, bodyTop),
+                size = Size(bodyWidth, bodyHeight),
+                cornerRadius = bodyRadius,
+                style = Stroke(width = stroke),
+            )
+            drawPath(
+                path = hornPath,
+                color = cameraFill,
+            )
+            drawPath(
+                path = hornPath,
+                color = cameraColor,
                 style = Stroke(width = stroke),
             )
             drawCircle(
-                color = FloorPlanSelectionColor.copy(alpha = 0.92f),
-                radius = r * 0.30f,
-                center = Offset(cx, cy),
+                color = cameraColor,
+                radius = lensRadius,
+                center = lensCenter,
+                style = Stroke(width = max(1f, stroke * 0.80f)),
+            )
+            drawLine(
+                color = legColor,
+                start = Offset(size.width * 0.30f, size.height * 0.71f),
+                end = Offset(size.width * 0.24f, size.height * 0.88f),
+                strokeWidth = max(1f, stroke * 0.75f),
+            )
+            drawLine(
+                color = legColor,
+                start = Offset(size.width * 0.54f, size.height * 0.71f),
+                end = Offset(size.width * 0.61f, size.height * 0.88f),
+                strokeWidth = max(1f, stroke * 0.75f),
+            )
+            drawLine(
+                color = legColor,
+                start = Offset(size.width * 0.31f, size.height * 0.35f),
+                end = Offset(size.width * 0.37f, size.height * 0.24f),
+                strokeWidth = max(1f, stroke * 0.65f),
+            )
+            drawLine(
+                color = legColor,
+                start = Offset(size.width * 0.57f, size.height * 0.35f),
+                end = Offset(size.width * 0.51f, size.height * 0.24f),
+                strokeWidth = max(1f, stroke * 0.65f),
             )
         }
         if (label.isNotBlank() && screenWidthPx >= 40f) {
@@ -1077,16 +1143,21 @@ private fun FloorPlanTableNode(
 ) {
     val density = LocalDensity.current
     val screen = rect.toScreenRect(panOffset, zoom)
-    val screenWidthPx = screen.width.coerceAtLeast(1f)
-    val screenHeightPx = screen.height.coerceAtLeast(1f)
-    val widthDp = screenWidthPx.toDp(density)
-    val heightDp = screenHeightPx.toDp(density)
+    val bodyWidthPx = screen.width.coerceAtLeast(1f)
+    val bodyHeightPx = screen.height.coerceAtLeast(1f)
     val isMerged = "+" in table.label
     val tableShapeRaw = table.floorPlanShape?.lowercase()
     val isRound = when (tableShapeRaw) {
         "round", "circle", "ellipse" -> true
         "square", "rectangle" -> false
         else -> !isMerged && abs(rect.width - rect.height) <= 18f
+    }
+    val seatMarkers = remember(table.id, table.seats, table.chairLayout, table.floorPlanShape, bodyWidthPx, bodyHeightPx) {
+        getTableSeatMarkers(
+            table = table,
+            widthPx = bodyWidthPx,
+            heightPx = bodyHeightPx,
+        )
     }
     val displayStatus = resolveTableDisplayStatus(
         physicalStatus = table.status,
@@ -1097,43 +1168,116 @@ private fun FloorPlanTableNode(
     val attentionTint = displayStatus.attentionVisualTint()
     val accent = displayStatus.floorPlanAccent()
     val selectedTint = attentionTint ?: accent
-    val shape: Shape = if (isRound) CircleShape else RoundedCornerShape(2.dp)
-    val showLabel = screenWidthPx >= 30f && screenHeightPx >= 22f
-    val showStatusTick = screenWidthPx >= 60f && screenHeightPx >= 50f
-    val showOpenChips = screenWidthPx >= 70f && screenHeightPx >= 64f &&
+    val seatMarkerDiameterPx = if (seatMarkers.isEmpty()) {
+        0f
+    } else {
+        max(5f, min(8f, min(bodyWidthPx, bodyHeightPx) * 0.16f))
+    }
+    val seatMarkerRadiusPx = seatMarkerDiameterPx / 2f
+    val markerLeftOverflow = seatMarkers.minOfOrNull { it.leftPx - seatMarkerRadiusPx }?.let { min(0f, it) } ?: 0f
+    val markerTopOverflow = seatMarkers.minOfOrNull { it.topPx - seatMarkerRadiusPx }?.let { min(0f, it) } ?: 0f
+    val markerRightOverflow = seatMarkers.maxOfOrNull { it.leftPx + seatMarkerRadiusPx }?.let { max(0f, it - bodyWidthPx) } ?: 0f
+    val markerBottomOverflow = seatMarkers.maxOfOrNull { it.topPx + seatMarkerRadiusPx }?.let { max(0f, it - bodyHeightPx) } ?: 0f
+    val markerPadPx = max(
+        0f,
+        max(
+            max(-markerLeftOverflow, -markerTopOverflow),
+            max(markerRightOverflow, markerBottomOverflow),
+        ) + 3f,
+    )
+    val nodeWidthPx = bodyWidthPx + markerPadPx * 2f
+    val nodeHeightPx = bodyHeightPx + markerPadPx * 2f
+    val nodeWidthDp = nodeWidthPx.toDp(density)
+    val nodeHeightDp = nodeHeightPx.toDp(density)
+    val showLabel = bodyWidthPx >= 30f && bodyHeightPx >= 22f
+    val showStatusTick = bodyWidthPx >= 60f && bodyHeightPx >= 50f
+    val showOpenChips = bodyWidthPx >= 70f && bodyHeightPx >= 64f &&
         (openSaleTotalLabels.isNotEmpty() || openTotalLabel != null)
+    val borderWidthPx = when {
+        dropHovered -> with(density) { 3.dp.toPx() }
+        attentionTint != null -> with(density) { 2.dp.toPx() }
+        selected -> with(density) { 2.dp.toPx() }
+        else -> with(density) { 1.dp.toPx() }
+    }
+    val borderColor = when {
+        attentionTint != null -> attentionTint
+        selected -> selectedTint
+        dropHovered -> FloorPlanSelectionColor
+        else -> Color(0xFFC6942E).copy(alpha = 0.78f)
+    }
 
-    Surface(
+    Box(
         modifier = Modifier
             .graphicsLayer {
-                translationX = screen.left
-                translationY = screen.top
+                translationX = screen.left - markerPadPx
+                translationY = screen.top - markerPadPx
                 rotationZ = rotationDeg
                 transformOrigin = TransformOrigin(0.5f, 0.5f)
             }
-            .requiredSize(widthDp, heightDp),
-        shape = shape,
-        color = Color(0xFF3B1C10).copy(alpha = 0.96f),
-        border = BorderStroke(
-            width = when {
-                dropHovered -> 3.dp
-                attentionTint != null -> 2.dp
-                selected -> 2.dp
-                else -> 1.dp
-            },
-            color = when {
-                attentionTint != null -> attentionTint
-                selected -> selectedTint
-                dropHovered -> FloorPlanSelectionColor
-                else -> Color(0xFFC6942E).copy(alpha = 0.78f)
-            },
-        ),
-        shadowElevation = if (selected || dropHovered) 3.dp else 0.dp,
+            .requiredSize(nodeWidthDp, nodeHeightDp),
     ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val bodyTopLeft = Offset(markerPadPx, markerPadPx)
+            val bodySize = Size(bodyWidthPx, bodyHeightPx)
+            val bodyFill = tableBodyFillColor()
+            val bodyStroke = borderColor
+            val bodyGradient = Brush.verticalGradient(
+                colors = listOf(
+                    bodyFill.copy(alpha = 0.98f),
+                    Color(0xFF3E220C).copy(alpha = 0.98f),
+                ),
+                startY = markerPadPx,
+                endY = markerPadPx + bodyHeightPx,
+            )
+            seatMarkers.forEach { marker ->
+                val center = Offset(
+                    x = markerPadPx + marker.leftPx,
+                    y = markerPadPx + marker.topPx,
+                )
+                drawCircle(
+                    color = Color(0xFF1C120A),
+                    radius = seatMarkerRadiusPx,
+                    center = center,
+                )
+                drawCircle(
+                    color = Color(0xFFEFBD5B).copy(alpha = 0.72f),
+                    radius = seatMarkerRadiusPx,
+                    center = center,
+                    style = Stroke(width = max(1f, 1.dp.toPx())),
+                )
+            }
+
+            if (isRound) {
+                drawOval(
+                    brush = bodyGradient,
+                    topLeft = bodyTopLeft,
+                    size = bodySize,
+                )
+                drawOval(
+                    color = bodyStroke,
+                    topLeft = bodyTopLeft,
+                    size = bodySize,
+                    style = Stroke(width = borderWidthPx),
+                )
+            } else {
+                drawRect(
+                    brush = bodyGradient,
+                    topLeft = bodyTopLeft,
+                    size = bodySize,
+                )
+                drawRect(
+                    color = bodyStroke,
+                    topLeft = bodyTopLeft,
+                    size = bodySize,
+                    style = Stroke(width = borderWidthPx),
+                )
+            }
+        }
+
         Box(
             modifier = Modifier
-                .fillMaxSize()
-                .background(Color(0xFF3B1C10).copy(alpha = 0.96f))
+                .offset(x = markerPadPx.toDp(density), y = markerPadPx.toDp(density))
+                .requiredSize(bodyWidthPx.toDp(density), bodyHeightPx.toDp(density))
                 .padding(horizontal = 4.dp, vertical = 2.dp),
         ) {
             Column(
@@ -1148,14 +1292,13 @@ private fun FloorPlanTableNode(
                 if (showLabel) {
                     Text(
                         text = table.label,
-                        style = floorPlanTableLabelStyle(screenWidthPx, screenHeightPx, isRound || isMerged),
+                        style = floorPlanTableLabelStyle(bodyWidthPx, bodyHeightPx, isRound || isMerged),
                         color = TableMapVisualTokens.TextPrimary,
                         fontWeight = FontWeight.Bold,
                         textAlign = TextAlign.Center,
                         maxLines = 1,
                     )
                 }
-
 
                 if (showStatusTick) {
                     val tickTint = attentionTint ?: accent
@@ -1210,6 +1353,168 @@ private fun floorPlanTableLabelStyle(
     }
     return androidx.compose.ui.text.TextStyle(fontSize = baseSp.sp)
 }
+
+private fun tableBodyFillColor(): Color {
+    return Color(0xFF5F3A18)
+}
+
+private fun getDefaultChairLayout(table: RestaurantTable): String {
+    table.chairLayout?.takeIf { it.isNotBlank() }?.let { return it }
+    return when (table.floorPlanShape?.lowercase()) {
+        "round", "circle", "ellipse" -> "round_even"
+        "square" -> "square_even"
+        "rectangle" -> if (table.seats >= 6) "rectangle_sides_only" else "rectangle_ends_and_sides"
+        else -> if (table.seats >= 6) "rectangle_sides_only" else "rectangle_ends_and_sides"
+    }
+}
+
+private fun spreadSeatPositions(
+    count: Int,
+    startPx: Float,
+    endPx: Float,
+): List<Float> {
+    if (count <= 0) return emptyList()
+    if (count == 1) return listOf((startPx + endPx) / 2f)
+    val step = (endPx - startPx) / (count - 1)
+    return List(count) { index -> startPx + step * index }
+}
+
+private fun getRectFourCenteredSeatMarkers(
+    widthPx: Float,
+    heightPx: Float,
+    seatOffsetPx: Float,
+): List<FloorPlanTableSeatMarker> {
+    val centerX = widthPx / 2f
+    val centerY = heightPx / 2f
+    return listOf(
+        FloorPlanTableSeatMarker(leftPx = centerX, topPx = -seatOffsetPx),
+        FloorPlanTableSeatMarker(leftPx = widthPx + seatOffsetPx, topPx = centerY),
+        FloorPlanTableSeatMarker(leftPx = centerX, topPx = heightPx + seatOffsetPx),
+        FloorPlanTableSeatMarker(leftPx = -seatOffsetPx, topPx = centerY),
+    )
+}
+
+private fun getTableSeatMarkers(
+    table: RestaurantTable,
+    widthPx: Float,
+    heightPx: Float,
+): List<FloorPlanTableSeatMarker> {
+    val seatCount = table.seats.coerceAtLeast(0)
+    if (seatCount == 0) return emptyList()
+
+    val layout = getDefaultChairLayout(table)
+    val seatOffsetPx = max(8f, min(16f, (min(widthPx, heightPx) * 0.28f).roundToInt().toFloat()))
+    val horizontalInsetPx = max(12f, (widthPx * 0.18f).roundToInt().toFloat())
+    val centerX = widthPx / 2f
+    val centerY = heightPx / 2f
+
+    if (layout == "round_even") {
+        val radiusX = widthPx / 2f + seatOffsetPx
+        val radiusY = heightPx / 2f + seatOffsetPx
+        return List(seatCount) { index ->
+            val angle = (Math.PI * 2.0 * index / seatCount) - (Math.PI / 2.0)
+            FloorPlanTableSeatMarker(
+                leftPx = (centerX + kotlin.math.cos(angle).toFloat() * radiusX),
+                topPx = (centerY + kotlin.math.sin(angle).toFloat() * radiusY),
+            )
+        }
+    }
+
+    if (layout == "square_even") {
+        if (seatCount == 3) {
+            return listOf(
+                FloorPlanTableSeatMarker(leftPx = centerX, topPx = -seatOffsetPx),
+                FloorPlanTableSeatMarker(leftPx = widthPx + seatOffsetPx, topPx = centerY),
+                FloorPlanTableSeatMarker(leftPx = -seatOffsetPx, topPx = centerY),
+            )
+        }
+        if (seatCount <= 2) {
+            return listOf(
+                FloorPlanTableSeatMarker(leftPx = centerX, topPx = -seatOffsetPx),
+                FloorPlanTableSeatMarker(leftPx = centerX, topPx = heightPx + seatOffsetPx),
+            ).take(seatCount)
+        }
+        return getRectFourCenteredSeatMarkers(widthPx, heightPx, seatOffsetPx).take(seatCount)
+    }
+
+    if (layout == "rectangle_sides_only") {
+        val topCount = (seatCount + 1) / 2
+        val bottomCount = seatCount / 2
+        return spreadSeatPositions(
+            count = topCount,
+            startPx = horizontalInsetPx,
+            endPx = widthPx - horizontalInsetPx,
+        ).map { leftPx ->
+            FloorPlanTableSeatMarker(leftPx = leftPx, topPx = -seatOffsetPx)
+        } + spreadSeatPositions(
+            count = bottomCount,
+            startPx = horizontalInsetPx,
+            endPx = widthPx - horizontalInsetPx,
+        ).map { leftPx ->
+            FloorPlanTableSeatMarker(leftPx = leftPx, topPx = heightPx + seatOffsetPx)
+        }
+    }
+
+    if (layout == "rectangle_wall_side_empty") {
+        val outerLongSideCount = max(1, seatCount - 2)
+        val sideSeatCount = max(0, seatCount - outerLongSideCount)
+        val markers = mutableListOf<FloorPlanTableSeatMarker>()
+        spreadSeatPositions(
+            count = outerLongSideCount,
+            startPx = horizontalInsetPx,
+            endPx = widthPx - horizontalInsetPx,
+        ).forEach { leftPx ->
+            markers += FloorPlanTableSeatMarker(leftPx = leftPx, topPx = heightPx + seatOffsetPx)
+        }
+        if (sideSeatCount >= 1) {
+            markers += FloorPlanTableSeatMarker(leftPx = -seatOffsetPx, topPx = centerY)
+        }
+        if (sideSeatCount >= 2) {
+            markers += FloorPlanTableSeatMarker(leftPx = widthPx + seatOffsetPx, topPx = centerY)
+        }
+        return markers
+    }
+
+    if (seatCount == 4) {
+        return getRectFourCenteredSeatMarkers(widthPx, heightPx, seatOffsetPx)
+    }
+
+    if (seatCount <= 2) {
+        return listOf(
+            FloorPlanTableSeatMarker(leftPx = centerX, topPx = -seatOffsetPx),
+            FloorPlanTableSeatMarker(leftPx = centerX, topPx = heightPx + seatOffsetPx),
+        ).take(seatCount)
+    }
+
+    if (seatCount == 3) {
+        return listOf(
+            FloorPlanTableSeatMarker(leftPx = centerX, topPx = -seatOffsetPx),
+            FloorPlanTableSeatMarker(leftPx = widthPx + seatOffsetPx, topPx = centerY),
+            FloorPlanTableSeatMarker(leftPx = centerX, topPx = heightPx + seatOffsetPx),
+        )
+    }
+
+    val topCount = (seatCount - 1) / 2
+    val bottomCount = (seatCount - 2) / 2
+
+    return listOf(FloorPlanTableSeatMarker(leftPx = -seatOffsetPx, topPx = centerY)) +
+        spreadSeatPositions(
+            count = topCount,
+            startPx = horizontalInsetPx,
+            endPx = widthPx - horizontalInsetPx,
+        ).map { leftPx ->
+            FloorPlanTableSeatMarker(leftPx = leftPx, topPx = -seatOffsetPx)
+        } +
+        listOf(FloorPlanTableSeatMarker(leftPx = widthPx + seatOffsetPx, topPx = centerY)) +
+        spreadSeatPositions(
+            count = bottomCount,
+            startPx = horizontalInsetPx,
+            endPx = widthPx - horizontalInsetPx,
+        ).map { leftPx ->
+            FloorPlanTableSeatMarker(leftPx = leftPx, topPx = heightPx + seatOffsetPx)
+        }
+}
+
 
 
 @Composable
