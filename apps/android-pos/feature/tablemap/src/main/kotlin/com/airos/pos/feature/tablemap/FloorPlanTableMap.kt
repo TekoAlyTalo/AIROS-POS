@@ -1,10 +1,9 @@
-﻿package com.airos.pos.feature.tablemap
+package com.airos.pos.feature.tablemap
 import android.util.Log
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -56,6 +55,7 @@ import com.airos.pos.core.model.FloorMapArea
 import com.airos.pos.core.model.FloorMapObject
 import com.airos.pos.core.model.RestaurantTable
 import com.airos.pos.core.model.StaffFloorPlanViewportPreference
+import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -290,7 +290,7 @@ private fun SimpleFloorPlanTableMap(
         var zoomScale by rememberSaveable(viewportKey) {
             mutableStateOf(floorPlanViewport.resolvedZoomScale(fitZoom))
         }
-        val defaultOffset = remember(viewportKey, layoutModel, zoomScale) {
+        val defaultOffset = remember(viewportKey, contentWidthPx, contentHeightPx, zoomScale) {
             centerContentOffset(
                 viewportWidthPx = viewportWidthPx,
                 viewportHeightPx = viewportHeightPx,
@@ -298,17 +298,18 @@ private fun SimpleFloorPlanTableMap(
                 contentHeightPx = contentHeightPx * zoomScale,
             )
         }
-        var panOffset by remember(viewportKey, layoutModel) {
-            mutableStateOf(
-                floorPlanViewport.resolvedPanOffset(
-                    defaultOffset = defaultOffset,
-                    viewportWidthPx = viewportWidthPx,
-                    viewportHeightPx = viewportHeightPx,
-                    contentWidthPx = contentWidthPx,
-                    contentHeightPx = contentHeightPx,
-                ),
+        val initialPanOffset = remember(viewportKey) {
+            floorPlanViewport.resolvedPanOffset(
+                defaultOffset = defaultOffset,
+                viewportWidthPx = viewportWidthPx,
+                viewportHeightPx = viewportHeightPx,
+                contentWidthPx = contentWidthPx,
+                contentHeightPx = contentHeightPx,
             )
         }
+        var panOffsetX by rememberSaveable(viewportKey) { mutableStateOf(initialPanOffset.x) }
+        var panOffsetY by rememberSaveable(viewportKey) { mutableStateOf(initialPanOffset.y) }
+        val panOffset = Offset(panOffsetX, panOffsetY)
         val scaledContentWidthPx = contentWidthPx * zoomScale
         val scaledContentHeightPx = contentHeightPx * zoomScale
         LaunchedEffect(
@@ -322,13 +323,15 @@ private fun SimpleFloorPlanTableMap(
             if (!userChangedViewport && floorPlanViewport.hasCompleteViewport()) {
                 val restoredZoom = floorPlanViewport.resolvedZoomScale(fitZoom)
                 zoomScale = restoredZoom
-                panOffset = floorPlanViewport.resolvedPanOffset(
+                val restoredPanOffset = floorPlanViewport.resolvedPanOffset(
                     defaultOffset = defaultOffset,
                     viewportWidthPx = viewportWidthPx,
                     viewportHeightPx = viewportHeightPx,
                     contentWidthPx = contentWidthPx,
                     contentHeightPx = contentHeightPx,
                 )
+                panOffsetX = restoredPanOffset.x
+                panOffsetY = restoredPanOffset.y
             }
         }
         val clampedOffset = clampPanOffset(
@@ -374,9 +377,32 @@ private fun SimpleFloorPlanTableMap(
         val currentTableHitTargets by rememberUpdatedState(tableHitTargets)
         val currentClampedOffset by rememberUpdatedState(clampedOffset)
         val currentZoomScale by rememberUpdatedState(zoomScale)
+        val currentViewportWidthPx by rememberUpdatedState(viewportWidthPx)
+        val currentViewportHeightPx by rememberUpdatedState(viewportHeightPx)
+        val currentContentWidthPx by rememberUpdatedState(contentWidthPx)
+        val currentContentHeightPx by rememberUpdatedState(contentHeightPx)
         val currentOnSelectTable by rememberUpdatedState(onSelectTable)
         val currentOnLongPressTable by rememberUpdatedState(onLongPressTable)
         val currentOnFloorPlanViewportChange by rememberUpdatedState(onFloorPlanViewportChange)
+        LaunchedEffect(userChangedViewport, zoomScale, panOffsetX, panOffsetY) {
+            if (userChangedViewport) {
+                delay(250)
+                val settledOffset = clampPanOffset(
+                    offset = Offset(panOffsetX, panOffsetY),
+                    viewportWidthPx = viewportWidthPx,
+                    viewportHeightPx = viewportHeightPx,
+                    contentWidthPx = contentWidthPx * zoomScale,
+                    contentHeightPx = contentHeightPx * zoomScale,
+                )
+                currentOnFloorPlanViewportChange(
+                    StaffFloorPlanViewportPreference(
+                        zoomScale = zoomScale,
+                        panX = settledOffset.x,
+                        panY = settledOffset.y,
+                    ),
+                )
+            }
+        }
         var externalHoverTableId by remember { mutableStateOf<String?>(null) }
         val currentOnExternalDragHoverTableId by rememberUpdatedState(onExternalDragHoverTableId)
         val currentExternalDragSourceTableId by rememberUpdatedState(externalDragSourceTableId)
@@ -409,71 +435,24 @@ private fun SimpleFloorPlanTableMap(
                         },
                     )
                 }
-                .pointerInput("floor-plan-drag-pan-v2", viewportWidthPx, viewportHeightPx, contentWidthPx, contentHeightPx, zoomScale) {
-
-                    detectDragGestures { change, dragAmount ->
-
-                        change.consume()
-
-                        val nextOffset = clampPanOffset(
-
-                            offset = currentClampedOffset + dragAmount,
-
-                            viewportWidthPx = viewportWidthPx,
-
-                            viewportHeightPx = viewportHeightPx,
-
-                            contentWidthPx = contentWidthPx * currentZoomScale,
-
-                            contentHeightPx = contentHeightPx * currentZoomScale,
-
-                        )
-
-                        panOffset = nextOffset
-
-                        userChangedViewport = true
-
-                        currentOnFloorPlanViewportChange(
-
-                            StaffFloorPlanViewportPreference(
-
-                                zoomScale = currentZoomScale,
-
-                                panX = nextOffset.x,
-
-                                panY = nextOffset.y,
-
-                            ),
-
-                        )
-
-                    }
-
-                }
-                .pointerInput(viewportWidthPx, viewportHeightPx, contentWidthPx, contentHeightPx) {
+                .pointerInput(Unit) {
                     detectTransformGestures { centroid, pan, zoom, _ ->
-                        val previousScale = zoomScale
+                        val previousScale = currentZoomScale
                         val adjustedZoom = 1f + ((zoom - 1f) * FLOOR_PLAN_ZOOM_SENSITIVITY)
                         val nextScale = (previousScale * adjustedZoom).coerceIn(FLOOR_PLAN_MIN_ZOOM, FLOOR_PLAN_MAX_ZOOM)
                         val scaleChange = nextScale / previousScale
-                        val transformedOffset = centroid + (panOffset - centroid) * scaleChange + pan
+                        val transformedOffset = centroid + (currentClampedOffset - centroid) * scaleChange + pan
                         val nextOffset = clampPanOffset(
                             offset = transformedOffset,
-                            viewportWidthPx = viewportWidthPx,
-                            viewportHeightPx = viewportHeightPx,
-                            contentWidthPx = contentWidthPx * nextScale,
-                            contentHeightPx = contentHeightPx * nextScale,
+                            viewportWidthPx = currentViewportWidthPx,
+                            viewportHeightPx = currentViewportHeightPx,
+                            contentWidthPx = currentContentWidthPx * nextScale,
+                            contentHeightPx = currentContentHeightPx * nextScale,
                         )
                         zoomScale = nextScale
-                        panOffset = nextOffset
+                        panOffsetX = nextOffset.x
+                        panOffsetY = nextOffset.y
                         userChangedViewport = true
-                        currentOnFloorPlanViewportChange(
-                            StaffFloorPlanViewportPreference(
-                                zoomScale = nextScale,
-                                panX = nextOffset.x,
-                                panY = nextOffset.y,
-                            ),
-                        )
                     }
                 },
         ) {
@@ -1852,6 +1831,7 @@ private fun FloorPlanOpenSaleAmountChips(
     }
 }
 
+
 private fun clampPanOffset(
     offset: Offset,
     viewportWidthPx: Float,
@@ -1904,11 +1884,19 @@ private fun panRange(
     viewportSizePx: Float,
     contentSizePx: Float,
 ): Pair<Float, Float> {
-    if (contentSizePx <= viewportSizePx) {
-        val centeredOffset = (viewportSizePx - contentSizePx) / 2f
-        return centeredOffset to centeredOffset
+    if (viewportSizePx <= 0f || contentSizePx <= 0f) {
+        return 0f to 0f
     }
-    return (viewportSizePx - contentSizePx) to 0f
+
+    // Do not lock smaller content to one exact centered pixel during pinch.
+    // A fixed center clamp fights the gesture centroid and shows up as visible
+    // vibration when zooming in/out around the fit threshold. Keep a small safe
+    // overscroll range instead: the map camera may move, but it cannot escape
+    // the viewport entirely.
+    val hiddenOrEmptySpace = viewportSizePx - contentSizePx
+    val minOffset = min(hiddenOrEmptySpace, 0f) - FloorPlanBoundsPadding
+    val maxOffset = max(hiddenOrEmptySpace, 0f) + FloorPlanBoundsPadding
+    return minOffset to maxOffset
 }
 
 private fun StaffFloorPlanViewportPreference.hasCompleteViewport(): Boolean {
