@@ -189,6 +189,7 @@ class MenuViewModel(
     private val activeTableId: String? = null,
     private val activeTableLabel: String? = null,
     private val activeSaleId: String? = null,
+    private val forceNewSale: Boolean = false,
     private val tableRepository: TableRepository? = null,
     private val activeStaffIdProvider: (() -> String?)? = null,
     private val activeStaffDisplayNameProvider: (() -> String?)? = null,
@@ -271,9 +272,11 @@ class MenuViewModel(
         // A non-null activeTableId means we were launched for a specific service spot; null = walk-in.
         openSaleRepository?.let { repo ->
             viewModelScope.launch {
-                val existingSale = activeSaleId
-                    ?.let { repo.loadOpenSaleById(it) }
-                    ?: repo.loadOpenSaleForSpot(activeTableId)
+                val existingSale = when {
+                    activeSaleId != null -> repo.loadOpenSaleById(activeSaleId)
+                    forceNewSale -> null
+                    else -> repo.loadOpenSaleForSpot(activeTableId)
+                }
                 if (existingSale != null) {
                     currentSaleId = existingSale.saleId
                     currentTableId = existingSale.serviceSpotId ?: activeTableId
@@ -828,6 +831,7 @@ class MenuViewModel(
             activeTableId: String? = null,
             activeTableLabel: String? = null,
             activeSaleId: String? = null,
+            forceNewSale: Boolean = false,
             tableRepository: TableRepository? = null,
             activeStaffIdProvider: (() -> String?)? = null,
             activeStaffDisplayNameProvider: (() -> String?)? = null,
@@ -845,6 +849,7 @@ class MenuViewModel(
                     activeTableId = activeTableId,
                     activeTableLabel = activeTableLabel,
                     activeSaleId = activeSaleId,
+                    forceNewSale = forceNewSale,
                     tableRepository = tableRepository,
                     activeStaffIdProvider = activeStaffIdProvider,
                     activeStaffDisplayNameProvider = activeStaffDisplayNameProvider,

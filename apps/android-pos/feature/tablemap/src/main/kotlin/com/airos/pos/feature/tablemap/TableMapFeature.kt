@@ -700,15 +700,19 @@ fun TableMapScreen(
             selectedAreaName = activeAreaName,
         )
     }
-    val openTotalLabelsBySpotId = remember(state.openChecksBySpotId) {
-        state.openChecksBySpotId.mapNotNull { (spotId, summary) ->
-            summary.totalCents
-                .takeIf { it > 0 }
-                ?.let { totalCents -> spotId to formatOpenTotal(totalCents) }
-        }.toMap()
-    }
     val openBillCountsBySpotId = remember(state.openChecksBySpotId) {
         state.openChecksBySpotId.mapValues { (_, summary) -> summary.count }
+    }
+    val openSaleTotalLabelsBySpotId = remember(state.openSalesBySpotId) {
+        state.openSalesBySpotId.mapValues { (_, spotSales) ->
+            spotSales
+                .sortedBy { it.createdAtEpochMillis }
+                .mapNotNull { sale ->
+                    sale.openSaleTotalCents()
+                        .takeIf { it > 0 }
+                        ?.let(::formatOpenTotal)
+                }
+        }
     }
     val selectedTable = visibleTables.firstOrNull { it.id == state.selectedTableId } ?: visibleTables.firstOrNull()
     val attentionTickerEntries = remember(visibleTables, state.openChecksBySpotId, selectedTable?.id) {
@@ -992,6 +996,7 @@ LaunchedEffect(
                                     transferSource = isTransferSource,
                                     transferTargetMode = isPickingTransferTarget && !isTransferSource,
                                     openCheckSummary = state.openChecksBySpotId[table.id],
+                                    openSaleTotalLabels = openSaleTotalLabelsBySpotId[table.id].orEmpty(),
                                     onClick = { handleTableTap(table) },
                                     onLongPress = {
                                         if (!isPickingTransferTarget && !placeSelectionMode) {
@@ -1031,7 +1036,7 @@ LaunchedEffect(
                                 viewpoint = floorPlanViewpoint,
                                 floorPlanViewport = state.floorPlanViewport,
                                 onFloorPlanViewportChange = onFloorPlanViewportChange,
-                                openTotalLabelsByTableId = openTotalLabelsBySpotId,
+                                openSaleTotalLabelsByTableId = openSaleTotalLabelsBySpotId,
                                 openBillCountsByTableId = openBillCountsBySpotId,
                                 externalDragPosition = externalDragPositionForFloorPlan,
                                 externalDragSourceTableId = billDrag.sourceSpotId ?: transferState?.sourceSpotId,
@@ -1531,6 +1536,14 @@ private fun TableDetailsContent(
                                         onDragInRoot = onBillDragMoveInRoot,
                                         onDragEnd = onBillDragEnd,
                                     )
+                                }
+                                if (transferForThisTable == null) {
+                                    Button(
+                                        onClick = onOpenNewSale,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Text(if (placeSelectionMode) "Valitse pöytä" else "Avaa uusi lasku")
+                                    }
                                 }
                             }
                         }
@@ -2079,13 +2092,11 @@ private fun TableGridCard(
     transferSource: Boolean,
     transferTargetMode: Boolean,
     openCheckSummary: OpenCheckSummary?,
+    openSaleTotalLabels: List<String>,
     onClick: () -> Unit,
     onLongPress: () -> Unit,
 ) {
     val mergedHint = mergedHintFor(table)
-    val openTotalLabel = openCheckSummary?.totalCents
-        ?.takeIf { it > 0 }
-        ?.let(::formatOpenTotal)
     val displayStatus = resolveTableDisplayStatus(
         physicalStatus = table.status,
         openBillCount = openCheckSummary?.count ?: 0,
@@ -2207,9 +2218,9 @@ private fun TableGridCard(
                         )
                     }
                 }
-                if (openTotalLabel != null) {
+                openSaleTotalLabels.forEach { saleTotalLabel ->
                     MiniStatusChip(
-                        label = openTotalLabel,
+                        label = saleTotalLabel,
                         tint = attentionTint ?: MaterialTheme.colorScheme.tertiary,
                     )
                 }

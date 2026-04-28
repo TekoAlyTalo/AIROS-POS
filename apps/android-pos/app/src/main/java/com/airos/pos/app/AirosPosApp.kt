@@ -138,7 +138,7 @@ private object Routes {
     const val TableMapPattern = "tablemap?menuPlacePicker={menuPlacePicker}"
     const val Menu = "menu"
     const val Transactions = "transactions"
-    const val MenuPattern = "menu?tableId={tableId}&tableLabel={tableLabel}&saleId={saleId}"
+    const val MenuPattern = "menu?tableId={tableId}&tableLabel={tableLabel}&saleId={saleId}&forceNewSale={forceNewSale}"
     const val Kitchen = "kitchen"
     const val Scanner = "scanner"
     const val Diagnostics = "diagnostics"
@@ -146,11 +146,17 @@ private object Routes {
     const val PaymentPattern = "payment/{ticketId}"
     const val RefundPattern = "refund/{ticketId}"
 
-    fun menu(tableId: String? = null, tableLabel: String? = null, saleId: String? = null): String {
+    fun menu(
+        tableId: String? = null,
+        tableLabel: String? = null,
+        saleId: String? = null,
+        forceNewSale: Boolean = false,
+    ): String {
         val queryParts = buildList {
             tableId?.let { add("tableId=${Uri.encode(it)}") }
             tableLabel?.let { add("tableLabel=${Uri.encode(it)}") }
             saleId?.let { add("saleId=${Uri.encode(it)}") }
+            if (forceNewSale) add("forceNewSale=true")
         }
         return if (queryParts.isEmpty()) {
             Menu
@@ -1192,6 +1198,7 @@ private fun SignedInApp(
                                             tableId = tableId,
                                             tableLabel = tableLabel,
                                             saleId = saleId,
+                                            forceNewSale = source == TableSaleOpenSource.NEW_SALE_BUTTON,
                                         ),
                                     )
                                 }
@@ -1281,14 +1288,19 @@ private fun SignedInApp(
                             type = NavType.StringType
                             nullable = true
                         },
+                        navArgument("forceNewSale") {
+                            type = NavType.BoolType
+                            defaultValue = false
+                        },
                     ),
                 ) { entry ->
                     val context = LocalContext.current
                     val tableId = entry.arguments?.getString("tableId")
                     val tableLabel = entry.arguments?.getString("tableLabel")
                     val saleId = entry.arguments?.getString("saleId")
+                    val forceNewSale = entry.arguments?.getBoolean("forceNewSale") ?: false
                     val viewModel: MenuViewModel = viewModel(
-                        key = "menu-${saleId ?: tableId ?: "general"}",
+                        key = "menu-${saleId ?: tableId ?: "general"}-${if (forceNewSale) "new" else "existing"}",
                         factory = MenuViewModel.factory(
                             menuRepository = appContainer.menuRepository,
                             paymentRepository = appContainer.paymentRepository,
@@ -1324,6 +1336,7 @@ private fun SignedInApp(
                             activeTableId = tableId,
                             activeTableLabel = tableLabel,
                             activeSaleId = saleId,
+                            forceNewSale = forceNewSale,
                             tableRepository = appContainer.tableRepository,
                             activeStaffIdProvider = {
                                 appContainer.authRepository.activeSession.value?.staffId
