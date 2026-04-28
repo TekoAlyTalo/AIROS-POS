@@ -1109,42 +1109,11 @@ private fun FloorPlanLabeledObjectSurface(
                         strokeWidth = stroke,
                     )
                 }
-                "sofa" -> {
-                    val radius = CornerRadius(
-                        x = min(10f, size.width * 0.16f),
-                        y = min(10f, size.height * 0.22f),
+                "sofa", "couch" -> {
+                    drawFloorPlanSofaSurface(
+                        targetSize = size,
+                        stroke = stroke,
                     )
-                    drawRoundRect(
-                        color = Color(0xFF343A40).copy(alpha = 0.96f),
-                        topLeft = Offset.Zero,
-                        size = size,
-                        cornerRadius = radius,
-                    )
-                    drawRoundRect(
-                        color = Color(0xFF8A949E).copy(alpha = 0.76f),
-                        topLeft = Offset.Zero,
-                        size = size,
-                        cornerRadius = radius,
-                        style = Stroke(width = stroke),
-                    )
-                    val backHeight = size.height * 0.28f
-                    drawRoundRect(
-                        color = Color(0xFF4A5158).copy(alpha = 0.72f),
-                        topLeft = Offset(0f, 0f),
-                        size = Size(size.width, backHeight),
-                        cornerRadius = radius,
-                    )
-                    val cushionCount = if (size.width >= 120f) 3 else 2
-                    val step = size.width / cushionCount
-                    for (index in 1 until cushionCount) {
-                        val x = step * index
-                        drawLine(
-                            color = Color(0xFFCBD3DA).copy(alpha = 0.28f),
-                            start = Offset(x, backHeight),
-                            end = Offset(x, size.height - stroke),
-                            strokeWidth = stroke,
-                        )
-                    }
                 }
                 "chair", "armchair" -> {
                     val isArmchair = normalizedType == "armchair"
@@ -1159,45 +1128,11 @@ private fun FloorPlanLabeledObjectSurface(
                             x = min(9f, bodySize.width * 0.18f),
                             y = min(9f, bodySize.height * 0.18f),
                         )
-                        drawRoundRect(
-                            color = Color(0xFF343A40).copy(alpha = 0.96f),
+                        drawFloorPlanArmchairSurface(
                             topLeft = bodyTopLeft,
-                            size = bodySize,
-                            cornerRadius = radius,
-                        )
-                        drawRoundRect(
-                            color = Color(0xFF8A949E).copy(alpha = 0.74f),
-                            topLeft = bodyTopLeft,
-                            size = bodySize,
-                            cornerRadius = radius,
-                            style = Stroke(width = stroke),
-                        )
-                        val backHeight = bodySize.height * 0.24f
-                        drawRoundRect(
-                            color = Color(0xFF4B535B).copy(alpha = 0.68f),
-                            topLeft = bodyTopLeft,
-                            size = Size(bodySize.width, backHeight),
-                            cornerRadius = radius,
-                        )
-                        val armWidth = max(stroke * 2f, bodySize.width * 0.13f)
-                        val armColor = Color(0xFF5B646D).copy(alpha = 0.52f)
-                        drawRoundRect(
-                            color = armColor,
-                            topLeft = Offset(bodyTopLeft.x, bodyTopLeft.y + backHeight * 0.55f),
-                            size = Size(armWidth, bodySize.height - backHeight * 0.55f),
-                            cornerRadius = CornerRadius(armWidth, armWidth),
-                        )
-                        drawRoundRect(
-                            color = armColor,
-                            topLeft = Offset(bodyTopLeft.x + bodySize.width - armWidth, bodyTopLeft.y + backHeight * 0.55f),
-                            size = Size(armWidth, bodySize.height - backHeight * 0.55f),
-                            cornerRadius = CornerRadius(armWidth, armWidth),
-                        )
-                        drawLine(
-                            color = Color(0xFFCBD3DA).copy(alpha = 0.22f),
-                            start = Offset(bodyTopLeft.x + armWidth, bodyTopLeft.y + bodySize.height * 0.58f),
-                            end = Offset(bodyTopLeft.x + bodySize.width - armWidth, bodyTopLeft.y + bodySize.height * 0.58f),
-                            strokeWidth = stroke,
+                            targetSize = bodySize,
+                            radius = radius,
+                            stroke = stroke,
                         )
                     } else {
                         val bodyInset = size.minDimension * 0.14f
@@ -1206,25 +1141,11 @@ private fun FloorPlanLabeledObjectSurface(
                             width = (size.width - bodyInset * 2f).coerceAtLeast(1f),
                             height = (size.height - bodyInset * 2f).coerceAtLeast(1f),
                         )
-                        drawRoundRect(
-                            color = Color(0xFF29353D).copy(alpha = 0.92f),
+                        drawFloorPlanChairSurface(
                             topLeft = bodyTopLeft,
-                            size = bodySize,
-                            cornerRadius = CornerRadius(999f, 999f),
-                        )
-                        drawRoundRect(
-                            color = FloorPlanAvailableColor.copy(alpha = 0.72f),
-                            topLeft = bodyTopLeft,
-                            size = bodySize,
-                            cornerRadius = CornerRadius(999f, 999f),
-                            style = Stroke(width = stroke),
-                        )
-                        val backY = if (size.height >= size.width) bodyTopLeft.y else bodyTopLeft.y + bodySize.height * 0.18f
-                        drawLine(
-                            color = Color(0xFFE9D2A0).copy(alpha = 0.45f),
-                            start = Offset(bodyTopLeft.x + bodySize.width * 0.22f, backY),
-                            end = Offset(bodyTopLeft.x + bodySize.width * 0.78f, backY),
-                            strokeWidth = max(stroke, 1.2.dp.toPx()),
+                            targetSize = bodySize,
+                            stroke = stroke,
+                            backOnTop = size.height < size.width,
                         )
                     }
                 }
@@ -1579,16 +1500,7 @@ private fun FloorPlanTableNode(
         Canvas(modifier = Modifier.fillMaxSize()) {
             val bodyTopLeft = Offset(markerPadPx, markerPadPx)
             val bodySize = Size(bodyWidthPx, bodyHeightPx)
-            val bodyFill = tableBodyFillColor()
             val bodyStroke = borderColor
-            val bodyGradient = Brush.verticalGradient(
-                colors = listOf(
-                    bodyFill.copy(alpha = 0.98f),
-                    Color(0xFF3E220C).copy(alpha = 0.98f),
-                ),
-                startY = markerPadPx,
-                endY = markerPadPx + bodyHeightPx,
-            )
             seatMarkers.forEach { marker ->
                 val center = Offset(
                     x = markerPadPx + marker.leftPx,
@@ -1607,31 +1519,13 @@ private fun FloorPlanTableNode(
                 )
             }
 
-            if (isRound) {
-                drawOval(
-                    brush = bodyGradient,
-                    topLeft = bodyTopLeft,
-                    size = bodySize,
-                )
-                drawOval(
-                    color = bodyStroke,
-                    topLeft = bodyTopLeft,
-                    size = bodySize,
-                    style = Stroke(width = borderWidthPx),
-                )
-            } else {
-                drawRect(
-                    brush = bodyGradient,
-                    topLeft = bodyTopLeft,
-                    size = bodySize,
-                )
-                drawRect(
-                    color = bodyStroke,
-                    topLeft = bodyTopLeft,
-                    size = bodySize,
-                    style = Stroke(width = borderWidthPx),
-                )
-            }
+            drawFloorPlanTableSurface(
+                isRound = isRound,
+                topLeft = bodyTopLeft,
+                targetSize = bodySize,
+                borderColor = bodyStroke,
+                borderWidthPx = borderWidthPx,
+            )
         }
 
         val chipSpecs = buildList {
@@ -1942,7 +1836,267 @@ private fun FloorPlanChip(
 }
 
 private fun tableBodyFillColor(): Color {
-    return Color(0xFF5F3A18)
+    return Color(0xFF3B1D0D)
+}
+
+private fun DrawScope.drawFloorPlanTableSurface(
+    isRound: Boolean,
+    topLeft: Offset,
+    targetSize: Size,
+    borderColor: Color,
+    borderWidthPx: Float,
+) {
+    val horizontalGrain = targetSize.width >= targetSize.height
+    val baseBrush = Brush.linearGradient(
+        colors = listOf(
+            Color(0xFF6A3213).copy(alpha = 0.99f),
+            Color(0xFF3A1808).copy(alpha = 0.99f),
+            Color(0xFF180904).copy(alpha = 0.99f),
+        ),
+        start = topLeft,
+        end = if (horizontalGrain) {
+            Offset(topLeft.x + targetSize.width, topLeft.y + targetSize.height * 0.45f)
+        } else {
+            Offset(topLeft.x + targetSize.width * 0.42f, topLeft.y + targetSize.height)
+        },
+    )
+    val sheenBrush = Brush.linearGradient(
+        colors = listOf(
+            Color.Transparent,
+            Color(0xFFFFD08A).copy(alpha = 0.105f),
+            Color.Transparent,
+        ),
+        start = if (horizontalGrain) topLeft else Offset(topLeft.x + targetSize.width, topLeft.y),
+        end = if (horizontalGrain) {
+            Offset(topLeft.x, topLeft.y + targetSize.height)
+        } else {
+            Offset(topLeft.x, topLeft.y)
+        },
+    )
+
+    if (isRound) {
+        drawOval(brush = baseBrush, topLeft = topLeft, size = targetSize)
+        drawOval(brush = sheenBrush, topLeft = topLeft, size = targetSize)
+    } else {
+        drawRect(brush = baseBrush, topLeft = topLeft, size = targetSize)
+        drawRect(brush = sheenBrush, topLeft = topLeft, size = targetSize)
+    }
+
+    drawFloorPlanWoodGrainLines(
+        topLeft = topLeft,
+        targetSize = targetSize,
+        horizontal = horizontalGrain,
+        subtle = isRound,
+    )
+
+    if (isRound) {
+        drawOval(
+            color = borderColor,
+            topLeft = topLeft,
+            size = targetSize,
+            style = Stroke(width = borderWidthPx),
+        )
+    } else {
+        drawRect(
+            color = borderColor,
+            topLeft = topLeft,
+            size = targetSize,
+            style = Stroke(width = borderWidthPx),
+        )
+    }
+}
+
+private fun DrawScope.drawFloorPlanWoodGrainLines(
+    topLeft: Offset,
+    targetSize: Size,
+    horizontal: Boolean,
+    subtle: Boolean,
+) {
+    val crossLength = if (horizontal) targetSize.height else targetSize.width
+    val longLength = if (horizontal) targetSize.width else targetSize.height
+    val count = max(3, min(7, (crossLength / 15f).roundToInt()))
+    val inset = max(3f, min(targetSize.width, targetSize.height) * 0.08f)
+    val alpha = if (subtle) 0.060f else 0.105f
+    for (index in 0 until count) {
+        val fraction = (index + 1f) / (count + 1f)
+        val offset = crossLength * fraction
+        val wobble = if (index % 2 == 0) crossLength * 0.018f else -crossLength * 0.012f
+        if (horizontal) {
+            val y = topLeft.y + offset
+            drawLine(
+                color = Color(0xFFFFC07A).copy(alpha = alpha),
+                start = Offset(topLeft.x + inset, y),
+                end = Offset(topLeft.x + longLength - inset, y + wobble),
+                strokeWidth = max(0.55f, 0.45.dp.toPx()),
+            )
+            drawLine(
+                color = Color(0xFF120603).copy(alpha = alpha * 0.86f),
+                start = Offset(topLeft.x + inset, y + 1.4f),
+                end = Offset(topLeft.x + longLength - inset, y + wobble + 1.4f),
+                strokeWidth = max(0.45f, 0.35.dp.toPx()),
+            )
+        } else {
+            val x = topLeft.x + offset
+            drawLine(
+                color = Color(0xFFFFC07A).copy(alpha = alpha),
+                start = Offset(x, topLeft.y + inset),
+                end = Offset(x + wobble, topLeft.y + longLength - inset),
+                strokeWidth = max(0.55f, 0.45.dp.toPx()),
+            )
+            drawLine(
+                color = Color(0xFF120603).copy(alpha = alpha * 0.86f),
+                start = Offset(x + 1.4f, topLeft.y + inset),
+                end = Offset(x + wobble + 1.4f, topLeft.y + longLength - inset),
+                strokeWidth = max(0.45f, 0.35.dp.toPx()),
+            )
+        }
+    }
+}
+
+private fun DrawScope.drawFloorPlanSofaSurface(
+    targetSize: Size,
+    stroke: Float,
+) {
+    val radius = CornerRadius(
+        x = min(10f, targetSize.width * 0.16f),
+        y = min(10f, targetSize.height * 0.22f),
+    )
+    val fill = Brush.verticalGradient(
+        colors = listOf(
+            Color(0xFF6A747C).copy(alpha = 0.97f),
+            Color(0xFF3C454E).copy(alpha = 0.98f),
+            Color(0xFF1E252C).copy(alpha = 0.99f),
+        ),
+    )
+    drawRoundRect(
+        brush = fill,
+        topLeft = Offset.Zero,
+        size = targetSize,
+        cornerRadius = radius,
+    )
+    drawRoundRect(
+        color = Color(0xFFC4CDD4).copy(alpha = 0.66f),
+        topLeft = Offset.Zero,
+        size = targetSize,
+        cornerRadius = radius,
+        style = Stroke(width = stroke),
+    )
+    val backHeight = targetSize.height * 0.30f
+    drawRoundRect(
+        brush = Brush.verticalGradient(
+            colors = listOf(
+                Color(0xFF7B858D).copy(alpha = 0.58f),
+                Color(0xFF2F3840).copy(alpha = 0.38f),
+            ),
+        ),
+        topLeft = Offset(0f, 0f),
+        size = Size(targetSize.width, backHeight),
+        cornerRadius = radius,
+    )
+    val cushionCount = if (targetSize.width >= 120f) 3 else 2
+    val step = targetSize.width / cushionCount
+    for (index in 1 until cushionCount) {
+        val x = step * index
+        drawLine(
+            color = Color(0xFFE9F0F6).copy(alpha = 0.26f),
+            start = Offset(x, backHeight),
+            end = Offset(x, targetSize.height - stroke),
+            strokeWidth = max(stroke, 0.8.dp.toPx()),
+        )
+        drawLine(
+            color = Color(0xFF10151A).copy(alpha = 0.28f),
+            start = Offset(x + stroke, backHeight),
+            end = Offset(x + stroke, targetSize.height - stroke),
+            strokeWidth = max(0.5f, 0.35.dp.toPx()),
+        )
+    }
+}
+
+private fun DrawScope.drawFloorPlanArmchairSurface(
+    topLeft: Offset,
+    targetSize: Size,
+    radius: CornerRadius,
+    stroke: Float,
+) {
+    drawRoundRect(
+        brush = Brush.verticalGradient(
+            colors = listOf(
+                Color(0xFF68737C).copy(alpha = 0.97f),
+                Color(0xFF3B444D).copy(alpha = 0.98f),
+                Color(0xFF1F262D).copy(alpha = 0.99f),
+            ),
+        ),
+        topLeft = topLeft,
+        size = targetSize,
+        cornerRadius = radius,
+    )
+    drawRoundRect(
+        color = Color(0xFFC4CDD4).copy(alpha = 0.64f),
+        topLeft = topLeft,
+        size = targetSize,
+        cornerRadius = radius,
+        style = Stroke(width = stroke),
+    )
+    val backHeight = targetSize.height * 0.24f
+    drawRoundRect(
+        color = Color(0xFF7A858E).copy(alpha = 0.46f),
+        topLeft = topLeft,
+        size = Size(targetSize.width, backHeight),
+        cornerRadius = radius,
+    )
+    val armWidth = max(stroke * 2f, targetSize.width * 0.13f)
+    val armColor = Color(0xFF87929C).copy(alpha = 0.40f)
+    drawRoundRect(
+        color = armColor,
+        topLeft = Offset(topLeft.x, topLeft.y + backHeight * 0.55f),
+        size = Size(armWidth, targetSize.height - backHeight * 0.55f),
+        cornerRadius = CornerRadius(armWidth, armWidth),
+    )
+    drawRoundRect(
+        color = armColor,
+        topLeft = Offset(topLeft.x + targetSize.width - armWidth, topLeft.y + backHeight * 0.55f),
+        size = Size(armWidth, targetSize.height - backHeight * 0.55f),
+        cornerRadius = CornerRadius(armWidth, armWidth),
+    )
+    drawLine(
+        color = Color(0xFFE9F0F6).copy(alpha = 0.24f),
+        start = Offset(topLeft.x + armWidth, topLeft.y + targetSize.height * 0.58f),
+        end = Offset(topLeft.x + targetSize.width - armWidth, topLeft.y + targetSize.height * 0.58f),
+        strokeWidth = stroke,
+    )
+}
+
+private fun DrawScope.drawFloorPlanChairSurface(
+    topLeft: Offset,
+    targetSize: Size,
+    stroke: Float,
+    backOnTop: Boolean,
+) {
+    drawRoundRect(
+        brush = Brush.verticalGradient(
+            colors = listOf(
+                Color(0xFF46525C).copy(alpha = 0.92f),
+                Color(0xFF26313A).copy(alpha = 0.95f),
+            ),
+        ),
+        topLeft = topLeft,
+        size = targetSize,
+        cornerRadius = CornerRadius(999f, 999f),
+    )
+    drawRoundRect(
+        color = Color(0xFF9AA6AF).copy(alpha = 0.54f),
+        topLeft = topLeft,
+        size = targetSize,
+        cornerRadius = CornerRadius(999f, 999f),
+        style = Stroke(width = stroke),
+    )
+    val backY = if (backOnTop) topLeft.y + targetSize.height * 0.18f else topLeft.y
+    drawLine(
+        color = Color(0xFFE9D2A0).copy(alpha = 0.34f),
+        start = Offset(topLeft.x + targetSize.width * 0.22f, backY),
+        end = Offset(topLeft.x + targetSize.width * 0.78f, backY),
+        strokeWidth = max(stroke, 1.2.dp.toPx()),
+    )
 }
 
 private fun getDefaultChairLayout(table: RestaurantTable): String {
