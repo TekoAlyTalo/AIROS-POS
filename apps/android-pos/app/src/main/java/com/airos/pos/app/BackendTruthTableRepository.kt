@@ -241,15 +241,17 @@ private class BackendTableTruthClient(
     }
 
     fun observeInUseFloorPlan(): Flow<BackendFloorPlanSnapshot?> = flow {
-        var latest: BackendFloorPlanSnapshot? = null
+        // Eager first fetch so the initial combine() emission already carries the
+        // authoritative floor plan (and thus the camera binding) instead of null.
+        var latest: BackendFloorPlanSnapshot? = fetchInUseFloorPlan()
         emit(latest)
         while (true) {
+            delay(pollIntervalMillis * 2)
             val next = fetchInUseFloorPlan()
             if (next != null || latest != null) {
                 latest = next
                 emit(latest)
             }
-            delay(pollIntervalMillis * 2)
         }
     }
 
@@ -714,10 +716,33 @@ private fun buildAuthoritativeBackendFloorMap(
     }
 
     val currentTablesById = currentFloorMap.tables.associateBy(RestaurantTable::id)
+
+    // Authoritative camera binding lives in the active floor plan JSON. Build a
+    // service-spot -> camera-object index from floorPlan.objects and let it win
+    // over /tables/overview's camera_id field, so camera preview targets resolve
+    // as soon as the floor plan is available and never depend on overview latency.
+    val cameraByServiceSpotId: Map<String, FloorMapObject> = floorPlan.objects
+        .asSequence()
+        .filter { it.type.equals("camera", ignoreCase = true) }
+        .filter { it.linkedTargetType?.equals("table", ignoreCase = true) == true }
+        .filter { !it.linkedTargetId.isNullOrBlank() && !it.cameraId.isNullOrBlank() }
+        .groupBy { it.linkedTargetId!! }
+        .mapValues { (targetId, candidates) ->
+            if (candidates.size > 1) {
+                Log.w(
+                    "AIROS",
+                    "[BackendTruthTableRepository] floor plan has ${candidates.size} cameras pointing at " +
+                        "linkedTargetId=$targetId; using first cameraId=${candidates.first().cameraId}",
+                )
+            }
+            candidates.first()
+        }
+
     val floorPlanTables = floorPlan.tableObjects.map { tableObject ->
         val serviceSpotId = tableObject.id
         val backendTruth = backendTruthByServiceSpotId[serviceSpotId]
         val currentTable = currentTablesById[serviceSpotId]
+        val floorPlanCamera = cameraByServiceSpotId[serviceSpotId]
         val position = TablePosition(
             x = tableObject.x.roundToInt(),
             y = tableObject.y.roundToInt(),
@@ -729,6 +754,14 @@ private fun buildAuthoritativeBackendFloorMap(
             centerX = tableObject.x + (tableObject.width / 2f),
             centerY = tableObject.y + (tableObject.height / 2f),
         ) ?: currentTable?.areaName ?: BACKEND_DEFAULT_AREA_NAME
+        val resolvedCameraId = floorPlanCamera?.cameraId
+            ?: backendTruth?.cameraId
+            ?: currentTable?.cameraId
+        val resolvedCameraLabel = floorPlanCamera?.label?.takeIf { it.isNotBlank() }
+            ?: floorPlanCamera?.cameraId
+            ?: backendTruth?.cameraLabel
+            ?: backendTruth?.cameraId
+            ?: currentTable?.cameraLabel
         RestaurantTable(
             id = serviceSpotId,
             backendTableId = backendTruth?.tableId,
@@ -741,8 +774,8 @@ private fun buildAuthoritativeBackendFloorMap(
             guestCount = backendTruth?.currentPersons ?: currentTable?.guestCount ?: 0,
             activeTicketId = currentTable?.activeTicketId,
             position = position,
-            cameraId = backendTruth?.cameraId ?: currentTable?.cameraId,
-            cameraLabel = backendTruth?.cameraLabel ?: backendTruth?.cameraId ?: currentTable?.cameraLabel,
+            cameraId = resolvedCameraId,
+            cameraLabel = resolvedCameraLabel,
             attentionFlag = backendTruth?.attentionFlag ?: currentTable?.attentionFlag ?: TableAttentionFlag.NONE,
             operationalFlags = backendTruth?.operationalFlags ?: currentTable?.operationalFlags ?: emptySet(),
             emptyAnchorTime = backendTruth?.emptyAnchorTime ?: currentTable?.emptyAnchorTime,
@@ -765,6 +798,16 @@ private fun buildAuthoritativeBackendFloorMap(
             tableNumber = tableObject.tableNumber,
         )
     }
+
+    Log.i(
+        "AIROS",
+        "[BackendTruthTableRepository] floor map built tables=${floorPlanTables.size} " +
+            "withFloorPlanCamera=${cameraByServiceSpotId.size} " +
+            "withOverviewCamera=${backendTruthByServiceSpotId.values.count { !it.cameraId.isNullOrBlank() }} " +
+            "withResolvedCamera=${floorPlanTables.count { !it.cameraId.isNullOrBlank() }} " +
+            "withBackendTruth=${floorPlanTables.count { it.backendTableId != null }} " +
+            "overviewTruthCount=${backendTruthByServiceSpotId.size}",
+    )
 
     return FloorMap(
         id = floorPlan.mapId,
