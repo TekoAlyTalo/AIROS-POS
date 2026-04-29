@@ -217,7 +217,7 @@ interface OpenSaleDao {
     @Query("SELECT * FROM open_sales WHERE status = 'OPEN' AND saleId = :saleId LIMIT 1")
     suspend fun loadOpenSaleById(saleId: String): OpenSaleEntity?
 
-    @Query("SELECT * FROM open_sales WHERE status = 'OPEN' AND serviceSpotId = :serviceSpotId LIMIT 1")
+    @Query("SELECT * FROM open_sales WHERE status = 'OPEN' AND serviceSpotId = :serviceSpotId ORDER BY createdAtEpochMillis ASC LIMIT 1")
     suspend fun loadOpenSaleForSpot(serviceSpotId: String): OpenSaleEntity?
 
     @Query("SELECT * FROM open_sales WHERE status = 'OPEN' AND serviceSpotId IS NULL LIMIT 1")

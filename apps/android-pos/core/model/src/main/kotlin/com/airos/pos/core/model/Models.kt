@@ -222,6 +222,8 @@ data class RestaurantTable(
     val truthSource: TableTruthSource = TableTruthSource.LOCAL,
     /** Functional type of this service spot. Defaults to TABLE for backward compatibility. */
     val spotType: ServiceSpotType = ServiceSpotType.TABLE,
+    /** Backend-authoritative local open-bill cap. Null = unbounded. */
+    val maxOpenBills: Int? = null,
     /** Editor floor-plan truth. Existing Int [position] remains only for legacy table flows. */
     val floorPlanX: Float? = null,
     val floorPlanY: Float? = null,

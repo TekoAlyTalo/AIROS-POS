@@ -76,11 +76,13 @@ import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.model.MenuItem
 import com.airos.pos.core.model.PaymentEntry
 import com.airos.pos.core.model.PaymentMethod
+import com.airos.pos.core.model.RestaurantTable
 import com.airos.pos.core.model.TableAttentionFlag
 import com.airos.pos.core.model.TablePaymentRequest
 import com.airos.pos.core.model.TablePaymentResult
 import com.airos.pos.core.model.ReceiptDocument
 import com.airos.pos.core.model.ReceiptHandoffPayload
+import com.airos.pos.core.model.ServiceSpotType
 import com.airos.pos.core.model.TicketLine
 import com.airos.pos.device.platform.CustomerDisplayService
 import com.airos.pos.core.model.PersistedOpenSaleLine
@@ -94,6 +96,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -199,6 +202,8 @@ class MenuViewModel(
     // The original constructor params are the initial values only.
     private var currentTableId: String? = activeTableId
     private var currentTableLabel: String? = activeTableLabel
+    @Volatile private var currentTableSpotType: ServiceSpotType? = null
+    @Volatile private var currentTableMaxOpenBills: Int? = null
     /** Tracks the saleId of the active persisted open sale. Null until the first item is added. */
     @Volatile private var currentSaleId: String? = null
 
@@ -226,6 +231,8 @@ class MenuViewModel(
                     .distinctUntilChanged()
                     .collectLatest { tableId ->
                         if (tableId == null) {
+                            currentTableSpotType = null
+                            currentTableMaxOpenBills = null
                             mutableState.update { current ->
                                 if (!current.activeTableRequiresCheckAck && !current.showCheckAddBlockedWarning) {
                                     current
@@ -245,6 +252,8 @@ class MenuViewModel(
                         }
 
                         repo.observeTable(tableId).collect { table ->
+                            currentTableSpotType = table?.spotType
+                            currentTableMaxOpenBills = table?.maxOpenBills
                             val requiresCheckAck = table?.attentionFlag == TableAttentionFlag.CHECK_TABLE
                             mutableState.update { current ->
                                 val nextWarningVisible = if (requiresCheckAck) {
@@ -274,7 +283,19 @@ class MenuViewModel(
             viewModelScope.launch {
                 val existingSale = when {
                     activeSaleId != null -> repo.loadOpenSaleById(activeSaleId)
-                    forceNewSale -> null
+                    forceNewSale -> {
+                        val reusableSale = loadReusableOpenSaleForSingleBillSpot(
+                            repo = repo,
+                            serviceSpotId = activeTableId,
+                        )
+                        if (reusableSale != null) {
+                            Log.i(
+                                "AIROS",
+                                "[MenuViewModel] ignoring forceNewSale for single-bill service spot id=$activeTableId; reusing saleId=${reusableSale.saleId}",
+                            )
+                        }
+                        reusableSale
+                    }
                     else -> repo.loadOpenSaleForSpot(activeTableId)
                 }
                 if (existingSale != null) {
@@ -316,6 +337,34 @@ class MenuViewModel(
             if (!current.showCheckAddBlockedWarning) current
             else current.copy(showCheckAddBlockedWarning = false)
         }
+    }
+
+    private suspend fun loadReusableOpenSaleForSingleBillSpot(
+        repo: OpenSaleRepository,
+        serviceSpotId: String?,
+    ): com.airos.pos.core.model.PersistedOpenSale? {
+        if (!requiresSingleOpenSaleForSpot(serviceSpotId)) return null
+        return repo.loadOpenSaleForSpot(serviceSpotId)
+    }
+
+    private suspend fun requiresSingleOpenSaleForSpot(serviceSpotId: String?): Boolean {
+        val normalizedServiceSpotId = serviceSpotId?.trim()?.takeIf { it.isNotEmpty() } ?: return false
+        if (normalizedServiceSpotId == currentTableId) {
+            if (currentTableMaxOpenBills == 1 || currentTableSpotType == ServiceSpotType.BAR_SEAT) {
+                return true
+            }
+        }
+
+        val table = tableRepository?.observeTable(normalizedServiceSpotId)?.first() ?: return false
+        if (normalizedServiceSpotId == currentTableId) {
+            currentTableSpotType = table.spotType
+            currentTableMaxOpenBills = table.maxOpenBills
+        }
+        return table.requiresSingleOpenSale()
+    }
+
+    private fun RestaurantTable.requiresSingleOpenSale(): Boolean {
+        return maxOpenBills == 1 || spotType == ServiceSpotType.BAR_SEAT
     }
 
     private fun currentTicketTotalCentsOrNull(): Int? {
@@ -808,11 +857,29 @@ class MenuViewModel(
             return
         }
         val saleId = currentSaleId ?: run {
-            // Lazily create the open sale on first item add.
-            val sale = repo.createOpenSale(currentTableId, currentTableLabel)
+            val reusableSale = loadReusableOpenSaleForSingleBillSpot(
+                repo = repo,
+                serviceSpotId = currentTableId,
+            )
+            val sale = if (reusableSale != null) {
+                Log.i(
+                    "AIROS",
+                    "[MenuViewModel] reusing existing open sale for single-bill service spot id=$currentTableId saleId=${reusableSale.saleId}",
+                )
+                reusableSale
+            } else {
+                // Lazily create the open sale on first item add.
+                repo.createOpenSale(currentTableId, currentTableLabel)
+            }
+            currentTableId = sale.serviceSpotId ?: currentTableId
+            currentTableLabel = sale.serviceSpotLabel ?: currentTableLabel
             currentSaleId = sale.saleId
             mutableState.update { currentState ->
-                currentState.copy(openedAtEpochMillis = sale.createdAtEpochMillis)
+                currentState.copy(
+                    openedAtEpochMillis = sale.createdAtEpochMillis,
+                    activeTableId = currentTableId,
+                    activeTableLabel = currentTableLabel,
+                )
             }
             sale.saleId
         }

@@ -754,6 +754,7 @@ private fun buildAuthoritativeBackendFloorMap(
                 backendKind = backendTruth?.serviceSpotKind,
                 fallback = currentTable?.spotType,
             ),
+            maxOpenBills = backendTruth?.maxOpenBills ?: currentTable?.maxOpenBills,
             floorPlanX = tableObject.x,
             floorPlanY = tableObject.y,
             floorPlanWidth = tableObject.width,
