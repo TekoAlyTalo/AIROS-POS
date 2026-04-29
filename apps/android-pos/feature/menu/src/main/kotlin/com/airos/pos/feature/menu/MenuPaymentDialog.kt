@@ -122,8 +122,8 @@ fun MenuPaymentDialog(
     onDismiss: () -> Unit,
     onConfirm: (MenuPaymentDialogResult) -> Unit,
 ) {
-    var mode by rememberSaveable { mutableStateOf(MenuPaymentMode.CASH) }
-    var activeInputTarget by rememberSaveable { mutableStateOf(PaymentInputTarget.CASH_RECEIVED.name) }
+    var mode by rememberSaveable { mutableStateOf(MenuPaymentMode.CARD) }
+    var activeInputTarget by rememberSaveable { mutableStateOf(PaymentInputTarget.SPLIT_CARD.name) }
     var cashInput by rememberSaveable { mutableStateOf("") }
     var voucherInput by rememberSaveable { mutableStateOf("") }
     var splitCashInput by rememberSaveable { mutableStateOf("") }
@@ -132,7 +132,7 @@ fun MenuPaymentDialog(
     var voucherBarcodeInput by rememberSaveable { mutableStateOf("") }
     var discountModeName by rememberSaveable { mutableStateOf(BillDiscountMode.NONE.name) }
     var discountInput by rememberSaveable { mutableStateOf("") }
-    var shouldPrintReceipt by rememberSaveable { mutableStateOf(true) }
+    var shouldPrintReceipt by rememberSaveable { mutableStateOf(false) }
 
     val discountMode = remember(discountModeName) { BillDiscountMode.valueOf(discountModeName) }
 
