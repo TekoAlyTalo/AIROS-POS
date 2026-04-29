@@ -81,6 +81,7 @@ import com.airos.pos.core.model.PersistedOpenSale
 import com.airos.pos.core.model.PersistedOpenSaleLine
 import com.airos.pos.core.model.PersistedOpenSaleTransferEvent
 import com.airos.pos.core.model.RestaurantTable
+import com.airos.pos.core.model.ServiceSpotType
 import com.airos.pos.core.model.StaffFloorPlanViewportPreference
 import com.airos.pos.core.model.StaffTableMapViewPreference
 import com.airos.pos.core.ui.KeyValueRow
@@ -1260,7 +1261,12 @@ private fun TableDetailsContent(
 ) {
     val renderedOpenBillCount = openSales.size
     val openBillCount = openCheckSummary?.count ?: renderedOpenBillCount
-    val hasReachedOpenBillLimit = table.maxOpenBills?.let { renderedOpenBillCount >= it } == true
+    val maxOpenBills = table.maxOpenBills
+    val hasReachedOpenBillLimit = when {
+        maxOpenBills != null -> renderedOpenBillCount >= maxOpenBills
+        table.spotType == ServiceSpotType.BAR_SEAT -> renderedOpenBillCount >= 1
+        else -> false
+    }
     val displayStatus = resolveTableDisplayStatus(
         physicalStatus = table.status,
         openBillCount = openBillCount,
