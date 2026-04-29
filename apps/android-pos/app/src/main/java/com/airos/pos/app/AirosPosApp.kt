@@ -80,6 +80,7 @@ import com.airos.pos.core.model.DeviceConnectionState
 import com.airos.pos.core.model.WorktimeAttendanceSnapshot
 import com.airos.pos.core.model.ManagerOverrideReason
 import com.airos.pos.core.model.ScanEvent
+import com.airos.pos.core.model.ServiceSpotType
 import com.airos.pos.core.model.TerminalSettings
 import com.airos.pos.domain.MenuSyncResult
 import com.airos.pos.feature.auth.AuthScreen
@@ -138,7 +139,7 @@ private object Routes {
     const val TableMapPattern = "tablemap?menuPlacePicker={menuPlacePicker}"
     const val Menu = "menu"
     const val Transactions = "transactions"
-    const val MenuPattern = "menu?tableId={tableId}&tableLabel={tableLabel}&saleId={saleId}&forceNewSale={forceNewSale}"
+    const val MenuPattern = "menu?tableId={tableId}&tableLabel={tableLabel}&saleId={saleId}&forceNewSale={forceNewSale}&spotType={spotType}&maxOpenBills={maxOpenBills}"
     const val Kitchen = "kitchen"
     const val Scanner = "scanner"
     const val Diagnostics = "diagnostics"
@@ -151,12 +152,16 @@ private object Routes {
         tableLabel: String? = null,
         saleId: String? = null,
         forceNewSale: Boolean = false,
+        spotType: ServiceSpotType? = null,
+        maxOpenBills: Int? = null,
     ): String {
         val queryParts = buildList {
             tableId?.let { add("tableId=${Uri.encode(it)}") }
             tableLabel?.let { add("tableLabel=${Uri.encode(it)}") }
             saleId?.let { add("saleId=${Uri.encode(it)}") }
             if (forceNewSale) add("forceNewSale=true")
+            spotType?.let { add("spotType=${Uri.encode(it.name)}") }
+            maxOpenBills?.let { add("maxOpenBills=$it") }
         }
         return if (queryParts.isEmpty()) {
             Menu
@@ -1193,12 +1198,15 @@ private fun SignedInApp(
                                     source == TableSaleOpenSource.TABLE_TAP && openBillCount > 1
 
                                 if (!blockTableTapMultiBill) {
+                                    val selectedSpot = state.floorMap?.tables?.firstOrNull { it.id == tableId }
                                     navController.navigate(
                                         Routes.menu(
                                             tableId = tableId,
                                             tableLabel = tableLabel,
                                             saleId = saleId,
                                             forceNewSale = source == TableSaleOpenSource.NEW_SALE_BUTTON,
+                                            spotType = selectedSpot?.spotType,
+                                            maxOpenBills = selectedSpot?.maxOpenBills,
                                         ),
                                     )
                                 }
@@ -1292,6 +1300,15 @@ private fun SignedInApp(
                             type = NavType.BoolType
                             defaultValue = false
                         },
+                        navArgument("spotType") {
+                            type = NavType.StringType
+                            nullable = true
+                        },
+                        navArgument("maxOpenBills") {
+                            type = NavType.IntType
+                            nullable = true
+                            defaultValue = -1
+                        },
                     ),
                 ) { entry ->
                     val context = LocalContext.current
@@ -1299,6 +1316,12 @@ private fun SignedInApp(
                     val tableLabel = entry.arguments?.getString("tableLabel")
                     val saleId = entry.arguments?.getString("saleId")
                     val forceNewSale = entry.arguments?.getBoolean("forceNewSale") ?: false
+                    val initialTableSpotType = entry.arguments
+                        ?.getString("spotType")
+                        ?.let { raw -> runCatching { ServiceSpotType.valueOf(raw) }.getOrNull() }
+                    val initialTableMaxOpenBills = entry.arguments
+                        ?.getInt("maxOpenBills")
+                        ?.takeIf { it >= 0 }
                     val viewModel: MenuViewModel = viewModel(
                         key = "menu-${saleId ?: tableId ?: "general"}-${if (forceNewSale) "new" else "existing"}",
                         factory = MenuViewModel.factory(
@@ -1335,6 +1358,8 @@ private fun SignedInApp(
                             },
                             activeTableId = tableId,
                             activeTableLabel = tableLabel,
+                            initialTableSpotType = initialTableSpotType,
+                            initialTableMaxOpenBills = initialTableMaxOpenBills,
                             activeSaleId = saleId,
                             forceNewSale = forceNewSale,
                             tableRepository = appContainer.tableRepository,

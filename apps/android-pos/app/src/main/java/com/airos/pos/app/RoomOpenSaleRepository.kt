@@ -1,5 +1,6 @@
 package com.airos.pos.app
 
+import android.util.Log
 import com.airos.pos.core.database.dao.OpenSaleDao
 import com.airos.pos.core.database.entity.OpenSaleEntity
 import com.airos.pos.core.database.entity.OpenSaleLineEntity
@@ -7,6 +8,7 @@ import com.airos.pos.core.database.entity.OpenSaleTransferEventEntity
 import com.airos.pos.core.model.PersistedOpenSale
 import com.airos.pos.core.model.PersistedOpenSaleLine
 import com.airos.pos.core.model.PersistedOpenSaleTransferEvent
+import com.airos.pos.core.model.ServiceSpotType
 import com.airos.pos.domain.OpenSaleRepository
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
@@ -62,7 +64,26 @@ class RoomOpenSaleRepository(
         }
     }
 
-    override suspend fun createOpenSale(serviceSpotId: String?, serviceSpotLabel: String?): PersistedOpenSale {
+    override suspend fun createOpenSale(
+        serviceSpotId: String?,
+        serviceSpotLabel: String?,
+        maxOpenBills: Int?,
+        spotType: ServiceSpotType?,
+    ): PersistedOpenSale {
+        val requiresSingleOpenBill = serviceSpotId != null && (
+            maxOpenBills == 1 || spotType == ServiceSpotType.BAR_SEAT
+        )
+        if (requiresSingleOpenBill) {
+            val existing = loadOpenSaleForSpot(serviceSpotId)
+            if (existing != null) {
+                Log.i(
+                    "AIROS",
+                    "[RoomOpenSaleRepository] reusing existing OPEN sale for single-bill service spot id=$serviceSpotId saleId=${existing.saleId}",
+                )
+                return existing
+            }
+        }
+
         val now = System.currentTimeMillis()
         val saleId = UUID.randomUUID().toString()
         val entity = OpenSaleEntity(

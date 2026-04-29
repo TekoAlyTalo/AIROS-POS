@@ -191,6 +191,8 @@ class MenuViewModel(
     private val customerDisplayService: CustomerDisplayService? = null,
     private val activeTableId: String? = null,
     private val activeTableLabel: String? = null,
+    private val initialTableSpotType: ServiceSpotType? = null,
+    private val initialTableMaxOpenBills: Int? = null,
     private val activeSaleId: String? = null,
     private val forceNewSale: Boolean = false,
     private val tableRepository: TableRepository? = null,
@@ -202,8 +204,8 @@ class MenuViewModel(
     // The original constructor params are the initial values only.
     private var currentTableId: String? = activeTableId
     private var currentTableLabel: String? = activeTableLabel
-    @Volatile private var currentTableSpotType: ServiceSpotType? = null
-    @Volatile private var currentTableMaxOpenBills: Int? = null
+    @Volatile private var currentTableSpotType: ServiceSpotType? = initialTableSpotType
+    @Volatile private var currentTableMaxOpenBills: Int? = initialTableMaxOpenBills
     /** Tracks the saleId of the active persisted open sale. Null until the first item is added. */
     @Volatile private var currentSaleId: String? = null
 
@@ -869,7 +871,12 @@ class MenuViewModel(
                 reusableSale
             } else {
                 // Lazily create the open sale on first item add.
-                repo.createOpenSale(currentTableId, currentTableLabel)
+                repo.createOpenSale(
+                    serviceSpotId = currentTableId,
+                    serviceSpotLabel = currentTableLabel,
+                    maxOpenBills = currentTableMaxOpenBills,
+                    spotType = currentTableSpotType,
+                )
             }
             currentTableId = sale.serviceSpotId ?: currentTableId
             currentTableLabel = sale.serviceSpotLabel ?: currentTableLabel
@@ -897,6 +904,8 @@ class MenuViewModel(
             customerDisplayService: CustomerDisplayService? = null,
             activeTableId: String? = null,
             activeTableLabel: String? = null,
+            initialTableSpotType: ServiceSpotType? = null,
+            initialTableMaxOpenBills: Int? = null,
             activeSaleId: String? = null,
             forceNewSale: Boolean = false,
             tableRepository: TableRepository? = null,
@@ -915,6 +924,8 @@ class MenuViewModel(
                     customerDisplayService = customerDisplayService,
                     activeTableId = activeTableId,
                     activeTableLabel = activeTableLabel,
+                    initialTableSpotType = initialTableSpotType,
+                    initialTableMaxOpenBills = initialTableMaxOpenBills,
                     activeSaleId = activeSaleId,
                     forceNewSale = forceNewSale,
                     tableRepository = tableRepository,

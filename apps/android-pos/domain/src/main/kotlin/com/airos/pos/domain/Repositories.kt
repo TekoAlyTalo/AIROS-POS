@@ -18,6 +18,7 @@ import com.airos.pos.core.model.TablePaymentRequest
 import com.airos.pos.core.model.TablePaymentResult
 import com.airos.pos.core.model.RefundRequest
 import com.airos.pos.core.model.RestaurantTable
+import com.airos.pos.core.model.ServiceSpotType
 import com.airos.pos.core.model.StaffMember
 import com.airos.pos.core.model.PersistedOpenSale
 import com.airos.pos.core.model.PersistedOpenSaleLine
@@ -171,7 +172,12 @@ interface OpenSaleRepository {
     suspend fun loadOpenSaleForSpot(serviceSpotId: String?): PersistedOpenSale?
     /** Returns every OPEN sale for the given spot. Pass null for walk-in (no assigned spot). */
     suspend fun loadOpenSalesForSpot(serviceSpotId: String?): List<PersistedOpenSale>
-    suspend fun createOpenSale(serviceSpotId: String?, serviceSpotLabel: String?): PersistedOpenSale
+    suspend fun createOpenSale(
+        serviceSpotId: String?,
+        serviceSpotLabel: String?,
+        maxOpenBills: Int? = null,
+        spotType: ServiceSpotType? = null,
+    ): PersistedOpenSale
     suspend fun saveLines(saleId: String, lines: List<PersistedOpenSaleLine>)
     suspend fun assignServiceSpot(
         saleId: String,
