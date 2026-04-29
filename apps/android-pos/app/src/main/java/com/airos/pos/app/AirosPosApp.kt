@@ -131,6 +131,7 @@ private const val NfcLogTag = "AIROS_NFC"
 private const val SunmiUiResultLogTag = "AIROS_SUNMI_UI_RESULT"
 private const val MenuPlaceResultSpotIdKey = "menu_place_result_spot_id"
 private const val MenuPlaceResultSpotLabelKey = "menu_place_result_spot_label"
+private const val MenuMaxOpenBillsWireUnbounded = -1
 
 private object Routes {
     const val Auth = "auth"
@@ -139,7 +140,7 @@ private object Routes {
     const val TableMapPattern = "tablemap?menuPlacePicker={menuPlacePicker}"
     const val Menu = "menu"
     const val Transactions = "transactions"
-    const val MenuPattern = "menu?tableId={tableId}&tableLabel={tableLabel}&saleId={saleId}&forceNewSale={forceNewSale}&spotType={spotType}&maxOpenBills={maxOpenBills}"
+    const val MenuPattern = "menu?tableId={tableId}&tableLabel={tableLabel}&saleId={saleId}&forceNewSale={forceNewSale}&spotType={spotType}&maxOpenBillsWire={maxOpenBillsWire}"
     const val Kitchen = "kitchen"
     const val Scanner = "scanner"
     const val Diagnostics = "diagnostics"
@@ -155,13 +156,14 @@ private object Routes {
         spotType: ServiceSpotType? = null,
         maxOpenBills: Int? = null,
     ): String {
+        val maxOpenBillsWire = maxOpenBills ?: MenuMaxOpenBillsWireUnbounded
         val queryParts = buildList {
             tableId?.let { add("tableId=${Uri.encode(it)}") }
             tableLabel?.let { add("tableLabel=${Uri.encode(it)}") }
             saleId?.let { add("saleId=${Uri.encode(it)}") }
             if (forceNewSale) add("forceNewSale=true")
             spotType?.let { add("spotType=${Uri.encode(it.name)}") }
-            maxOpenBills?.let { add("maxOpenBills=$it") }
+            add("maxOpenBillsWire=$maxOpenBillsWire")
         }
         return if (queryParts.isEmpty()) {
             Menu
@@ -1304,10 +1306,9 @@ private fun SignedInApp(
                             type = NavType.StringType
                             nullable = true
                         },
-                        navArgument("maxOpenBills") {
+                        navArgument("maxOpenBillsWire") {
                             type = NavType.IntType
-                            nullable = true
-                            defaultValue = -1
+                            defaultValue = MenuMaxOpenBillsWireUnbounded
                         },
                     ),
                 ) { entry ->
@@ -1319,9 +1320,10 @@ private fun SignedInApp(
                     val initialTableSpotType = entry.arguments
                         ?.getString("spotType")
                         ?.let { raw -> runCatching { ServiceSpotType.valueOf(raw) }.getOrNull() }
-                    val initialTableMaxOpenBills = entry.arguments
-                        ?.getInt("maxOpenBills")
-                        ?.takeIf { it >= 0 }
+                    val maxOpenBillsWire = entry.arguments
+                        ?.getInt("maxOpenBillsWire")
+                        ?: MenuMaxOpenBillsWireUnbounded
+                    val initialTableMaxOpenBills = maxOpenBillsWire.takeIf { it >= 0 }
                     val viewModel: MenuViewModel = viewModel(
                         key = "menu-${saleId ?: tableId ?: "general"}-${if (forceNewSale) "new" else "existing"}",
                         factory = MenuViewModel.factory(
