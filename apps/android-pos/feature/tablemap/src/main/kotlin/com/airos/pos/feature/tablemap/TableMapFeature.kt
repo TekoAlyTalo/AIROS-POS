@@ -1258,9 +1258,12 @@ private fun TableDetailsContent(
     onBillDragMoveInRoot: (positionInRoot: Offset) -> Unit = {},
     onBillDragEnd: () -> Unit = {},
 ) {
+    val renderedOpenBillCount = openSales.size
+    val openBillCount = openCheckSummary?.count ?: renderedOpenBillCount
+    val hasReachedOpenBillLimit = table.maxOpenBills?.let { renderedOpenBillCount >= it } == true
     val displayStatus = resolveTableDisplayStatus(
         physicalStatus = table.status,
-        openBillCount = openCheckSummary?.count ?: 0,
+        openBillCount = openBillCount,
         attentionFlag = table.attentionFlag,
     )
     val statusTick = rememberStatusTickPresentation(displayStatus)
@@ -1484,8 +1487,10 @@ private fun TableDetailsContent(
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
-                                Button(onClick = onOpenNewSale) {
-                                    Text(if (placeSelectionMode) "Valitse pöytä" else "Avaa uusi lasku")
+                                if (!hasReachedOpenBillLimit) {
+                                    Button(onClick = onOpenNewSale) {
+                                        Text(if (placeSelectionMode) "Valitse pöytä" else "Avaa uusi lasku")
+                                    }
                                 }
                             }
                         }
@@ -1537,7 +1542,7 @@ private fun TableDetailsContent(
                                         onDragEnd = onBillDragEnd,
                                     )
                                 }
-                                if (transferForThisTable == null) {
+                                if (transferForThisTable == null && !hasReachedOpenBillLimit) {
                                     Button(
                                         onClick = onOpenNewSale,
                                         modifier = Modifier.fillMaxWidth(),

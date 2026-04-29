@@ -952,6 +952,7 @@ fun MenuScreen(
     onCancelReceiptHandoff: () -> Unit,
     onOpenCashDrawer: (String) -> Unit,
     onStartNewSale: () -> Unit,
+    onBackToTableView: (() -> Unit)? = null,
     onOpenServiceSpotSelection: (() -> Unit)? = null,
     onAcknowledgeCheck: (() -> Unit)? = null,
     onScreenShown: () -> Unit = {},
@@ -1148,6 +1149,7 @@ fun MenuScreen(
             receiptHandoffMessage = state.receiptHandoffMessage,
             manualDrawerInProgress = state.manualDrawerInProgress,
             onStartNewSale = onStartNewSale,
+            onBackToTableView = onBackToTableView,
             onOpenServiceSpotSelection = onOpenServiceSpotSelection,
             onAcknowledgeCheck = onAcknowledgeCheck,
             onDecrementTicketLine = onDecrementTicketLine,
@@ -1609,6 +1611,7 @@ private fun RowScope.TicketPane(
     receiptHandoffMessage: String?,
     manualDrawerInProgress: Boolean,
     onStartNewSale: () -> Unit,
+    onBackToTableView: (() -> Unit)? = null,
     onOpenServiceSpotSelection: (() -> Unit)? = null,
     onAcknowledgeCheck: (() -> Unit)? = null,
     onDecrementTicketLine: (String) -> Unit,
@@ -1866,11 +1869,19 @@ private fun RowScope.TicketPane(
                         )
                     }
                 }
-                if (onOpenServiceSpotSelection != null) {
+                if (onBackToTableView != null || onOpenServiceSpotSelection != null) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
+                        onBackToTableView?.let { onBack ->
+                            OutlinedReceiptActionButton(
+                                label = "<-",
+                                onClick = onBack,
+                                modifier = Modifier.weight(0.34f),
+                                enabled = !paymentInProgress,
+                            )
+                        }
                         OutlinedReceiptActionButton(
                             label = if (activeTableId == null) "Lisää paikkaan" else "Vaihda paikkaan",
                             onClick = { onOpenServiceSpotSelection?.invoke() },

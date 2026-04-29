@@ -140,7 +140,7 @@ private object Routes {
     const val TableMapPattern = "tablemap?menuPlacePicker={menuPlacePicker}"
     const val Menu = "menu"
     const val Transactions = "transactions"
-    const val MenuPattern = "menu?tableId={tableId}&tableLabel={tableLabel}&saleId={saleId}&forceNewSale={forceNewSale}&spotType={spotType}&maxOpenBillsWire={maxOpenBillsWire}"
+    const val MenuPattern = "menu?tableId={tableId}&tableLabel={tableLabel}&saleId={saleId}&forceNewSale={forceNewSale}&spotType={spotType}&maxOpenBillsWire={maxOpenBillsWire}&returnToTableView={returnToTableView}"
     const val Kitchen = "kitchen"
     const val Scanner = "scanner"
     const val Diagnostics = "diagnostics"
@@ -155,6 +155,7 @@ private object Routes {
         forceNewSale: Boolean = false,
         spotType: ServiceSpotType? = null,
         maxOpenBills: Int? = null,
+        returnToTableView: Boolean = false,
     ): String {
         val maxOpenBillsWire = maxOpenBills ?: MenuMaxOpenBillsWireUnbounded
         val queryParts = buildList {
@@ -164,6 +165,7 @@ private object Routes {
             if (forceNewSale) add("forceNewSale=true")
             spotType?.let { add("spotType=${Uri.encode(it.name)}") }
             add("maxOpenBillsWire=$maxOpenBillsWire")
+            if (returnToTableView) add("returnToTableView=true")
         }
         return if (queryParts.isEmpty()) {
             Menu
@@ -1209,6 +1211,7 @@ private fun SignedInApp(
                                             forceNewSale = source == TableSaleOpenSource.NEW_SALE_BUTTON,
                                             spotType = selectedSpot?.spotType,
                                             maxOpenBills = selectedSpot?.maxOpenBills,
+                                            returnToTableView = true,
                                         ),
                                     )
                                 }
@@ -1310,6 +1313,10 @@ private fun SignedInApp(
                             type = NavType.IntType
                             defaultValue = MenuMaxOpenBillsWireUnbounded
                         },
+                        navArgument("returnToTableView") {
+                            type = NavType.BoolType
+                            defaultValue = false
+                        },
                     ),
                 ) { entry ->
                     val context = LocalContext.current
@@ -1324,6 +1331,7 @@ private fun SignedInApp(
                         ?.getInt("maxOpenBillsWire")
                         ?: MenuMaxOpenBillsWireUnbounded
                     val initialTableMaxOpenBills = maxOpenBillsWire.takeIf { it >= 0 }
+                    val returnToTableView = entry.arguments?.getBoolean("returnToTableView") ?: false
                     val viewModel: MenuViewModel = viewModel(
                         key = "menu-${saleId ?: tableId ?: "general"}-${if (forceNewSale) "new" else "existing"}",
                         factory = MenuViewModel.factory(
@@ -1417,7 +1425,12 @@ private fun SignedInApp(
                                 runCatching {
                                     appContainer.openSaleRepository.createOpenSale(null, null)
                                 }.onSuccess { sale ->
-                                    navController.navigate(Routes.menu(saleId = sale.saleId))
+                                    navController.navigate(
+                                        Routes.menu(
+                                            saleId = sale.saleId,
+                                            returnToTableView = returnToTableView,
+                                        ),
+                                    )
                                 }.onFailure { error ->
                                     Toast.makeText(
                                         context,
@@ -1426,6 +1439,15 @@ private fun SignedInApp(
                                     ).show()
                                 }
                             }
+                        },
+                        onBackToTableView = if (returnToTableView) {
+                            {
+                                if (!navController.popBackStack(Routes.TableMapPattern, inclusive = false)) {
+                                    navController.popBackStack(Routes.TableMap, inclusive = false)
+                                }
+                            }
+                        } else {
+                            null
                         },
                         onOpenServiceSpotSelection = {
                             navController.navigate(Routes.tableMap(menuPlacePicker = true))
