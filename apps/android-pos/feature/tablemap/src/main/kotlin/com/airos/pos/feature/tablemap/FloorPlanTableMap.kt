@@ -1,5 +1,10 @@
 package com.airos.pos.feature.tablemap
 import android.util.Log
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -16,6 +21,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -1431,6 +1437,15 @@ private fun FloorPlanTableNode(
     val attentionTint = displayStatus.attentionVisualTint()
     val accent = displayStatus.floorPlanAccent()
     val selectedTint = attentionTint ?: accent
+    val pulseTransition = rememberInfiniteTransition()
+    val attentionPulse by pulseTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 850),
+            repeatMode = RepeatMode.Reverse,
+        ),
+    )
     val seatMarkerDiameterPx = if (seatMarkers.isEmpty()) {
         0f
     } else {
@@ -1457,13 +1472,23 @@ private fun FloorPlanTableNode(
     val showOpenChips = bodyWidthPx >= 70f && bodyHeightPx >= 64f &&
         openSaleTotalLabels.isNotEmpty()
     val showGuestCount = bodyWidthPx >= 58f && bodyHeightPx >= 48f
+    val hiddenStatusPulseTint = when {
+        showStatusTick -> null
+        attentionTint != null -> attentionTint
+        displayStatus.kind == TableDisplayStatusKind.AVAILABLE -> null
+        displayStatus.kind == TableDisplayStatusKind.DIRTY -> FloorPlanDirtyColor
+        else -> FloorPlanOccupiedColor
+    }
+    val hiddenStatusPulse = if (hiddenStatusPulseTint != null) attentionPulse else 0f
     val borderWidthPx = when {
         dropHovered -> with(density) { 3.dp.toPx() }
+        hiddenStatusPulseTint != null -> with(density) { (2f + hiddenStatusPulse * 1.6f).dp.toPx() }
         attentionTint != null -> with(density) { 2.dp.toPx() }
         selected -> with(density) { 2.dp.toPx() }
         else -> with(density) { 1.dp.toPx() }
     }
     val borderColor = when {
+        hiddenStatusPulseTint != null -> hiddenStatusPulseTint.copy(alpha = 0.58f + hiddenStatusPulse * 0.38f)
         attentionTint != null -> attentionTint
         selected -> selectedTint
         dropHovered -> FloorPlanSelectionColor
@@ -1518,6 +1543,7 @@ private fun FloorPlanTableNode(
                         label = statusTick.label,
                         kind = FloorPlanChipKind.STATUS,
                         tint = attentionTint ?: accent,
+                        pulse = statusTick.label.shouldPulseFloorPlanStatusChip(),
                     )
                 )
             }
@@ -1621,12 +1647,19 @@ private data class FloorPlanChipSpec(
     val label: String,
     val kind: FloorPlanChipKind,
     val tint: Color? = null,
+    val pulse: Boolean = false,
 )
 
 private data class FloorPlanChipMetrics(
     val widthPx: Float,
     val heightPx: Float,
 )
+
+private const val FLOOR_PLAN_STATUS_STABLE_WIDTH_LABEL = "Needs Cleaning"
+
+private fun String.shouldPulseFloorPlanStatusChip(): Boolean {
+    return equals("SERVE", ignoreCase = true) || equals("CHECK", ignoreCase = true)
+}
 
 private fun RestaurantTable.floorPlanCustomerLabel(): String? {
     val count = guestCount.coerceAtLeast(0)
@@ -1743,9 +1776,24 @@ private fun estimateFloorPlanChipMetrics(
         FloorPlanChipKind.META -> 3f
     }
     val fontPx = with(density) { fontSp.sp.toPx() }
-    val widthPx = chip.label.length * fontPx * 0.58f + with(density) { (horizontalPaddingDp.dp * 2).toPx() }
+    val measuredLabelLength = when (chip.kind) {
+        FloorPlanChipKind.STATUS -> max(chip.label.length, FLOOR_PLAN_STATUS_STABLE_WIDTH_LABEL.length)
+        else -> chip.label.length
+    }
+    val widthPx = measuredLabelLength * fontPx * 0.58f + with(density) { (horizontalPaddingDp.dp * 2).toPx() }
     val heightPx = fontPx * 1.25f + with(density) { (verticalPaddingDp.dp * 2).toPx() }
     return FloorPlanChipMetrics(widthPx = widthPx, heightPx = heightPx)
+}
+
+private fun estimateFloorPlanStatusChipMinWidth(
+    density: Density,
+    bodyWidthPx: Float,
+    bodyHeightPx: Float,
+): androidx.compose.ui.unit.Dp {
+    val fontPx = with(density) { floorPlanTableStatusFontSp(bodyWidthPx, bodyHeightPx).sp.toPx() }
+    val horizontalPaddingPx = with(density) { (9.dp * 2).toPx() }
+    val widthPx = FLOOR_PLAN_STATUS_STABLE_WIDTH_LABEL.length * fontPx * 0.58f + horizontalPaddingPx
+    return widthPx.toDp(density)
 }
 
 @Composable
@@ -1757,18 +1805,38 @@ private fun FloorPlanChip(
 ) {
     when (chip.kind) {
         FloorPlanChipKind.STATUS -> {
+            val density = LocalDensity.current
             val tickTint = chip.tint ?: FloorPlanAvailableColor
+            val pulseTransition = rememberInfiniteTransition()
+            val pulseValue by pulseTransition.animateFloat(
+                initialValue = 0f,
+                targetValue = 1f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(durationMillis = 780),
+                    repeatMode = RepeatMode.Reverse,
+                ),
+            )
+            val pulse = if (chip.pulse) pulseValue else 0f
+            val minWidthDp = estimateFloorPlanStatusChipMinWidth(
+                density = density,
+                bodyWidthPx = bodyWidthPx,
+                bodyHeightPx = bodyHeightPx,
+            )
             Surface(
+                modifier = Modifier.widthIn(min = minWidthDp),
                 shape = RoundedCornerShape(999.dp),
-                color = tickTint.copy(alpha = if (chip.tint != null) 0.30f else 0.16f),
-                border = BorderStroke(1.dp, tickTint.copy(alpha = 0.34f)),
+                color = Color(0xFF101820).copy(alpha = 0.94f + pulse * 0.04f),
+                border = BorderStroke(
+                    width = if (chip.pulse) (1.1f + pulse * 0.9f).dp else 1.dp,
+                    color = tickTint.copy(alpha = 0.58f + pulse * 0.36f),
+                ),
             ) {
                 Text(
                     text = chip.label,
                     modifier = Modifier.padding(horizontal = if (compact) 8.dp else 9.dp, vertical = if (compact) 2.dp else 3.dp),
                     style = floorPlanTableStatusLabelStyle(bodyWidthPx, bodyHeightPx),
-                    color = tickTint.copy(alpha = 0.96f),
-                    fontWeight = FontWeight.SemiBold,
+                    color = tickTint.copy(alpha = 1f),
+                    fontWeight = FontWeight.ExtraBold,
                     textAlign = TextAlign.Center,
                     maxLines = 1,
                 )
