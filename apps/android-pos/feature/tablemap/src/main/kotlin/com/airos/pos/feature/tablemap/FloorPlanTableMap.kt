@@ -1527,7 +1527,9 @@ private fun FloorPlanTableNode(
                 }
             }
             if (showGuestCount) {
-                add(FloorPlanChipSpec(label = table.floorPlanCustomerLabel(displayStatus), kind = FloorPlanChipKind.META))
+                table.floorPlanCustomerLabel()?.let { customerLabel ->
+                    add(FloorPlanChipSpec(label = customerLabel, kind = FloorPlanChipKind.META))
+                }
                 add(FloorPlanChipSpec(label = table.floorPlanSeatsLabel(), kind = FloorPlanChipKind.META))
             }
         }
@@ -1626,23 +1628,14 @@ private data class FloorPlanChipMetrics(
     val heightPx: Float,
 )
 
-private fun RestaurantTable.floorPlanCustomerLabel(displayStatus: TableDisplayStatus): String {
-    val truthfulCount = guestCount.coerceAtLeast(0)
-    val displayCount = when {
-        truthfulCount > 0 -> truthfulCount
-        displayStatus.kind == TableDisplayStatusKind.OCCUPIED ||
-            displayStatus.kind == TableDisplayStatusKind.OPEN_BILL ||
-            displayStatus.kind == TableDisplayStatusKind.RESERVED_WITH_OPEN_BILL -> 1
-        else -> 0
-    }
-    val noun = if (displayCount == 1) "customer" else "customers"
-    return "$displayCount $noun"
+private fun RestaurantTable.floorPlanCustomerLabel(): String? {
+    val count = guestCount.coerceAtLeast(0)
+    return if (count > 0) "${count}C" else null
 }
 
 private fun RestaurantTable.floorPlanSeatsLabel(): String {
     val count = seats.coerceAtLeast(0)
-    val noun = if (count == 1) "seat" else "seats"
-    return "$count $noun"
+    return "${count}S"
 }
 
 @Composable
