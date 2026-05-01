@@ -194,6 +194,35 @@ enum class ServiceSpotType {
     BAR_SEAT,
 }
 
+enum class FloorPlanMarkerAnchor {
+    TOP_LEFT,
+    TOP,
+    TOP_RIGHT,
+    LEFT,
+    CENTER,
+    RIGHT,
+    BOTTOM_LEFT,
+    BOTTOM,
+    BOTTOM_RIGHT;
+
+    companion object {
+        fun fromRawValue(raw: String?): FloorPlanMarkerAnchor? {
+            return when (raw?.trim()?.lowercase()) {
+                "top-left" -> TOP_LEFT
+                "top" -> TOP
+                "top-right" -> TOP_RIGHT
+                "left" -> LEFT
+                "center" -> CENTER
+                "right" -> RIGHT
+                "bottom-left" -> BOTTOM_LEFT
+                "bottom" -> BOTTOM
+                "bottom-right" -> BOTTOM_RIGHT
+                else -> null
+            }
+        }
+    }
+}
+
 data class TablePosition(
     val x: Int,
     val y: Int,
@@ -233,6 +262,11 @@ data class RestaurantTable(
     val floorPlanShape: String? = null,
     val chairLayout: String? = null,
     val tableNumber: Int? = null,
+    val color: String? = null,
+    val backrestDirection: String? = null,
+    val backrestMode: String? = null,
+    val statusChipAnchor: FloorPlanMarkerAnchor? = null,
+    val seatMarkerAnchor: FloorPlanMarkerAnchor? = null,
 )
 data class FloorMapArea(
     val id: String,
@@ -275,6 +309,10 @@ data class FloorMapObject(
     val widthPx: Float = width.toFloat(),
     val heightPx: Float = height.toFloat(),
     val rotation: Float = 0f,
+    val color: String? = null,
+    val backrestDirection: String? = null,
+    val backrestMode: String? = null,
+    val armrestMode: String? = null,
     val locked: Boolean = false,
     val hidden: Boolean = false,
     val shape: String? = null,

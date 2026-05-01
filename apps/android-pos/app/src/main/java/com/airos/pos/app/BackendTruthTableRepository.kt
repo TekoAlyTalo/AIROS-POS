@@ -5,6 +5,7 @@ import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.model.FloorMap
 import com.airos.pos.core.model.FloorMapArea
 import com.airos.pos.core.model.FloorMapObject
+import com.airos.pos.core.model.FloorPlanMarkerAnchor
 import com.airos.pos.core.model.PersistedOpenSale
 import com.airos.pos.core.model.RestaurantTable
 import com.airos.pos.core.model.ServiceSpotType
@@ -503,6 +504,22 @@ private class BackendTableTruthClient(
                 val capacity = obj.optIntOrNull("capacity")
                 val shape = obj.optStringOrNull("shape")
                 val chairLayout = obj.optStringOrNull("chairLayout") ?: obj.optStringOrNull("chair_layout")
+                val objectColor = obj.optStringOrNull("color")?.takeIf { it.matches(Regex("^#[0-9a-fA-F]{6}$")) }
+                val backrestDirection = (obj.optStringOrNull("backrestDirection")
+                    ?: obj.optStringOrNull("backrest_direction"))
+                    ?.takeIf { it in setOf("top", "right", "bottom", "left") }
+                val backrestMode = (obj.optStringOrNull("backrestMode")
+                    ?: obj.optStringOrNull("backrest_mode"))
+                    ?.takeIf { it in setOf("none", "backrest") }
+                val armrestMode = (obj.optStringOrNull("armrestMode")
+                    ?: obj.optStringOrNull("armrest_mode"))
+                    ?.takeIf { it in setOf("both", "none", "left-only", "right-only") }
+                val statusChipAnchor = FloorPlanMarkerAnchor.fromRawValue(
+                    obj.optStringOrNull("statusChipAnchor") ?: obj.optStringOrNull("status_chip_anchor"),
+                )
+                val seatMarkerAnchor = FloorPlanMarkerAnchor.fromRawValue(
+                    obj.optStringOrNull("seatMarkerAnchor") ?: obj.optStringOrNull("seat_marker_anchor"),
+                )
                 if (type == "table") {
                     tableObjects += BackendFloorPlanTableObject(
                         id = objectId,
@@ -516,6 +533,11 @@ private class BackendTableTruthClient(
                         rotation = rotation,
                         shape = shape,
                         chairLayout = chairLayout,
+                        color = objectColor,
+                        backrestDirection = backrestDirection,
+                        backrestMode = backrestMode,
+                        statusChipAnchor = statusChipAnchor,
+                        seatMarkerAnchor = seatMarkerAnchor,
                     )
                 } else {
                     floorPlanObjects += FloorMapObject(
@@ -531,6 +553,10 @@ private class BackendTableTruthClient(
                         widthPx = width.coerceAtLeast(0.01f),
                         heightPx = height.coerceAtLeast(0.01f),
                         rotation = rotation,
+                        color = objectColor,
+                        backrestDirection = backrestDirection,
+                        backrestMode = backrestMode,
+                        armrestMode = armrestMode,
                         locked = obj.optBoolean("locked", false),
                         hidden = obj.optBoolean("hidden", false),
                         shape = shape,
@@ -643,6 +669,11 @@ private data class BackendFloorPlanTableObject(
     val rotation: Float,
     val shape: String?,
     val chairLayout: String?,
+    val color: String?,
+    val backrestDirection: String?,
+    val backrestMode: String?,
+    val statusChipAnchor: FloorPlanMarkerAnchor?,
+    val seatMarkerAnchor: FloorPlanMarkerAnchor?,
 )
 private data class BackendTableTruth(
     val tableId: Int,
@@ -796,6 +827,11 @@ private fun buildAuthoritativeBackendFloorMap(
             floorPlanShape = tableObject.shape,
             chairLayout = tableObject.chairLayout,
             tableNumber = tableObject.tableNumber,
+            color = tableObject.color,
+            backrestDirection = tableObject.backrestDirection,
+            backrestMode = tableObject.backrestMode,
+            statusChipAnchor = tableObject.statusChipAnchor,
+            seatMarkerAnchor = tableObject.seatMarkerAnchor,
         )
     }
 
