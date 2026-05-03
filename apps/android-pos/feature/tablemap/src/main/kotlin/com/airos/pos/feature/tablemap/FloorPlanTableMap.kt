@@ -6,6 +6,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -52,7 +53,9 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Density
@@ -1057,10 +1060,19 @@ private fun FloorPlanLabeledObjectSurface(
 ) {
     val normalizedType = objectType.lowercase()
     val objectColor = parseFloorPlanObjectColor(objectColorHex)
+    val usePremiumSofaAsset = normalizedType == "sofa" || normalizedType == "couch"
     Box(modifier = modifier.requiredSize(widthDp, heightDp)) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val stroke = max(1f, 1.dp.toPx())
-            when (normalizedType) {
+        if (usePremiumSofaAsset) {
+            Image(
+                painter = painterResource(id = R.drawable.sofa2_premium_topdown_asset_v1),
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val stroke = max(1f, 1.dp.toPx())
+                when (normalizedType) {
                 "wall" -> {
                     drawRect(
                         color = Color(0xFF3A1E0E).copy(alpha = 0.96f),
@@ -1184,6 +1196,7 @@ private fun FloorPlanLabeledObjectSurface(
                         cornerRadius = CornerRadius(2f, 2f),
                         style = Stroke(width = stroke),
                     )
+                }
                 }
             }
         }
@@ -2276,6 +2289,38 @@ private fun DrawScope.drawFloorPlanTableSurface(
     }
 }
 
+
+private enum class FloorPlanFurnitureDetailLevel {
+    SILHOUETTE,
+    STRUCTURE,
+    FULL,
+}
+
+private fun floorPlanSafeFloat(value: Float, fallback: Float = 1f): Float {
+    return if (value.isNaN() || value.isInfinite()) fallback else value
+}
+
+private fun floorPlanSafeSize(size: Size): Size {
+    return Size(
+        width = floorPlanSafeFloat(size.width).coerceAtLeast(1f),
+        height = floorPlanSafeFloat(size.height).coerceAtLeast(1f),
+    )
+}
+
+private fun floorPlanClamp(value: Float, minValue: Float, maxValue: Float): Float {
+    val safeMin = floorPlanSafeFloat(minValue)
+    val safeMax = max(safeMin, floorPlanSafeFloat(maxValue, safeMin))
+    return floorPlanSafeFloat(value, safeMin).coerceIn(safeMin, safeMax)
+}
+
+private fun floorPlanFurnitureDetailLevel(minDim: Float): FloorPlanFurnitureDetailLevel {
+    return when {
+        minDim < 7f -> FloorPlanFurnitureDetailLevel.SILHOUETTE
+        minDim < 18f -> FloorPlanFurnitureDetailLevel.STRUCTURE
+        else -> FloorPlanFurnitureDetailLevel.FULL
+    }
+}
+
 private fun DrawScope.drawFloorPlanBarStoolSurface(
     isRound: Boolean,
     topLeft: Offset,
@@ -2286,125 +2331,246 @@ private fun DrawScope.drawFloorPlanBarStoolSurface(
     backrestDirection: String?,
     backrestMode: String?,
 ) {
-    val minDim = min(targetSize.width, targetSize.height).coerceAtLeast(1f)
-    val seatInset = minDim * 0.16f
-    val seatTopLeft = Offset(topLeft.x + seatInset, topLeft.y + seatInset)
-    val seatSize = Size(
-        width = (targetSize.width - seatInset * 2f).coerceAtLeast(1f),
-        height = (targetSize.height - seatInset * 2f).coerceAtLeast(1f),
-    )
-    val base = baseColor ?: Color(0xFF8A5A32)
+    val safeTargetSize = floorPlanSafeSize(targetSize)
+    val width = safeTargetSize.width
+    val height = safeTargetSize.height
+    val minDim = min(width, height)
+    if (minDim < 3f) return
+
+    val detailLevel = floorPlanFurnitureDetailLevel(minDim)
+    val base = baseColor ?: Color(0xFF51483F)
     val warmHighlight = Color(0xFFFFE3B0)
     val deepShadow = Color(0xFF120804)
-    val seatTop = base.mixWith(warmHighlight, 0.20f)
-    val seatBottom = base.mixWith(deepShadow, 0.34f)
-    val seatBrush = Brush.radialGradient(
-        colors = listOf(
-            seatTop.copy(alpha = 0.98f),
-            base.copy(alpha = 0.98f),
-            seatBottom.copy(alpha = 0.99f),
-        ),
-        center = Offset(seatTopLeft.x + seatSize.width * 0.36f, seatTopLeft.y + seatSize.height * 0.28f),
-        radius = max(seatSize.width, seatSize.height),
-    )
-    val seatRadius = if (isRound) {
-        CornerRadius(seatSize.width, seatSize.height)
-    } else {
-        CornerRadius(minDim * 0.18f, minDim * 0.18f)
-    }
+    val outline = base.mixWith(deepShadow, 0.58f).copy(alpha = 0.86f)
+    val seatTop = base.mixWith(warmHighlight, 0.12f).copy(alpha = 0.98f)
+    val seatMid = base.copy(alpha = 0.98f)
+    val seatBottom = base.mixWith(deepShadow, 0.26f).copy(alpha = 0.99f)
+    val center = Offset(topLeft.x + width / 2f, topLeft.y + height / 2f)
+
+    val seatSide = minDim * if (isRound) 0.70f else 0.66f
+    val seatWidth = if (isRound) seatSide else min(seatSide, width * 0.70f)
+    val seatHeight = if (isRound) seatSide else min(seatSide, height * 0.70f)
+    val seatTopLeft = Offset(center.x - seatWidth / 2f, center.y - seatHeight / 2f)
+    val seatSize = Size(width = seatWidth.coerceAtLeast(1f), height = seatHeight.coerceAtLeast(1f))
+    val stoolStroke = max(0.85f, min(borderWidthPx, minDim * 0.055f))
 
     drawOval(
-        color = Color(0x66110805),
-        topLeft = Offset(topLeft.x + minDim * 0.06f, topLeft.y + minDim * 0.07f),
-        size = targetSize,
+        color = Color(0x55110805),
+        topLeft = Offset(seatTopLeft.x + minDim * 0.05f, seatTopLeft.y + seatSize.height * 0.58f),
+        size = Size(seatSize.width * 0.92f, seatSize.height * 0.34f),
     )
-    if (backrestMode == "backrest") {
+
+    if (detailLevel != FloorPlanFurnitureDetailLevel.SILHOUETTE) {
+        val supportColor = deepShadow.copy(alpha = 0.42f)
+        val supportStroke = floorPlanClamp(minDim * 0.026f, 0.75f, 2.1f)
+        val stemStart = Offset(center.x, seatTopLeft.y + seatSize.height * 0.55f)
+        val stemEnd = Offset(center.x, topLeft.y + height * 0.83f)
+        drawLine(
+            color = supportColor,
+            start = stemStart,
+            end = stemEnd,
+            strokeWidth = supportStroke,
+        )
+        if (isRound) {
+            val legStartY = seatTopLeft.y + seatSize.height * 0.60f
+            val legEndY = topLeft.y + height * 0.88f
+            listOf(0.30f, 0.50f, 0.70f).forEach { fraction ->
+                val legEndX = topLeft.x + width * fraction
+                drawLine(
+                    color = supportColor.copy(alpha = 0.34f),
+                    start = Offset(center.x, legStartY),
+                    end = Offset(legEndX, legEndY),
+                    strokeWidth = supportStroke,
+                )
+            }
+            drawOval(
+                color = deepShadow.copy(alpha = 0.22f),
+                topLeft = Offset(center.x - seatSize.width * 0.40f, center.y - seatSize.height * 0.18f),
+                size = Size(seatSize.width * 0.80f, seatSize.height * 0.80f),
+                style = Stroke(width = max(0.75f, supportStroke * 0.8f)),
+            )
+        } else {
+            val footY = topLeft.y + height * 0.82f
+            drawLine(
+                color = supportColor.copy(alpha = 0.42f),
+                start = Offset(center.x - seatSize.width * 0.30f, footY),
+                end = Offset(center.x + seatSize.width * 0.30f, footY),
+                strokeWidth = supportStroke,
+            )
+            drawLine(
+                color = supportColor.copy(alpha = 0.30f),
+                start = Offset(center.x - seatSize.width * 0.20f, topLeft.y + height * 0.72f),
+                end = Offset(center.x + seatSize.width * 0.20f, topLeft.y + height * 0.88f),
+                strokeWidth = max(0.65f, supportStroke * 0.8f),
+            )
+        }
+    }
+
+    if (backrestMode == "backrest" && detailLevel != FloorPlanFurnitureDetailLevel.SILHOUETTE) {
         drawFloorPlanBarStoolBackrest(
             topLeft = topLeft,
-            targetSize = targetSize,
+            targetSize = safeTargetSize,
+            seatTopLeft = seatTopLeft,
+            seatSize = seatSize,
             direction = backrestDirection,
-            color = base.mixWith(deepShadow, 0.48f),
-            borderColor = borderColor,
-            strokeWidth = max(1f, borderWidthPx * 0.72f),
+            color = base.mixWith(deepShadow, 0.22f),
+            borderColor = outline,
+            strokeWidth = max(0.75f, stoolStroke * 0.72f),
         )
     }
+
+    val seatBrush = Brush.radialGradient(
+        colors = listOf(seatTop, seatMid, seatBottom),
+        center = Offset(seatTopLeft.x + seatSize.width * 0.38f, seatTopLeft.y + seatSize.height * 0.30f),
+        radius = max(seatSize.width, seatSize.height) * 0.92f,
+    )
+
     if (isRound) {
         drawOval(brush = seatBrush, topLeft = seatTopLeft, size = seatSize)
-        drawOval(color = borderColor, topLeft = seatTopLeft, size = seatSize, style = Stroke(width = borderWidthPx))
+        drawOval(color = outline, topLeft = seatTopLeft, size = seatSize, style = Stroke(width = stoolStroke))
     } else {
+        val radiusValue = floorPlanClamp(minDim * 0.055f, 1.5f, 5f)
+        val seatRadius = CornerRadius(radiusValue, radiusValue)
         drawRoundRect(brush = seatBrush, topLeft = seatTopLeft, size = seatSize, cornerRadius = seatRadius)
-        drawRoundRect(color = borderColor, topLeft = seatTopLeft, size = seatSize, cornerRadius = seatRadius, style = Stroke(width = borderWidthPx))
+        drawRoundRect(color = outline, topLeft = seatTopLeft, size = seatSize, cornerRadius = seatRadius, style = Stroke(width = stoolStroke))
     }
-    val stemX = topLeft.x + targetSize.width / 2f
-    val stemTop = seatTopLeft.y + seatSize.height * 0.58f
-    val stemBottom = topLeft.y + targetSize.height - minDim * 0.10f
-    drawLine(
-        color = deepShadow.copy(alpha = 0.58f),
-        start = Offset(stemX, stemTop),
-        end = Offset(stemX, stemBottom),
-        strokeWidth = max(1.2f, minDim * 0.055f),
-    )
-    drawLine(
-        color = deepShadow.copy(alpha = 0.44f),
-        start = Offset(topLeft.x + targetSize.width * 0.30f, topLeft.y + targetSize.height * 0.72f),
-        end = Offset(topLeft.x + targetSize.width * 0.70f, topLeft.y + targetSize.height * 0.72f),
-        strokeWidth = max(1f, minDim * 0.04f),
-    )
-    drawCircle(
-        color = warmHighlight.copy(alpha = 0.20f),
-        radius = minDim * 0.08f,
-        center = Offset(seatTopLeft.x + seatSize.width * 0.36f, seatTopLeft.y + seatSize.height * 0.30f),
-    )
+
+    if (detailLevel == FloorPlanFurnitureDetailLevel.FULL) {
+        drawCircle(
+            color = warmHighlight.copy(alpha = 0.18f),
+            radius = minDim * 0.065f,
+            center = Offset(seatTopLeft.x + seatSize.width * 0.36f, seatTopLeft.y + seatSize.height * 0.30f),
+        )
+        val inset = minDim * 0.13f
+        val innerTopLeft = Offset(seatTopLeft.x + inset, seatTopLeft.y + inset)
+        val innerSize = Size(
+            width = (seatSize.width - inset * 2f).coerceAtLeast(1f),
+            height = (seatSize.height - inset * 2f).coerceAtLeast(1f),
+        )
+        if (isRound) {
+            drawOval(
+                color = deepShadow.copy(alpha = 0.12f),
+                topLeft = innerTopLeft,
+                size = innerSize,
+                style = Stroke(width = max(0.65f, stoolStroke * 0.55f)),
+            )
+        } else {
+            val innerRadiusValue = floorPlanClamp(minDim * 0.035f, 1f, 3.5f)
+            val innerRadius = CornerRadius(innerRadiusValue, innerRadiusValue)
+            drawRoundRect(
+                color = deepShadow.copy(alpha = 0.11f),
+                topLeft = innerTopLeft,
+                size = innerSize,
+                cornerRadius = innerRadius,
+                style = Stroke(width = max(0.65f, stoolStroke * 0.50f)),
+            )
+        }
+    }
 }
+
 
 private fun DrawScope.drawFloorPlanBarStoolBackrest(
     topLeft: Offset,
     targetSize: Size,
+    seatTopLeft: Offset,
+    seatSize: Size,
     direction: String?,
     color: Color,
     borderColor: Color,
     strokeWidth: Float,
 ) {
     val minDim = min(targetSize.width, targetSize.height).coerceAtLeast(1f)
-    val thickness = minDim * 0.12f
+    val thickness = floorPlanClamp(minDim * 0.10f, 2f, 5.5f)
     val resolvedDirection = when (direction) {
         "top", "right", "bottom", "left" -> direction
         else -> "top"
     }
+    val center = Offset(seatTopLeft.x + seatSize.width / 2f, seatTopLeft.y + seatSize.height / 2f)
     val rectTopLeft: Offset
     val rectSize: Size
+    val supportAStart: Offset
+    val supportAEnd: Offset
+    val supportBStart: Offset
+    val supportBEnd: Offset
+    val supportInset = minDim * 0.18f
+
     when (resolvedDirection) {
         "bottom" -> {
-            rectSize = Size(targetSize.width * 0.56f, thickness)
-            rectTopLeft = Offset(topLeft.x + targetSize.width * 0.22f, topLeft.y + targetSize.height - thickness * 1.25f)
+            rectSize = Size(seatSize.width * 0.82f, thickness)
+            rectTopLeft = Offset(center.x - rectSize.width / 2f, min(topLeft.y + targetSize.height - thickness, seatTopLeft.y + seatSize.height + minDim * 0.08f))
+            supportAStart = Offset(center.x - supportInset, rectTopLeft.y)
+            supportAEnd = Offset(center.x - supportInset * 0.62f, seatTopLeft.y + seatSize.height * 0.78f)
+            supportBStart = Offset(center.x + supportInset, rectTopLeft.y)
+            supportBEnd = Offset(center.x + supportInset * 0.62f, seatTopLeft.y + seatSize.height * 0.78f)
         }
         "left" -> {
-            rectSize = Size(thickness, targetSize.height * 0.56f)
-            rectTopLeft = Offset(topLeft.x + thickness * 0.25f, topLeft.y + targetSize.height * 0.22f)
+            rectSize = Size(thickness, seatSize.height * 0.82f)
+            rectTopLeft = Offset(max(topLeft.x, seatTopLeft.x - minDim * 0.12f - thickness), center.y - rectSize.height / 2f)
+            supportAStart = Offset(rectTopLeft.x + rectSize.width, center.y - supportInset)
+            supportAEnd = Offset(seatTopLeft.x + seatSize.width * 0.22f, center.y - supportInset * 0.62f)
+            supportBStart = Offset(rectTopLeft.x + rectSize.width, center.y + supportInset)
+            supportBEnd = Offset(seatTopLeft.x + seatSize.width * 0.22f, center.y + supportInset * 0.62f)
         }
         "right" -> {
-            rectSize = Size(thickness, targetSize.height * 0.56f)
-            rectTopLeft = Offset(topLeft.x + targetSize.width - thickness * 1.25f, topLeft.y + targetSize.height * 0.22f)
+            rectSize = Size(thickness, seatSize.height * 0.82f)
+            rectTopLeft = Offset(min(topLeft.x + targetSize.width - thickness, seatTopLeft.x + seatSize.width + minDim * 0.12f), center.y - rectSize.height / 2f)
+            supportAStart = Offset(rectTopLeft.x, center.y - supportInset)
+            supportAEnd = Offset(seatTopLeft.x + seatSize.width * 0.78f, center.y - supportInset * 0.62f)
+            supportBStart = Offset(rectTopLeft.x, center.y + supportInset)
+            supportBEnd = Offset(seatTopLeft.x + seatSize.width * 0.78f, center.y + supportInset * 0.62f)
         }
         else -> {
-            rectSize = Size(targetSize.width * 0.56f, thickness)
-            rectTopLeft = Offset(topLeft.x + targetSize.width * 0.22f, topLeft.y + thickness * 0.25f)
+            rectSize = Size(seatSize.width * 0.82f, thickness)
+            rectTopLeft = Offset(center.x - rectSize.width / 2f, max(topLeft.y, seatTopLeft.y - minDim * 0.12f - thickness))
+            supportAStart = Offset(center.x - supportInset, rectTopLeft.y + rectSize.height)
+            supportAEnd = Offset(center.x - supportInset * 0.62f, seatTopLeft.y + seatSize.height * 0.22f)
+            supportBStart = Offset(center.x + supportInset, rectTopLeft.y + rectSize.height)
+            supportBEnd = Offset(center.x + supportInset * 0.62f, seatTopLeft.y + seatSize.height * 0.22f)
         }
     }
+
+    drawLine(
+        color = borderColor.copy(alpha = 0.38f),
+        start = supportAStart,
+        end = supportAEnd,
+        strokeWidth = max(0.65f, strokeWidth * 0.68f),
+    )
+    drawLine(
+        color = borderColor.copy(alpha = 0.38f),
+        start = supportBStart,
+        end = supportBEnd,
+        strokeWidth = max(0.65f, strokeWidth * 0.68f),
+    )
+
+    val radius = floorPlanClamp(minDim * 0.045f, 1.5f, 4.5f)
+    val backrestBrush = if (resolvedDirection == "left" || resolvedDirection == "right") {
+        Brush.horizontalGradient(
+            colors = listOf(color.mixWith(Color.White, 0.06f).copy(alpha = 0.94f), color.mixWith(Color.Black, 0.20f).copy(alpha = 0.96f)),
+            startX = rectTopLeft.x,
+            endX = rectTopLeft.x + rectSize.width,
+        )
+    } else {
+        Brush.verticalGradient(
+            colors = listOf(color.mixWith(Color.White, 0.06f).copy(alpha = 0.94f), color.mixWith(Color.Black, 0.20f).copy(alpha = 0.96f)),
+            startY = rectTopLeft.y,
+            endY = rectTopLeft.y + rectSize.height,
+        )
+    }
     drawRoundRect(
-        color = color.copy(alpha = 0.94f),
+        brush = backrestBrush,
         topLeft = rectTopLeft,
         size = rectSize,
-        cornerRadius = CornerRadius(thickness, thickness),
+        cornerRadius = CornerRadius(radius, radius),
     )
     drawRoundRect(
-        color = borderColor.copy(alpha = 0.70f),
+        color = borderColor.copy(alpha = 0.72f),
         topLeft = rectTopLeft,
         size = rectSize,
-        cornerRadius = CornerRadius(thickness, thickness),
+        cornerRadius = CornerRadius(radius, radius),
         style = Stroke(width = strokeWidth),
     )
 }
+
 
 private fun DrawScope.drawFloorPlanWoodGrainLines(
     topLeft: Offset,
@@ -2455,14 +2621,14 @@ private fun DrawScope.drawFloorPlanWoodGrainLines(
 
 private val FloorPlanSofaShadowColor = Color(0x66110805)
 private val FloorPlanSofaBorderColor = Color(0xFFE6C98C).copy(alpha = 0.48f)
-private val FloorPlanSofaBodyTopColor = Color(0xFF73513A)
-private val FloorPlanSofaBodyBottomColor = Color(0xFF332015)
-private val FloorPlanSofaBackTopColor = Color(0xFF8C6A4D)
-private val FloorPlanSofaBackBottomColor = Color(0xFF4D3120)
-private val FloorPlanSofaArmTopColor = Color(0xFF6F4C36)
-private val FloorPlanSofaArmBottomColor = Color(0xFF2E1B11)
-private val FloorPlanSofaSeatTopColor = Color(0xFF9F7A58)
-private val FloorPlanSofaSeatBottomColor = Color(0xFF5B3926)
+private val FloorPlanSofaBodyTopColor = Color(0xFF7A5438)
+private val FloorPlanSofaBodyBottomColor = Color(0xFF2F1C12)
+private val FloorPlanSofaBackTopColor = Color(0xFF946E4D)
+private val FloorPlanSofaBackBottomColor = Color(0xFF482C1B)
+private val FloorPlanSofaArmTopColor = Color(0xFF7D5438)
+private val FloorPlanSofaArmBottomColor = Color(0xFF2A180F)
+private val FloorPlanSofaSeatTopColor = Color(0xFFA77E58)
+private val FloorPlanSofaSeatBottomColor = Color(0xFF563522)
 private val FloorPlanSofaHighlightColor = Color(0xFFFFE3B0).copy(alpha = 0.18f)
 private val FloorPlanSofaInnerShadowColor = Color(0xFF120804).copy(alpha = 0.22f)
 private val FloorPlanSofaSeamLightColor = Color(0xFFF4D7A5).copy(alpha = 0.24f)
@@ -2512,20 +2678,88 @@ private fun floorPlanSofaPalette(baseColor: Color?): FloorPlanSofaPalette {
     val deepShadow = Color(0xFF120804)
 
     return FloorPlanSofaPalette(
-        shadow = FloorPlanSofaShadowColor,
-        border = base.mixWith(warmHighlight, 0.52f).copy(alpha = 0.48f),
-        bodyTop = base.mixWith(Color.White, 0.10f).copy(alpha = 0.98f),
-        bodyBottom = base.mixWith(deepShadow, 0.50f).copy(alpha = 0.99f),
-        backTop = base.mixWith(warmHighlight, 0.20f).copy(alpha = 0.98f),
-        backBottom = base.mixWith(deepShadow, 0.36f).copy(alpha = 0.99f),
-        armTop = base.mixWith(warmHighlight, 0.10f).copy(alpha = 0.98f),
-        armBottom = base.mixWith(deepShadow, 0.54f).copy(alpha = 0.99f),
-        seatTop = base.mixWith(warmHighlight, 0.28f).copy(alpha = 0.98f),
-        seatBottom = base.mixWith(deepShadow, 0.26f).copy(alpha = 0.99f),
-        highlight = warmHighlight.copy(alpha = 0.16f),
-        innerShadow = deepShadow.copy(alpha = 0.24f),
-        seamLight = warmHighlight.copy(alpha = 0.22f),
-        seamDark = deepShadow.copy(alpha = 0.30f),
+        shadow = FloorPlanSofaShadowColor.copy(alpha = 0.34f),
+        border = base.mixWith(deepShadow, 0.52f).copy(alpha = 0.66f),
+        bodyTop = base.mixWith(Color.White, 0.09f).copy(alpha = 0.98f),
+        bodyBottom = base.mixWith(deepShadow, 0.22f).copy(alpha = 0.99f),
+        backTop = base.mixWith(warmHighlight, 0.11f).copy(alpha = 0.98f),
+        backBottom = base.mixWith(deepShadow, 0.28f).copy(alpha = 0.99f),
+        armTop = base.mixWith(warmHighlight, 0.08f).copy(alpha = 0.98f),
+        armBottom = base.mixWith(deepShadow, 0.31f).copy(alpha = 0.99f),
+        seatTop = base.mixWith(warmHighlight, 0.14f).copy(alpha = 0.98f),
+        seatBottom = base.mixWith(deepShadow, 0.17f).copy(alpha = 0.99f),
+        highlight = warmHighlight.copy(alpha = 0.11f),
+        innerShadow = deepShadow.copy(alpha = 0.16f),
+        seamLight = warmHighlight.copy(alpha = 0.16f),
+        seamDark = deepShadow.copy(alpha = 0.28f),
+    )
+}
+
+
+private fun DrawScope.drawFloorPlanFurnitureSoftShadow(
+    topLeft: Offset,
+    targetSize: Size,
+    cornerRadius: CornerRadius,
+    minDim: Float,
+    palette: FloorPlanSofaPalette,
+) {
+    val nearOffset = floorPlanClamp(minDim * 0.045f, 1.2f, 5.5f)
+    val farOffset = floorPlanClamp(minDim * 0.085f, 2.0f, 9.0f)
+    drawRoundRect(
+        color = palette.shadow.copy(alpha = 0.16f),
+        topLeft = Offset(topLeft.x + farOffset, topLeft.y + farOffset),
+        size = targetSize,
+        cornerRadius = cornerRadius,
+    )
+    drawRoundRect(
+        color = palette.shadow.copy(alpha = 0.28f),
+        topLeft = Offset(topLeft.x + nearOffset, topLeft.y + nearOffset),
+        size = targetSize,
+        cornerRadius = cornerRadius,
+    )
+}
+
+private fun DrawScope.drawFloorPlanFurnitureSurfaceDepth(
+    topLeft: Offset,
+    targetSize: Size,
+    cornerRadius: CornerRadius,
+    minDim: Float,
+    palette: FloorPlanSofaPalette,
+) {
+    val inset = floorPlanClamp(minDim * 0.040f, 1.0f, 6.0f)
+    val width = (targetSize.width - inset * 2f).coerceAtLeast(1f)
+    val topHighlightHeight = floorPlanClamp(targetSize.height * 0.22f, 1.2f, max(1.2f, minDim * 0.42f))
+    val bottomShadowHeight = floorPlanClamp(targetSize.height * 0.24f, 1.2f, max(1.2f, minDim * 0.46f))
+    val innerRadius = CornerRadius(
+        x = max(1f, cornerRadius.x - inset),
+        y = max(1f, cornerRadius.y - inset),
+    )
+
+    drawRoundRect(
+        brush = Brush.verticalGradient(
+            colors = listOf(
+                palette.highlight.copy(alpha = 0.16f),
+                palette.highlight.copy(alpha = 0.00f),
+            ),
+            startY = topLeft.y + inset,
+            endY = topLeft.y + inset + topHighlightHeight,
+        ),
+        topLeft = Offset(topLeft.x + inset, topLeft.y + inset),
+        size = Size(width, topHighlightHeight),
+        cornerRadius = innerRadius,
+    )
+    drawRoundRect(
+        brush = Brush.verticalGradient(
+            colors = listOf(
+                palette.innerShadow.copy(alpha = 0.00f),
+                palette.innerShadow.copy(alpha = 0.19f),
+            ),
+            startY = topLeft.y + targetSize.height - inset - bottomShadowHeight,
+            endY = topLeft.y + targetSize.height - inset,
+        ),
+        topLeft = Offset(topLeft.x + inset, topLeft.y + targetSize.height - inset - bottomShadowHeight),
+        size = Size(width, bottomShadowHeight),
+        cornerRadius = innerRadius,
     )
 }
 
@@ -2551,8 +2785,9 @@ private fun DrawScope.drawFloorPlanSofaCore(
     backrestDirection: String?,
     armrestMode: String?,
 ) {
-    val width = targetSize.width.coerceAtLeast(1f)
-    val height = targetSize.height.coerceAtLeast(1f)
+    val safeTargetSize = floorPlanSafeSize(targetSize)
+    val width = safeTargetSize.width
+    val height = safeTargetSize.height
     val resolvedDirection = when (backrestDirection) {
         "top", "right", "bottom", "left" -> backrestDirection
         else -> if (width >= height) "top" else "left"
@@ -2575,7 +2810,7 @@ private fun DrawScope.drawFloorPlanSofaCore(
     }) {
         drawFloorPlanSofaCoreOriented(
             topLeft = topLeft,
-            targetSize = targetSize,
+            targetSize = safeTargetSize,
             stroke = stroke,
             seatCount = seatCount,
             armWeight = armWeight,
@@ -2585,6 +2820,7 @@ private fun DrawScope.drawFloorPlanSofaCore(
         )
     }
 }
+
 
 private fun DrawScope.drawFloorPlanSofaCoreOriented(
     topLeft: Offset,
@@ -2600,33 +2836,27 @@ private fun DrawScope.drawFloorPlanSofaCoreOriented(
     val width = targetSize.width.coerceAtLeast(1f)
     val height = targetSize.height.coerceAtLeast(1f)
     val minDim = min(width, height)
+    if (minDim < 3f) return
+
+    val detailLevel = floorPlanFurnitureDetailLevel(minDim)
     val showFirstArm = armrestMode == "both" || armrestMode == "left-only"
     val showSecondArm = armrestMode == "both" || armrestMode == "right-only"
-    val shadowOffset = minDim * 0.05f
-    val outerRadius = CornerRadius(
-        x = min(16f, width * 0.16f),
-        y = min(16f, height * 0.16f),
-    )
-    val bodyInset = minDim * 0.05f
-    val armThickness = if (isHorizontal) {
-        max(minDim * 0.22f * armWeight, width * 0.12f)
-    } else {
-        max(minDim * 0.22f * armWeight, height * 0.12f)
-    }.coerceAtMost(if (isHorizontal) width * 0.24f else height * 0.24f)
-    val backDepth = (minDim * 0.23f).coerceIn(8f, minDim * 0.32f)
-    val innerGap = max(3f, minDim * 0.045f)
-    val seatGap = max(4f, minDim * 0.065f)
+    val outlineStroke = max(0.85f, min(stroke, minDim * 0.055f))
+    val bodyInset = floorPlanClamp(minDim * 0.040f, 1.5f, 6f)
     val bodyTopLeft = Offset(topLeft.x + bodyInset, topLeft.y + bodyInset)
     val bodySize = Size(
         width = (width - bodyInset * 2f).coerceAtLeast(1f),
         height = (height - bodyInset * 2f).coerceAtLeast(1f),
     )
+    val bodyRadiusValue = floorPlanClamp(minDim * 0.105f, 3.5f, 14f)
+    val bodyRadius = CornerRadius(bodyRadiusValue, bodyRadiusValue)
 
-    drawRoundRect(
-        color = palette.shadow,
-        topLeft = Offset(topLeft.x + shadowOffset, topLeft.y + shadowOffset),
-        size = bodySize,
-        cornerRadius = outerRadius,
+    drawFloorPlanFurnitureSoftShadow(
+        topLeft = bodyTopLeft,
+        targetSize = bodySize,
+        cornerRadius = bodyRadius,
+        minDim = minDim,
+        palette = palette,
     )
     drawRoundRect(
         brush = Brush.verticalGradient(
@@ -2636,39 +2866,34 @@ private fun DrawScope.drawFloorPlanSofaCoreOriented(
         ),
         topLeft = bodyTopLeft,
         size = bodySize,
-        cornerRadius = outerRadius,
+        cornerRadius = bodyRadius,
+    )
+    drawFloorPlanFurnitureSurfaceDepth(
+        topLeft = bodyTopLeft,
+        targetSize = bodySize,
+        cornerRadius = bodyRadius,
+        minDim = minDim,
+        palette = palette,
     )
     drawRoundRect(
         color = palette.border,
         topLeft = bodyTopLeft,
         size = bodySize,
-        cornerRadius = outerRadius,
-        style = Stroke(width = stroke),
-    )
-    drawRoundRect(
-        brush = Brush.verticalGradient(
-            colors = listOf(palette.highlight, Color.Transparent),
-            startY = bodyTopLeft.y,
-            endY = bodyTopLeft.y + bodySize.height * 0.42f,
-        ),
-        topLeft = bodyTopLeft,
-        size = Size(bodySize.width, bodySize.height * 0.46f),
-        cornerRadius = outerRadius,
+        cornerRadius = bodyRadius,
+        style = Stroke(width = outlineStroke),
     )
 
+    if (detailLevel == FloorPlanFurnitureDetailLevel.SILHOUETTE) return
+
     if (isHorizontal) {
-        val backRectTopLeft = bodyTopLeft
-        val backRectSize = Size(bodySize.width, backDepth)
-        val armTop = bodyTopLeft.y + backDepth * 0.62f
-        val armHeight = (bodySize.height - backDepth * 0.62f).coerceAtLeast(1f)
-        val leftArmTopLeft = Offset(bodyTopLeft.x, armTop)
-        val rightArmTopLeft = Offset(bodyTopLeft.x + bodySize.width - armThickness, armTop)
-        val armSize = Size(armThickness, armHeight)
-        val seatTop = bodyTopLeft.y + backDepth + innerGap
-        val seatHeight = (bodyTopLeft.y + bodySize.height - seatTop - innerGap).coerceAtLeast(1f)
-        val seatLeft = bodyTopLeft.x + if (showFirstArm) armThickness + innerGap else innerGap
-        val seatRightInset = if (showSecondArm) armThickness + innerGap else innerGap
-        val seatWidth = (bodySize.width - (seatLeft - bodyTopLeft.x) - seatRightInset).coerceAtLeast(1f)
+        val backDepth = floorPlanClamp(bodySize.height * 0.245f, 2f, bodySize.height * 0.32f)
+        val innerGap = floorPlanClamp(minDim * 0.035f, 1.2f, 5f)
+        val armThickness = floorPlanClamp(bodySize.width * 0.135f * armWeight, 2f, bodySize.width * 0.21f)
+        val backInsetX = bodySize.width * 0.055f
+        val backRectTopLeft = Offset(bodyTopLeft.x + backInsetX, bodyTopLeft.y + bodySize.height * 0.045f)
+        val backRectSize = Size((bodySize.width - backInsetX * 2f).coerceAtLeast(1f), backDepth)
+        val backRadiusValue = floorPlanClamp(minDim * 0.060f, 2.5f, 8.5f)
+        val backRadius = CornerRadius(backRadiusValue, backRadiusValue)
 
         drawRoundRect(
             brush = Brush.verticalGradient(
@@ -2678,14 +2903,24 @@ private fun DrawScope.drawFloorPlanSofaCoreOriented(
             ),
             topLeft = backRectTopLeft,
             size = backRectSize,
-            cornerRadius = outerRadius,
+            cornerRadius = backRadius,
         )
-        drawLine(
+        drawRoundRect(
             color = palette.seamDark,
-            start = Offset(bodyTopLeft.x + innerGap, bodyTopLeft.y + backDepth),
-            end = Offset(bodyTopLeft.x + bodySize.width - innerGap, bodyTopLeft.y + backDepth),
-            strokeWidth = max(0.7f, stroke * 0.8f),
+            topLeft = backRectTopLeft,
+            size = backRectSize,
+            cornerRadius = backRadius,
+            style = Stroke(width = max(0.6f, outlineStroke * 0.55f)),
         )
+
+        val armTop = bodyTopLeft.y + backDepth * 0.62f
+        val armBottom = bodyTopLeft.y + bodySize.height - bodySize.height * 0.075f
+        val armHeight = (armBottom - armTop).coerceAtLeast(1f)
+        val leftArmTopLeft = Offset(bodyTopLeft.x + bodySize.width * 0.035f, armTop)
+        val rightArmTopLeft = Offset(bodyTopLeft.x + bodySize.width - bodySize.width * 0.035f - armThickness, armTop)
+        val armSize = Size(armThickness, armHeight)
+        val armRadiusValue = floorPlanClamp(minDim * 0.070f, 2.5f, 9f)
+        val armRadius = CornerRadius(armRadiusValue, armRadiusValue)
 
         listOfNotNull(
             leftArmTopLeft.takeIf { showFirstArm },
@@ -2699,76 +2934,44 @@ private fun DrawScope.drawFloorPlanSofaCoreOriented(
                 ),
                 topLeft = armTopLeft,
                 size = armSize,
-                cornerRadius = CornerRadius(armThickness * 0.55f, armThickness * 0.55f),
-            )
-            drawRoundRect(
-                color = palette.highlight,
-                topLeft = Offset(armTopLeft.x + armSize.width * 0.12f, armTopLeft.y + armSize.height * 0.10f),
-                size = Size(armSize.width * 0.76f, armSize.height * 0.22f),
-                cornerRadius = CornerRadius(armThickness, armThickness),
-            )
-        }
-
-        val effectiveSeatCount = seatCount.coerceIn(1, 4)
-        val cushionWidth = ((seatWidth - seatGap * (effectiveSeatCount - 1)) / effectiveSeatCount).coerceAtLeast(1f)
-        repeat(effectiveSeatCount) { index ->
-            val left = seatLeft + index * (cushionWidth + seatGap)
-            val cushionTopLeft = Offset(left, seatTop)
-            val cushionSize = Size(cushionWidth, seatHeight)
-            val cushionRadius = CornerRadius(
-                x = min(12f, cushionWidth * 0.18f),
-                y = min(12f, seatHeight * 0.24f),
-            )
-            drawRoundRect(
-                brush = Brush.verticalGradient(
-                    colors = listOf(palette.seatTop, palette.seatBottom),
-                    startY = cushionTopLeft.y,
-                    endY = cushionTopLeft.y + cushionSize.height,
-                ),
-                topLeft = cushionTopLeft,
-                size = cushionSize,
-                cornerRadius = cushionRadius,
+                cornerRadius = armRadius,
             )
             drawRoundRect(
                 color = palette.seamDark,
-                topLeft = cushionTopLeft,
-                size = cushionSize,
-                cornerRadius = cushionRadius,
-                style = Stroke(width = max(0.65f, stroke * 0.7f)),
-            )
-            drawRoundRect(
-                color = palette.innerShadow,
-                topLeft = Offset(cushionTopLeft.x, cushionTopLeft.y + cushionSize.height * 0.72f),
-                size = Size(cushionSize.width, cushionSize.height * 0.20f),
-                cornerRadius = cushionRadius,
-            )
-            drawLine(
-                color = palette.seamLight,
-                start = Offset(cushionTopLeft.x + cushionSize.width * 0.14f, cushionTopLeft.y + cushionSize.height * 0.18f),
-                end = Offset(cushionTopLeft.x + cushionSize.width * 0.86f, cushionTopLeft.y + cushionSize.height * 0.18f),
-                strokeWidth = max(0.65f, stroke * 0.65f),
+                topLeft = armTopLeft,
+                size = armSize,
+                cornerRadius = armRadius,
+                style = Stroke(width = max(0.55f, outlineStroke * 0.50f)),
             )
         }
 
-        drawLine(
-            color = palette.innerShadow,
-            start = Offset(seatLeft, seatTop + seatHeight * 0.06f),
-            end = Offset(seatLeft + seatWidth, seatTop + seatHeight * 0.06f),
-            strokeWidth = max(0.65f, stroke * 0.75f),
+        val visibleGap = floorPlanClamp(minDim * 0.030f, 1.2f, 5f)
+        val seatTop = backRectTopLeft.y + backRectSize.height + visibleGap
+        val seatBottom = bodyTopLeft.y + bodySize.height - bodySize.height * 0.095f
+        var seatLeft = bodyTopLeft.x + bodySize.width * 0.080f
+        var seatRight = bodyTopLeft.x + bodySize.width * 0.920f
+        if (showFirstArm) seatLeft = leftArmTopLeft.x + armSize.width + innerGap
+        if (showSecondArm) seatRight = rightArmTopLeft.x - innerGap
+        val seatWidth = (seatRight - seatLeft).coerceAtLeast(1f)
+        val seatHeight = (seatBottom - seatTop).coerceAtLeast(1f)
+        drawFloorPlanSofaCushions(
+            topLeft = Offset(seatLeft, seatTop),
+            targetSize = Size(seatWidth, seatHeight),
+            seatCount = seatCount,
+            horizontal = true,
+            palette = palette,
+            stroke = outlineStroke,
+            detailLevel = detailLevel,
         )
     } else {
-        val backRectTopLeft = bodyTopLeft
-        val backRectSize = Size(backDepth, bodySize.height)
-        val armLeft = bodyTopLeft.x + backDepth * 0.62f
-        val armWidth = (bodySize.width - backDepth * 0.62f).coerceAtLeast(1f)
-        val topArmTopLeft = Offset(armLeft, bodyTopLeft.y)
-        val bottomArmTopLeft = Offset(armLeft, bodyTopLeft.y + bodySize.height - armThickness)
-        val armSize = Size(armWidth, armThickness)
-        val seatLeft = bodyTopLeft.x + backDepth + innerGap
-        val seatWidth = (bodyTopLeft.x + bodySize.width - seatLeft - innerGap).coerceAtLeast(1f)
-        val seatTop = bodyTopLeft.y + if (showFirstArm) armThickness + innerGap else innerGap
-        val seatBottomInset = if (showSecondArm) armThickness + innerGap else innerGap
-        val seatHeight = (bodySize.height - (seatTop - bodyTopLeft.y) - seatBottomInset).coerceAtLeast(1f)
+        val backDepth = floorPlanClamp(bodySize.width * 0.245f, 2f, bodySize.width * 0.32f)
+        val innerGap = floorPlanClamp(minDim * 0.035f, 1.2f, 5f)
+        val armThickness = floorPlanClamp(bodySize.height * 0.135f * armWeight, 2f, bodySize.height * 0.21f)
+        val backInsetY = bodySize.height * 0.055f
+        val backRectTopLeft = Offset(bodyTopLeft.x + bodySize.width * 0.045f, bodyTopLeft.y + backInsetY)
+        val backRectSize = Size(backDepth, (bodySize.height - backInsetY * 2f).coerceAtLeast(1f))
+        val backRadiusValue = floorPlanClamp(minDim * 0.060f, 2.5f, 8.5f)
+        val backRadius = CornerRadius(backRadiusValue, backRadiusValue)
 
         drawRoundRect(
             brush = Brush.horizontalGradient(
@@ -2778,14 +2981,24 @@ private fun DrawScope.drawFloorPlanSofaCoreOriented(
             ),
             topLeft = backRectTopLeft,
             size = backRectSize,
-            cornerRadius = outerRadius,
+            cornerRadius = backRadius,
         )
-        drawLine(
+        drawRoundRect(
             color = palette.seamDark,
-            start = Offset(bodyTopLeft.x + backDepth, bodyTopLeft.y + innerGap),
-            end = Offset(bodyTopLeft.x + backDepth, bodyTopLeft.y + bodySize.height - innerGap),
-            strokeWidth = max(0.7f, stroke * 0.8f),
+            topLeft = backRectTopLeft,
+            size = backRectSize,
+            cornerRadius = backRadius,
+            style = Stroke(width = max(0.6f, outlineStroke * 0.55f)),
         )
+
+        val armLeft = bodyTopLeft.x + backDepth * 0.62f
+        val armRight = bodyTopLeft.x + bodySize.width - bodySize.width * 0.075f
+        val armWidth = (armRight - armLeft).coerceAtLeast(1f)
+        val topArmTopLeft = Offset(armLeft, bodyTopLeft.y + bodySize.height * 0.035f)
+        val bottomArmTopLeft = Offset(armLeft, bodyTopLeft.y + bodySize.height - bodySize.height * 0.035f - armThickness)
+        val armSize = Size(armWidth, armThickness)
+        val armRadiusValue = floorPlanClamp(minDim * 0.070f, 2.5f, 9f)
+        val armRadius = CornerRadius(armRadiusValue, armRadiusValue)
 
         listOfNotNull(
             topArmTopLeft.takeIf { showFirstArm },
@@ -2799,55 +3012,142 @@ private fun DrawScope.drawFloorPlanSofaCoreOriented(
                 ),
                 topLeft = armTopLeft,
                 size = armSize,
-                cornerRadius = CornerRadius(armThickness * 0.55f, armThickness * 0.55f),
-            )
-            drawRoundRect(
-                color = palette.highlight,
-                topLeft = Offset(armTopLeft.x + armSize.width * 0.10f, armTopLeft.y + armSize.height * 0.12f),
-                size = Size(armSize.width * 0.22f, armSize.height * 0.76f),
-                cornerRadius = CornerRadius(armThickness, armThickness),
-            )
-        }
-
-        val effectiveSeatCount = seatCount.coerceIn(1, 4)
-        val cushionHeight = ((seatHeight - seatGap * (effectiveSeatCount - 1)) / effectiveSeatCount).coerceAtLeast(1f)
-        repeat(effectiveSeatCount) { index ->
-            val top = seatTop + index * (cushionHeight + seatGap)
-            val cushionTopLeft = Offset(seatLeft, top)
-            val cushionSize = Size(seatWidth, cushionHeight)
-            val cushionRadius = CornerRadius(
-                x = min(12f, seatWidth * 0.18f),
-                y = min(12f, cushionHeight * 0.24f),
-            )
-            drawRoundRect(
-                brush = Brush.horizontalGradient(
-                    colors = listOf(palette.seatTop, palette.seatBottom),
-                    startX = cushionTopLeft.x,
-                    endX = cushionTopLeft.x + cushionSize.width,
-                ),
-                topLeft = cushionTopLeft,
-                size = cushionSize,
-                cornerRadius = cushionRadius,
+                cornerRadius = armRadius,
             )
             drawRoundRect(
                 color = palette.seamDark,
-                topLeft = cushionTopLeft,
-                size = cushionSize,
-                cornerRadius = cushionRadius,
-                style = Stroke(width = max(0.65f, stroke * 0.7f)),
+                topLeft = armTopLeft,
+                size = armSize,
+                cornerRadius = armRadius,
+                style = Stroke(width = max(0.55f, outlineStroke * 0.50f)),
             )
-            drawRoundRect(
-                color = palette.innerShadow,
-                topLeft = Offset(cushionTopLeft.x + cushionSize.width * 0.72f, cushionTopLeft.y),
-                size = Size(cushionSize.width * 0.20f, cushionSize.height),
-                cornerRadius = cushionRadius,
+        }
+
+        val visibleGap = floorPlanClamp(minDim * 0.030f, 1.2f, 5f)
+        val seatLeft = backRectTopLeft.x + backRectSize.width + visibleGap
+        val seatRight = bodyTopLeft.x + bodySize.width - bodySize.width * 0.095f
+        var seatTop = bodyTopLeft.y + bodySize.height * 0.080f
+        var seatBottom = bodyTopLeft.y + bodySize.height * 0.920f
+        if (showFirstArm) seatTop = topArmTopLeft.y + armSize.height + innerGap
+        if (showSecondArm) seatBottom = bottomArmTopLeft.y - innerGap
+        val seatWidth = (seatRight - seatLeft).coerceAtLeast(1f)
+        val seatHeight = (seatBottom - seatTop).coerceAtLeast(1f)
+        drawFloorPlanSofaCushions(
+            topLeft = Offset(seatLeft, seatTop),
+            targetSize = Size(seatWidth, seatHeight),
+            seatCount = seatCount,
+            horizontal = false,
+            palette = palette,
+            stroke = outlineStroke,
+            detailLevel = detailLevel,
+        )
+    }
+}
+
+
+
+private fun DrawScope.drawFloorPlanSofaCushions(
+    topLeft: Offset,
+    targetSize: Size,
+    seatCount: Int,
+    horizontal: Boolean,
+    palette: FloorPlanSofaPalette,
+    stroke: Float,
+    detailLevel: FloorPlanFurnitureDetailLevel,
+) {
+    val width = targetSize.width.coerceAtLeast(1f)
+    val height = targetSize.height.coerceAtLeast(1f)
+    val minDim = min(width, height)
+    if (minDim < 2f) return
+
+    val effectiveSeatCount = seatCount.coerceIn(1, 4)
+    val rawGap = floorPlanClamp(minDim * 0.055f, 1.0f, 5.0f)
+    val availableMain = if (horizontal) width else height
+    val gap = min(rawGap, max(0f, availableMain / (effectiveSeatCount * 5f)))
+    val cushionMain = ((availableMain - gap * (effectiveSeatCount - 1)) / effectiveSeatCount).coerceAtLeast(1f)
+
+    repeat(effectiveSeatCount) { index ->
+        val cushionTopLeft = if (horizontal) {
+            Offset(topLeft.x + index * (cushionMain + gap), topLeft.y)
+        } else {
+            Offset(topLeft.x, topLeft.y + index * (cushionMain + gap))
+        }
+        val cushionSize = if (horizontal) {
+            Size(cushionMain, height)
+        } else {
+            Size(width, cushionMain)
+        }
+        val radiusValue = floorPlanClamp(min(cushionSize.width, cushionSize.height) * 0.10f, 2f, 8f)
+        val cushionRadius = CornerRadius(radiusValue, radiusValue)
+        val cushionBrush = if (horizontal) {
+            Brush.verticalGradient(
+                colors = listOf(palette.seatTop, palette.seatBottom),
+                startY = cushionTopLeft.y,
+                endY = cushionTopLeft.y + cushionSize.height,
             )
-            drawLine(
-                color = palette.seamLight,
-                start = Offset(cushionTopLeft.x + cushionSize.width * 0.18f, cushionTopLeft.y + cushionSize.height * 0.14f),
-                end = Offset(cushionTopLeft.x + cushionSize.width * 0.18f, cushionTopLeft.y + cushionSize.height * 0.86f),
-                strokeWidth = max(0.65f, stroke * 0.65f),
+        } else {
+            Brush.horizontalGradient(
+                colors = listOf(palette.seatTop, palette.seatBottom),
+                startX = cushionTopLeft.x,
+                endX = cushionTopLeft.x + cushionSize.width,
             )
+        }
+        drawRoundRect(
+            brush = cushionBrush,
+            topLeft = cushionTopLeft,
+            size = cushionSize,
+            cornerRadius = cushionRadius,
+        )
+        val cushionHighlightInset = floorPlanClamp(min(cushionSize.width, cushionSize.height) * 0.070f, 0.8f, 4f)
+        val cushionHighlightSize = Size(
+            width = (cushionSize.width - cushionHighlightInset * 2f).coerceAtLeast(1f),
+            height = (cushionSize.height * 0.30f).coerceAtLeast(1f),
+        )
+        drawRoundRect(
+            color = palette.highlight.copy(alpha = 0.09f),
+            topLeft = Offset(cushionTopLeft.x + cushionHighlightInset, cushionTopLeft.y + cushionHighlightInset),
+            size = cushionHighlightSize,
+            cornerRadius = CornerRadius(
+                x = max(1f, cushionRadius.x - cushionHighlightInset),
+                y = max(1f, cushionRadius.y - cushionHighlightInset),
+            ),
+        )
+        drawRoundRect(
+            color = palette.seamDark,
+            topLeft = cushionTopLeft,
+            size = cushionSize,
+            cornerRadius = cushionRadius,
+            style = Stroke(width = max(0.55f, stroke * 0.54f)),
+        )
+
+        if (detailLevel == FloorPlanFurnitureDetailLevel.FULL) {
+            if (horizontal) {
+                drawRoundRect(
+                    color = palette.innerShadow,
+                    topLeft = Offset(cushionTopLeft.x, cushionTopLeft.y + cushionSize.height * 0.72f),
+                    size = Size(cushionSize.width, cushionSize.height * 0.18f),
+                    cornerRadius = cushionRadius,
+                )
+                drawLine(
+                    color = palette.seamLight,
+                    start = Offset(cushionTopLeft.x + cushionSize.width * 0.18f, cushionTopLeft.y + cushionSize.height * 0.18f),
+                    end = Offset(cushionTopLeft.x + cushionSize.width * 0.82f, cushionTopLeft.y + cushionSize.height * 0.18f),
+                    strokeWidth = max(0.55f, stroke * 0.50f),
+                )
+            } else {
+                drawRoundRect(
+                    color = palette.innerShadow,
+                    topLeft = Offset(cushionTopLeft.x + cushionSize.width * 0.72f, cushionTopLeft.y),
+                    size = Size(cushionSize.width * 0.18f, cushionSize.height),
+                    cornerRadius = cushionRadius,
+                )
+                drawLine(
+                    color = palette.seamLight,
+                    start = Offset(cushionTopLeft.x + cushionSize.width * 0.18f, cushionTopLeft.y + cushionSize.height * 0.18f),
+                    end = Offset(cushionTopLeft.x + cushionSize.width * 0.18f, cushionTopLeft.y + cushionSize.height * 0.82f),
+                    strokeWidth = max(0.55f, stroke * 0.50f),
+                )
+            }
         }
     }
 }
@@ -2860,17 +3160,19 @@ private fun DrawScope.drawFloorPlanSofaSurface(
     armrestMode: String?,
     seatCount: Int?,
 ) {
+    val safeTargetSize = floorPlanSafeSize(targetSize)
     drawFloorPlanSofaCore(
         topLeft = Offset.Zero,
-        targetSize = targetSize,
+        targetSize = safeTargetSize,
         stroke = stroke,
-        seatCount = seatCount?.coerceIn(1, 4) ?: estimateFloorPlanSofaSeatCount(targetSize),
+        seatCount = seatCount?.coerceIn(1, 4) ?: estimateFloorPlanSofaSeatCount(safeTargetSize),
         armWeight = 1f,
         baseColor = baseColor,
         backrestDirection = backrestDirection,
         armrestMode = armrestMode,
     )
 }
+
 
 private fun DrawScope.drawFloorPlanArmchairSurface(
     topLeft: Offset,
@@ -2883,7 +3185,7 @@ private fun DrawScope.drawFloorPlanArmchairSurface(
 ) {
     drawFloorPlanSofaCore(
         topLeft = topLeft,
-        targetSize = targetSize,
+        targetSize = floorPlanSafeSize(targetSize),
         stroke = stroke,
         seatCount = 1,
         armWeight = 1.18f,
@@ -2892,6 +3194,7 @@ private fun DrawScope.drawFloorPlanArmchairSurface(
         armrestMode = armrestMode,
     )
 }
+
 
 private fun DrawScope.drawFloorPlanChairSurface(
     topLeft: Offset,
