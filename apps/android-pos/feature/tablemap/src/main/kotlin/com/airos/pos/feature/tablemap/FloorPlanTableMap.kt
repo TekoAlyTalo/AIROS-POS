@@ -1064,9 +1064,9 @@ private fun FloorPlanLabeledObjectSurface(
     Box(modifier = modifier.requiredSize(widthDp, heightDp)) {
         if (usePremiumSofaAsset) {
             Image(
-                painter = painterResource(id = R.drawable.sofa2_premium_topdown_asset_v1),
+                painter = painterResource(id = R.drawable.sofa2_premium_topdown_asset_v2),
                 contentDescription = null,
-                contentScale = ContentScale.Fit,
+                contentScale = ContentScale.FillBounds,
                 modifier = Modifier.fillMaxSize(),
             )
         } else {
