@@ -6,7 +6,6 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -45,6 +44,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
@@ -53,12 +54,13 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.imageResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.airos.pos.core.model.FloorMapArea
@@ -73,6 +75,13 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
+// Surface theme tokens are still available for furniture/material work, but the
+// viewport floor/backdrop is intentionally restored to the older stable renderer.
+// The bad recent material passes painted the whole map beige/brown and made the
+// floor dominate the view. Keep this outer canvas calm and dark.
+private fun activeFloorPlanSurfaceTheme(): FloorPlanSurfaceTheme =
+    FloorPlanSurfaceThemeHolder.current
+
 private val FloorPlanViewportShape = RoundedCornerShape(26.dp)
 private val FloorPlanBackgroundBrush = Brush.linearGradient(
     colors = listOf(
@@ -81,6 +90,8 @@ private val FloorPlanBackgroundBrush = Brush.linearGradient(
         TableMapVisualTokens.PanelColor,
     ),
 )
+@Suppress("UNUSED_PARAMETER")
+private fun floorPlanBackgroundBrush(theme: FloorPlanSurfaceTheme): Brush = FloorPlanBackgroundBrush
 private val FloorPlanBorderColor = TableMapVisualTokens.BorderColor
 private val FloorPlanMapLineColor = Color(0x14D7E6F5)
 private val FloorPlanZoneLabelColor = TableMapVisualTokens.TextMuted
@@ -268,10 +279,11 @@ private fun SimpleFloorPlanTableMap(
     onRotate90: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
+    val surfaceTheme = activeFloorPlanSurfaceTheme()
     BoxWithConstraints(
         modifier = modifier
             .clip(FloorPlanViewportShape)
-            .background(FloorPlanBackgroundBrush)
+            .background(floorPlanBackgroundBrush(surfaceTheme))
             .border(1.dp, FloorPlanBorderColor, FloorPlanViewportShape),
     ) {
         val density = LocalDensity.current
@@ -552,12 +564,13 @@ private fun FloorPlanBackdrop(
     Canvas(modifier = Modifier.fillMaxSize()) {
         drawRect(brush = FloorPlanBackgroundBrush)
 
+        val safeZoom = zoom.takeIf { it.isFinite() && it > 0f } ?: 1f
         val gridStepWorldPx = 120f
         val strokeWidth = 1.dp.toPx()
 
         var worldX = 0f
         while (worldX <= contentWidthPx) {
-            val screenX = panOffset.x + worldX * zoom
+            val screenX = panOffset.x + worldX * safeZoom
             if (screenX >= -strokeWidth && screenX <= size.width + strokeWidth) {
                 drawLine(
                     color = FloorPlanMapLineColor,
@@ -571,7 +584,7 @@ private fun FloorPlanBackdrop(
 
         var worldY = 0f
         while (worldY <= contentHeightPx) {
-            val screenY = panOffset.y + worldY * zoom
+            val screenY = panOffset.y + worldY * safeZoom
             if (screenY >= -strokeWidth && screenY <= size.height + strokeWidth) {
                 drawLine(
                     color = FloorPlanMapLineColor,
@@ -584,6 +597,163 @@ private fun FloorPlanBackdrop(
         }
     }
 }
+
+private fun DrawScope.drawFloorPlanOuterBackgroundGrid(
+    gridColor: Color,
+) {
+    val gridStepPx = 64.dp.toPx()
+    val stroke = max(0.45f, 0.55.dp.toPx())
+
+    var x = 0f
+    while (x <= size.width) {
+        drawLine(
+            color = gridColor,
+            start = Offset(x, 0f),
+            end = Offset(x, size.height),
+            strokeWidth = stroke,
+        )
+        x += gridStepPx
+    }
+
+    var y = 0f
+    while (y <= size.height) {
+        drawLine(
+            color = gridColor,
+            start = Offset(0f, y),
+            end = Offset(size.width, y),
+            strokeWidth = stroke,
+        )
+        y += gridStepPx
+    }
+}
+
+private fun DrawScope.drawFloorPlanFloorSurface(
+    material: FloorPlanFloorSurfaceTokens,
+    panOffset: Offset,
+    zoom: Float,
+    contentWidthPx: Float,
+    contentHeightPx: Float,
+) {
+    val safeZoom = zoom.takeIf { it.isFinite() && it > 0f } ?: 1f
+    val floorWidth = (contentWidthPx * safeZoom).coerceAtLeast(1f)
+    val floorHeight = (contentHeightPx * safeZoom).coerceAtLeast(1f)
+    val floorTopLeft = panOffset
+    val floorSize = Size(floorWidth, floorHeight)
+
+    // Floor base: intentionally restrained. This is the large map floor plane,
+    // so it must not dominate the whole TableMap view. Material selection will
+    // later come from editor/theme data; for now the preset stays dark and quiet.
+    drawRect(
+        brush = Brush.linearGradient(
+            colors = listOf(material.baseTop, material.baseMiddle, material.baseBottom),
+            start = floorTopLeft,
+            end = Offset(floorTopLeft.x + floorWidth * 0.35f, floorTopLeft.y + floorHeight),
+        ),
+        topLeft = floorTopLeft,
+        size = floorSize,
+    )
+
+    val visibleWorldLeft = ((0f - panOffset.x) / safeZoom).coerceIn(0f, contentWidthPx)
+    val visibleWorldRight = ((size.width - panOffset.x) / safeZoom).coerceIn(0f, contentWidthPx)
+    val visibleWorldTop = ((0f - panOffset.y) / safeZoom).coerceIn(0f, contentHeightPx)
+    val visibleWorldBottom = ((size.height - panOffset.y) / safeZoom).coerceIn(0f, contentHeightPx)
+
+    val tileWorldPx = 96f
+    val seamStroke = max(0.35f, 0.45.dp.toPx())
+    val highlightStroke = max(0.25f, 0.32.dp.toPx())
+    val firstColumn = max(0, (visibleWorldLeft / tileWorldPx).toInt() - 1)
+    val lastColumn = min((contentWidthPx / tileWorldPx).toInt() + 1, (visibleWorldRight / tileWorldPx).toInt() + 2)
+    val firstRow = max(0, (visibleWorldTop / tileWorldPx).toInt() - 1)
+    val lastRow = min((contentHeightPx / tileWorldPx).toInt() + 1, (visibleWorldBottom / tileWorldPx).toInt() + 2)
+
+    // Subtle tile / laminate rhythm. The lines are deliberately low-contrast so
+    // the furniture, table status and operational overlays remain the stars.
+    for (column in firstColumn..lastColumn) {
+        val screenX = panOffset.x + column * tileWorldPx * safeZoom
+        if (screenX < floorTopLeft.x || screenX > floorTopLeft.x + floorWidth) continue
+        drawLine(
+            color = material.plankSeam,
+            start = Offset(screenX, floorTopLeft.y),
+            end = Offset(screenX, floorTopLeft.y + floorHeight),
+            strokeWidth = seamStroke,
+        )
+        drawLine(
+            color = material.plankHighlight,
+            start = Offset(screenX + seamStroke, floorTopLeft.y),
+            end = Offset(screenX + seamStroke, floorTopLeft.y + floorHeight),
+            strokeWidth = highlightStroke,
+        )
+    }
+
+    for (row in firstRow..lastRow) {
+        val screenY = panOffset.y + row * tileWorldPx * safeZoom
+        if (screenY < floorTopLeft.y || screenY > floorTopLeft.y + floorHeight) continue
+        drawLine(
+            color = material.plankSeam,
+            start = Offset(floorTopLeft.x, screenY),
+            end = Offset(floorTopLeft.x + floorWidth, screenY),
+            strokeWidth = seamStroke,
+        )
+        drawLine(
+            color = material.plankHighlight,
+            start = Offset(floorTopLeft.x, screenY + seamStroke),
+            end = Offset(floorTopLeft.x + floorWidth, screenY + seamStroke),
+            strokeWidth = highlightStroke,
+        )
+    }
+
+    val tileTintAlpha = 0.018f
+    for (row in firstRow..lastRow) {
+        for (column in firstColumn..lastColumn) {
+            if ((row + column) % 4 != 0) continue
+            val tileLeft = panOffset.x + column * tileWorldPx * safeZoom
+            val tileTop = panOffset.y + row * tileWorldPx * safeZoom
+            val tileSize = tileWorldPx * safeZoom
+            val clippedLeft = tileLeft.coerceAtLeast(floorTopLeft.x)
+            val clippedTop = tileTop.coerceAtLeast(floorTopLeft.y)
+            val clippedRight = (tileLeft + tileSize).coerceAtMost(floorTopLeft.x + floorWidth)
+            val clippedBottom = (tileTop + tileSize).coerceAtMost(floorTopLeft.y + floorHeight)
+            if (clippedRight <= clippedLeft || clippedBottom <= clippedTop) continue
+            drawRect(
+                color = material.plankHighlight.copy(alpha = tileTintAlpha),
+                topLeft = Offset(clippedLeft, clippedTop),
+                size = Size(clippedRight - clippedLeft, clippedBottom - clippedTop),
+            )
+        }
+    }
+
+    val grainStepWorldPx = 148f
+    val firstGrainRow = max(0, (visibleWorldTop / grainStepWorldPx).toInt() - 1)
+    val lastGrainRow = min((contentHeightPx / grainStepWorldPx).toInt() + 1, (visibleWorldBottom / grainStepWorldPx).toInt() + 2)
+    for (row in firstGrainRow..lastGrainRow) {
+        val worldY = row * grainStepWorldPx + if (row % 2 == 0) 29f else 67f
+        val screenY = panOffset.y + worldY * safeZoom
+        val wobble = if (row % 2 == 0) 3f * safeZoom else -2f * safeZoom
+        drawLine(
+            color = material.grain,
+            start = Offset(floorTopLeft.x + 28f * safeZoom, screenY),
+            end = Offset(floorTopLeft.x + floorWidth - 28f * safeZoom, screenY + wobble),
+            strokeWidth = max(0.25f, 0.34.dp.toPx()),
+        )
+    }
+
+    drawRect(
+        brush = Brush.radialGradient(
+            colors = listOf(Color.Transparent, material.vignette),
+            center = Offset(floorTopLeft.x + floorWidth * 0.50f, floorTopLeft.y + floorHeight * 0.50f),
+            radius = max(floorWidth, floorHeight) * 0.78f,
+        ),
+        topLeft = floorTopLeft,
+        size = floorSize,
+    )
+    drawRect(
+        color = material.plankSeam.copy(alpha = 0.32f),
+        topLeft = floorTopLeft,
+        size = floorSize,
+        style = Stroke(width = max(1f, 1.dp.toPx())),
+    )
+}
+
 
 @Composable
 private fun FloorPlanZoneLabel(
@@ -641,9 +811,10 @@ private fun DrawScope.drawFloorPlanAreaShape(
     area: FloorMapArea,
     targetSize: Size,
 ) {
-    val fillTop = Color(0xFFCD9D4A).copy(alpha = 0.26f)
-    val fillBottom = areaSurfaceColor(area).copy(alpha = 0.24f)
-    val borderColor = areaSurfaceBorderColor(area).copy(alpha = 0.46f)
+    val floor = activeFloorPlanSurfaceTheme().floor
+    val fillTop = floor.baseMiddle.copy(alpha = 0.06f)
+    val fillBottom = areaSurfaceColor(area).copy(alpha = 0.08f)
+    val borderColor = areaSurfaceBorderColor(area).copy(alpha = 0.24f)
     val fillBrush = Brush.verticalGradient(
         colors = listOf(fillTop, fillBottom),
         startY = 0f,
@@ -737,9 +908,10 @@ private fun FloorPlanAreaSurface(
             transformOrigin = TransformOrigin(0.5f, 0.5f)
         }
         .requiredSize(widthDp, heightDp)
-    val fillTop = Color(0xFFCD9D4A).copy(alpha = 0.26f)
-    val fillBottom = areaSurfaceColor(area).copy(alpha = 0.24f)
-    val borderColor = areaSurfaceBorderColor(area).copy(alpha = 0.46f)
+    val floor = activeFloorPlanSurfaceTheme().floor
+    val fillTop = floor.baseMiddle.copy(alpha = 0.06f)
+    val fillBottom = areaSurfaceColor(area).copy(alpha = 0.08f)
+    val borderColor = areaSurfaceBorderColor(area).copy(alpha = 0.24f)
     Canvas(modifier = modifier) {
         val fillBrush = Brush.verticalGradient(
             colors = listOf(fillTop, fillBottom),
@@ -939,44 +1111,167 @@ private fun DrawScope.drawFloorPlanWorldObjectShape(
         }
 
         "bar-counter" -> {
-            val radius = CornerRadius(4f, 4f)
-            val fill = Brush.verticalGradient(
-                colors = listOf(
-                    Color(0xFF51290F).copy(alpha = 0.96f),
-                    Color(0xFF2B1508).copy(alpha = 0.96f),
-                ),
-            )
-
-            drawRoundRect(
-                brush = fill,
+            drawFloorPlanBarCounterSurface(
                 topLeft = Offset.Zero,
-                size = targetSize,
-                cornerRadius = radius,
-            )
-            drawRoundRect(
-                color = Color(0xFFB8782A).copy(alpha = 0.78f),
-                topLeft = Offset.Zero,
-                size = targetSize,
-                cornerRadius = radius,
-                style = Stroke(width = stroke),
-            )
-
-            val railInset = max(3f, min(targetSize.width, targetSize.height) * 0.10f)
-            drawLine(
-                color = Color(0xFFE6C47A).copy(alpha = 0.28f),
-                start = Offset(railInset, railInset),
-                end = Offset(targetSize.width - railInset, railInset),
-                strokeWidth = stroke,
-            )
-            drawLine(
-                color = Color(0xFF1B0D05).copy(alpha = 0.44f),
-                start = Offset(railInset, targetSize.height - railInset),
-                end = Offset(targetSize.width - railInset, targetSize.height - railInset),
-                strokeWidth = stroke,
+                targetSize = targetSize,
+                stroke = stroke,
             )
         }
     }
 }
+
+private fun DrawScope.drawFloorPlanBarCounterSurface(
+    topLeft: Offset,
+    targetSize: Size,
+    stroke: Float,
+) {
+    val material = activeFloorPlanSurfaceTheme().barCounter
+    val width = targetSize.width.coerceAtLeast(1f)
+    val height = targetSize.height.coerceAtLeast(1f)
+    val minDim = min(width, height)
+    val radiusValue = floorPlanClamp(minDim * 0.045f, 3f, 10f)
+    val radius = CornerRadius(radiusValue, radiusValue)
+    val horizontalGrain = width >= height
+
+    val frontBandFraction = 0.34f
+    val frontBandHeight = if (horizontalGrain) height * frontBandFraction else 0f
+    val frontBandWidth = if (horizontalGrain) 0f else width * frontBandFraction
+    val topBandSize = if (horizontalGrain) {
+        Size(width, (height - frontBandHeight).coerceAtLeast(1f))
+    } else {
+        Size((width - frontBandWidth).coerceAtLeast(1f), height)
+    }
+
+    drawRoundRect(
+        brush = Brush.linearGradient(
+            colors = listOf(material.top, material.middle),
+            start = topLeft,
+            end = if (horizontalGrain) {
+                Offset(topLeft.x + width, topLeft.y + topBandSize.height)
+            } else {
+                Offset(topLeft.x + topBandSize.width, topLeft.y + height)
+            },
+        ),
+        topLeft = topLeft,
+        size = topBandSize,
+        cornerRadius = radius,
+    )
+
+    val frontBandTopLeft = if (horizontalGrain) {
+        Offset(topLeft.x, topLeft.y + topBandSize.height)
+    } else {
+        Offset(topLeft.x + topBandSize.width, topLeft.y)
+    }
+    val frontBandSize = if (horizontalGrain) {
+        Size(width, frontBandHeight.coerceAtLeast(1f))
+    } else {
+        Size(frontBandWidth.coerceAtLeast(1f), height)
+    }
+    drawRoundRect(
+        brush = Brush.linearGradient(
+            colors = listOf(material.frontPanelTop, material.frontPanelBottom, material.bottom),
+            start = frontBandTopLeft,
+            end = if (horizontalGrain) {
+                Offset(frontBandTopLeft.x + width * 0.45f, frontBandTopLeft.y + frontBandSize.height)
+            } else {
+                Offset(frontBandTopLeft.x + frontBandSize.width, frontBandTopLeft.y + height * 0.55f)
+            },
+        ),
+        topLeft = frontBandTopLeft,
+        size = frontBandSize,
+        cornerRadius = radius,
+    )
+
+    drawRoundRect(
+        brush = Brush.linearGradient(
+            colors = listOf(Color.Transparent, material.highlight, Color.Transparent),
+            start = topLeft,
+            end = Offset(topLeft.x + width, topLeft.y + height),
+        ),
+        topLeft = topLeft,
+        size = Size(width, height),
+        cornerRadius = radius,
+    )
+
+    drawFloorPlanWoodGrainLines(
+        topLeft = topLeft,
+        targetSize = topBandSize,
+        horizontal = horizontalGrain,
+        subtle = false,
+        grainLight = material.grainLight,
+        grainDark = material.grainDark,
+    )
+    drawFloorPlanWoodGrainLines(
+        topLeft = frontBandTopLeft,
+        targetSize = frontBandSize,
+        horizontal = horizontalGrain,
+        subtle = true,
+        grainLight = material.grainLight,
+        grainDark = material.grainDark,
+    )
+
+    val seamStroke = max(stroke, minDim * 0.020f)
+    if (horizontalGrain) {
+        val seamY = topLeft.y + topBandSize.height
+        drawLine(
+            color = Color.Black.copy(alpha = 0.55f),
+            start = Offset(topLeft.x, seamY),
+            end = Offset(topLeft.x + width, seamY),
+            strokeWidth = seamStroke,
+        )
+        drawLine(
+            color = material.edge.copy(alpha = 0.85f),
+            start = Offset(topLeft.x, seamY - seamStroke * 0.55f),
+            end = Offset(topLeft.x + width, seamY - seamStroke * 0.55f),
+            strokeWidth = max(0.85f, seamStroke * 0.65f),
+        )
+    } else {
+        val seamX = topLeft.x + topBandSize.width
+        drawLine(
+            color = Color.Black.copy(alpha = 0.55f),
+            start = Offset(seamX, topLeft.y),
+            end = Offset(seamX, topLeft.y + height),
+            strokeWidth = seamStroke,
+        )
+        drawLine(
+            color = material.edge.copy(alpha = 0.85f),
+            start = Offset(seamX - seamStroke * 0.55f, topLeft.y),
+            end = Offset(seamX - seamStroke * 0.55f, topLeft.y + height),
+            strokeWidth = max(0.85f, seamStroke * 0.65f),
+        )
+    }
+
+    val railInset = max(3f, minDim * 0.09f)
+    val railStroke = max(stroke, minDim * 0.030f)
+    drawLine(
+        color = material.railLight,
+        start = Offset(topLeft.x + railInset, topLeft.y + railInset),
+        end = if (horizontalGrain) {
+            Offset(topLeft.x + width - railInset, topLeft.y + railInset)
+        } else {
+            Offset(topLeft.x + railInset, topLeft.y + height - railInset)
+        },
+        strokeWidth = railStroke,
+    )
+    drawLine(
+        color = material.railDark,
+        start = if (horizontalGrain) {
+            Offset(topLeft.x + railInset, topLeft.y + height - railInset)
+        } else {
+            Offset(topLeft.x + width - railInset, topLeft.y + railInset)
+        },
+        end = Offset(topLeft.x + width - railInset, topLeft.y + height - railInset),
+        strokeWidth = railStroke,
+    )
+    drawRoundRect(
+        color = material.edge,
+        topLeft = topLeft,
+        size = Size(width, height),
+        cornerRadius = radius,
+        style = Stroke(width = max(stroke, minDim * 0.018f)),
+    )
+}
+
 @Composable
 private fun FloorPlanObjectNode(
     placement: FloorPlanObjectPlacement,
@@ -1022,6 +1317,17 @@ private fun FloorPlanObjectNode(
                 screenWidthPx = objectWidthPx,
             )
         }
+        "sofa", "couch" -> {
+            Box(modifier = baseModifier.requiredSize(widthDp, heightDp)) {
+                FloorPlanSofaAssetSurface(
+                    backrestDirection = floorObject.backrestDirection,
+                    armrestMode = floorObject.armrestMode,
+                    seatCount = floorObject.capacity,
+                    baseColor = parseFloorPlanObjectColor(floorObject.color),
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
         else -> {
             FloorPlanLabeledObjectSurface(
                 label = floorObject.label,
@@ -1045,6 +1351,76 @@ private fun FloorPlanObjectNode(
 }
 
 @Composable
+private fun FloorPlanSofaAssetSurface(
+    backrestDirection: String?,
+    armrestMode: String? = null,
+    seatCount: Int? = null,
+    baseColor: Color? = null,
+    modifier: Modifier = Modifier,
+) {
+    val normalizedArmrestMode = normalizeFloorPlanSofaArmrestMode(armrestMode)
+    LaunchedEffect(normalizedArmrestMode) {
+        if (normalizedArmrestMode != "both") {
+            Log.w(
+                FLOOR_PLAN_DEBUG_TAG,
+                "Sofa armrestMode=$normalizedArmrestMode cannot be represented by the single baked premium asset; rendering the premium asset instead of falling back to the removed procedural sofa path.",
+            )
+        }
+    }
+    val sofaAsset = ImageBitmap.imageResource(id = R.drawable.sofa2_premium_topdown_asset_v2)
+    Canvas(modifier = modifier) {
+        val localRotationDeg = sofaAssetLocalRotationDeg(backrestDirection)
+        val canvasWidth = size.width.coerceAtLeast(1f)
+        val canvasHeight = size.height.coerceAtLeast(1f)
+        val swapsAxes = localRotationDeg == 90f || localRotationDeg == 270f
+        val drawWidth = if (swapsAxes) canvasHeight else canvasWidth
+        val drawHeight = if (swapsAxes) canvasWidth else canvasHeight
+        val drawOffset = IntOffset(
+            x = ((canvasWidth - drawWidth) / 2f).roundToInt(),
+            y = ((canvasHeight - drawHeight) / 2f).roundToInt(),
+        )
+        val drawSize = IntSize(
+            width = drawWidth.roundToInt().coerceAtLeast(1),
+            height = drawHeight.roundToInt().coerceAtLeast(1),
+        )
+
+        withTransform({
+            if (localRotationDeg != 0f) {
+                rotate(
+                    degrees = localRotationDeg,
+                    pivot = Offset(canvasWidth / 2f, canvasHeight / 2f),
+                )
+            }
+        }) {
+            drawImage(
+                image = sofaAsset,
+                srcOffset = IntOffset(0, 0),
+                srcSize = IntSize(sofaAsset.width, sofaAsset.height),
+                dstOffset = drawOffset,
+                dstSize = drawSize,
+                filterQuality = FilterQuality.Medium,
+            )
+        }
+    }
+}
+
+private fun normalizeFloorPlanSofaArmrestMode(armrestMode: String?): String {
+    return when (armrestMode) {
+        "both", "none", "left-only", "right-only" -> armrestMode
+        else -> "both"
+    }
+}
+
+private fun sofaAssetLocalRotationDeg(backrestDirection: String?): Float {
+    return when (backrestDirection) {
+        "right" -> 90f
+        "bottom" -> 180f
+        "left" -> 270f
+        else -> 0f
+    }
+}
+
+@Composable
 private fun FloorPlanLabeledObjectSurface(
     label: String,
     widthDp: androidx.compose.ui.unit.Dp,
@@ -1063,10 +1439,11 @@ private fun FloorPlanLabeledObjectSurface(
     val usePremiumSofaAsset = normalizedType == "sofa" || normalizedType == "couch"
     Box(modifier = modifier.requiredSize(widthDp, heightDp)) {
         if (usePremiumSofaAsset) {
-            Image(
-                painter = painterResource(id = R.drawable.sofa2_premium_topdown_asset_v2),
-                contentDescription = null,
-                contentScale = ContentScale.FillBounds,
+            FloorPlanSofaAssetSurface(
+                backrestDirection = sofaBackrestDirection,
+                armrestMode = sofaArmrestMode,
+                seatCount = sofaSeatCount,
+                baseColor = objectColor,
                 modifier = Modifier.fillMaxSize(),
             )
         } else {
@@ -1087,48 +1464,10 @@ private fun FloorPlanLabeledObjectSurface(
                     )
                 }
                 "bar-counter" -> {
-                    val radius = CornerRadius(4f, 4f)
-                    val fill = Brush.verticalGradient(
-                        colors = listOf(
-                            Color(0xFF51290F).copy(alpha = 0.96f),
-                            Color(0xFF2B1508).copy(alpha = 0.96f),
-                        ),
-                    )
-                    drawRoundRect(
-                        brush = fill,
+                    drawFloorPlanBarCounterSurface(
                         topLeft = Offset.Zero,
-                        size = size,
-                        cornerRadius = radius,
-                    )
-                    drawRoundRect(
-                        color = Color(0xFFB8782A).copy(alpha = 0.78f),
-                        topLeft = Offset.Zero,
-                        size = size,
-                        cornerRadius = radius,
-                        style = Stroke(width = stroke),
-                    )
-                    val railInset = max(3f, min(size.width, size.height) * 0.10f)
-                    drawLine(
-                        color = Color(0xFFE6C47A).copy(alpha = 0.28f),
-                        start = Offset(railInset, railInset),
-                        end = Offset(size.width - railInset, railInset),
-                        strokeWidth = stroke,
-                    )
-                    drawLine(
-                        color = Color(0xFF1B0D05).copy(alpha = 0.44f),
-                        start = Offset(railInset, size.height - railInset),
-                        end = Offset(size.width - railInset, size.height - railInset),
-                        strokeWidth = stroke,
-                    )
-                }
-                "sofa", "couch" -> {
-                    drawFloorPlanSofaSurface(
                         targetSize = size,
                         stroke = stroke,
-                        baseColor = objectColor,
-                        backrestDirection = sofaBackrestDirection,
-                        armrestMode = sofaArmrestMode,
-                        seatCount = sofaSeatCount,
                     )
                 }
                 "chair", "armchair" -> {
@@ -2229,13 +2568,14 @@ private fun DrawScope.drawFloorPlanTableSurface(
         return
     }
 
+    val material = activeFloorPlanSurfaceTheme().table
+    val resolvedTop = baseColor?.mixWith(Color.White, 0.05f) ?: material.top
+    val resolvedMiddle = baseColor?.mixWith(material.middle, 0.55f) ?: material.middle
+    val resolvedBottom = baseColor?.mixWith(material.bottom, 0.62f) ?: material.bottom
     val horizontalGrain = targetSize.width >= targetSize.height
+    val minDim = min(targetSize.width, targetSize.height).coerceAtLeast(1f)
     val baseBrush = Brush.linearGradient(
-        colors = listOf(
-            Color(0xFF6A3213).copy(alpha = 0.99f),
-            Color(0xFF3A1808).copy(alpha = 0.99f),
-            Color(0xFF180904).copy(alpha = 0.99f),
-        ),
+        colors = listOf(resolvedTop.copy(alpha = 0.99f), resolvedMiddle.copy(alpha = 0.99f), resolvedBottom.copy(alpha = 0.99f)),
         start = topLeft,
         end = if (horizontalGrain) {
             Offset(topLeft.x + targetSize.width, topLeft.y + targetSize.height * 0.45f)
@@ -2246,7 +2586,7 @@ private fun DrawScope.drawFloorPlanTableSurface(
     val sheenBrush = Brush.linearGradient(
         colors = listOf(
             Color.Transparent,
-            Color(0xFFFFD08A).copy(alpha = 0.105f),
+            material.highlight,
             Color.Transparent,
         ),
         start = if (horizontalGrain) topLeft else Offset(topLeft.x + targetSize.width, topLeft.y),
@@ -2256,13 +2596,44 @@ private fun DrawScope.drawFloorPlanTableSurface(
             Offset(topLeft.x, topLeft.y)
         },
     )
+    val edgeBrush = Brush.verticalGradient(
+        colors = listOf(
+            Color.Transparent,
+            material.edgeDark.copy(alpha = 0.20f),
+        ),
+        startY = topLeft.y + targetSize.height * 0.60f,
+        endY = topLeft.y + targetSize.height,
+    )
+
+    val topLightBrush = Brush.radialGradient(
+        colors = listOf(
+            material.highlight.copy(alpha = 0.55f),
+            Color.Transparent,
+        ),
+        center = Offset(topLeft.x + targetSize.width * 0.40f, topLeft.y + targetSize.height * 0.30f),
+        radius = max(targetSize.width, targetSize.height) * 0.65f,
+    )
+    val bottomDeepenBrush = Brush.radialGradient(
+        colors = listOf(
+            Color.Transparent,
+            material.edgeDark.copy(alpha = 0.42f),
+        ),
+        center = Offset(topLeft.x + targetSize.width * 0.55f, topLeft.y + targetSize.height * 0.50f),
+        radius = max(targetSize.width, targetSize.height) * 0.62f,
+    )
 
     if (isRound) {
         drawOval(brush = baseBrush, topLeft = topLeft, size = targetSize)
+        drawOval(brush = bottomDeepenBrush, topLeft = topLeft, size = targetSize)
+        drawOval(brush = topLightBrush, topLeft = topLeft, size = targetSize)
         drawOval(brush = sheenBrush, topLeft = topLeft, size = targetSize)
+        drawOval(brush = edgeBrush, topLeft = topLeft, size = targetSize)
     } else {
         drawRect(brush = baseBrush, topLeft = topLeft, size = targetSize)
+        drawRect(brush = bottomDeepenBrush, topLeft = topLeft, size = targetSize)
+        drawRect(brush = topLightBrush, topLeft = topLeft, size = targetSize)
         drawRect(brush = sheenBrush, topLeft = topLeft, size = targetSize)
+        drawRect(brush = edgeBrush, topLeft = topLeft, size = targetSize)
     }
 
     drawFloorPlanWoodGrainLines(
@@ -2270,9 +2641,31 @@ private fun DrawScope.drawFloorPlanTableSurface(
         targetSize = targetSize,
         horizontal = horizontalGrain,
         subtle = isRound,
+        grainLight = material.grainLight,
+        grainDark = material.grainDark,
     )
 
+    val insetStroke = max(0.65f, min(borderWidthPx, minDim * 0.035f))
+    val innerInset = max(2f, minDim * 0.055f)
+    val innerSize = Size(
+        width = (targetSize.width - innerInset * 2f).coerceAtLeast(1f),
+        height = (targetSize.height - innerInset * 2f).coerceAtLeast(1f),
+    )
+    val rimDarkColor = material.edgeDark.copy(alpha = 0.62f)
+    val rimWidth = max(borderWidthPx, minDim * 0.045f)
     if (isRound) {
+        drawOval(
+            color = rimDarkColor,
+            topLeft = topLeft,
+            size = targetSize,
+            style = Stroke(width = rimWidth),
+        )
+        drawOval(
+            color = material.edgeWarm.copy(alpha = 0.32f),
+            topLeft = Offset(topLeft.x + innerInset, topLeft.y + innerInset),
+            size = innerSize,
+            style = Stroke(width = insetStroke),
+        )
         drawOval(
             color = borderColor,
             topLeft = topLeft,
@@ -2280,6 +2673,18 @@ private fun DrawScope.drawFloorPlanTableSurface(
             style = Stroke(width = borderWidthPx),
         )
     } else {
+        drawRect(
+            color = rimDarkColor,
+            topLeft = topLeft,
+            size = targetSize,
+            style = Stroke(width = rimWidth),
+        )
+        drawRect(
+            color = material.edgeWarm.copy(alpha = 0.28f),
+            topLeft = Offset(topLeft.x + innerInset, topLeft.y + innerInset),
+            size = innerSize,
+            style = Stroke(width = insetStroke),
+        )
         drawRect(
             color = borderColor,
             topLeft = topLeft,
@@ -2577,6 +2982,8 @@ private fun DrawScope.drawFloorPlanWoodGrainLines(
     targetSize: Size,
     horizontal: Boolean,
     subtle: Boolean,
+    grainLight: Color,
+    grainDark: Color,
 ) {
     val crossLength = if (horizontal) targetSize.height else targetSize.width
     val longLength = if (horizontal) targetSize.width else targetSize.height
@@ -2590,13 +2997,13 @@ private fun DrawScope.drawFloorPlanWoodGrainLines(
         if (horizontal) {
             val y = topLeft.y + offset
             drawLine(
-                color = Color(0xFFFFC07A).copy(alpha = alpha),
+                color = grainLight.copy(alpha = alpha),
                 start = Offset(topLeft.x + inset, y),
                 end = Offset(topLeft.x + longLength - inset, y + wobble),
                 strokeWidth = max(0.55f, 0.45.dp.toPx()),
             )
             drawLine(
-                color = Color(0xFF120603).copy(alpha = alpha * 0.86f),
+                color = grainDark.copy(alpha = alpha * 0.86f),
                 start = Offset(topLeft.x + inset, y + 1.4f),
                 end = Offset(topLeft.x + longLength - inset, y + wobble + 1.4f),
                 strokeWidth = max(0.45f, 0.35.dp.toPx()),
@@ -2604,13 +3011,13 @@ private fun DrawScope.drawFloorPlanWoodGrainLines(
         } else {
             val x = topLeft.x + offset
             drawLine(
-                color = Color(0xFFFFC07A).copy(alpha = alpha),
+                color = grainLight.copy(alpha = alpha),
                 start = Offset(x, topLeft.y + inset),
                 end = Offset(x + wobble, topLeft.y + longLength - inset),
                 strokeWidth = max(0.55f, 0.45.dp.toPx()),
             )
             drawLine(
-                color = Color(0xFF120603).copy(alpha = alpha * 0.86f),
+                color = grainDark.copy(alpha = alpha * 0.86f),
                 start = Offset(x + 1.4f, topLeft.y + inset),
                 end = Offset(x + wobble + 1.4f, topLeft.y + longLength - inset),
                 strokeWidth = max(0.45f, 0.35.dp.toPx()),
@@ -3151,28 +3558,6 @@ private fun DrawScope.drawFloorPlanSofaCushions(
         }
     }
 }
-
-private fun DrawScope.drawFloorPlanSofaSurface(
-    targetSize: Size,
-    stroke: Float,
-    baseColor: Color?,
-    backrestDirection: String?,
-    armrestMode: String?,
-    seatCount: Int?,
-) {
-    val safeTargetSize = floorPlanSafeSize(targetSize)
-    drawFloorPlanSofaCore(
-        topLeft = Offset.Zero,
-        targetSize = safeTargetSize,
-        stroke = stroke,
-        seatCount = seatCount?.coerceIn(1, 4) ?: estimateFloorPlanSofaSeatCount(safeTargetSize),
-        armWeight = 1f,
-        baseColor = baseColor,
-        backrestDirection = backrestDirection,
-        armrestMode = armrestMode,
-    )
-}
-
 
 private fun DrawScope.drawFloorPlanArmchairSurface(
     topLeft: Offset,
@@ -3893,6 +4278,3 @@ private data class FloorPlanTableHitTarget(
         return position.x in left..right && position.y in top..bottom
     }
 }
-
-
-
