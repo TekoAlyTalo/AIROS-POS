@@ -295,6 +295,11 @@ data class FloorMapArea(
     val apexXPercent: Float? = null,
 )
 
+enum class FloorPlanSofaStyle {
+    PREMIUM_LEATHER,
+    TERRACE_POLY_RATTAN,
+}
+
 data class FloorMapObject(
     val id: String,
     val type: String,
@@ -313,6 +318,7 @@ data class FloorMapObject(
     val backrestDirection: String? = null,
     val backrestMode: String? = null,
     val armrestMode: String? = null,
+    val sofaStyle: FloorPlanSofaStyle? = null,
     val locked: Boolean = false,
     val hidden: Boolean = false,
     val shape: String? = null,

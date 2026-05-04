@@ -6,6 +6,7 @@ import com.airos.pos.core.model.FloorMap
 import com.airos.pos.core.model.FloorMapArea
 import com.airos.pos.core.model.FloorMapObject
 import com.airos.pos.core.model.FloorPlanMarkerAnchor
+import com.airos.pos.core.model.FloorPlanSofaStyle
 import com.airos.pos.core.model.PersistedOpenSale
 import com.airos.pos.core.model.RestaurantTable
 import com.airos.pos.core.model.ServiceSpotType
@@ -514,6 +515,9 @@ private class BackendTableTruthClient(
                 val armrestMode = (obj.optStringOrNull("armrestMode")
                     ?: obj.optStringOrNull("armrest_mode"))
                     ?.takeIf { it in setOf("both", "none", "left-only", "right-only") }
+                val sofaStyle = parseFloorPlanSofaStyle(
+                    obj.optStringOrNull("sofaStyle") ?: obj.optStringOrNull("sofa_style"),
+                )
                 val statusChipAnchor = FloorPlanMarkerAnchor.fromRawValue(
                     obj.optStringOrNull("statusChipAnchor") ?: obj.optStringOrNull("status_chip_anchor"),
                 )
@@ -557,6 +561,7 @@ private class BackendTableTruthClient(
                         backrestDirection = backrestDirection,
                         backrestMode = backrestMode,
                         armrestMode = armrestMode,
+                        sofaStyle = sofaStyle,
                         locked = obj.optBoolean("locked", false),
                         hidden = obj.optBoolean("hidden", false),
                         shape = shape,
@@ -881,6 +886,14 @@ private fun resolveServiceSpotType(
         "bar_stool" -> ServiceSpotType.BAR_SEAT
         "table" -> ServiceSpotType.TABLE
         else -> fallback ?: ServiceSpotType.TABLE
+    }
+}
+
+private fun parseFloorPlanSofaStyle(raw: String?): FloorPlanSofaStyle? {
+    return when (raw?.trim()?.lowercase()) {
+        "premium_leather", "premium-leather", "leather", "premium" -> FloorPlanSofaStyle.PREMIUM_LEATHER
+        "terrace_poly_rattan", "terrace-poly-rattan", "poly_rattan", "poly-rattan", "rattan" -> FloorPlanSofaStyle.TERRACE_POLY_RATTAN
+        else -> null
     }
 }
 
