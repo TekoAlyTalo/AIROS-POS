@@ -5,7 +5,10 @@ import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.model.FloorMap
 import com.airos.pos.core.model.FloorMapArea
 import com.airos.pos.core.model.FloorMapObject
+import com.airos.pos.core.model.FloorPlanChairStyle
+import com.airos.pos.core.model.FloorPlanDeviceStyle
 import com.airos.pos.core.model.FloorPlanMarkerAnchor
+import com.airos.pos.core.model.FloorPlanPlantStyle
 import com.airos.pos.core.model.FloorPlanSofaStyle
 import com.airos.pos.core.model.PersistedOpenSale
 import com.airos.pos.core.model.RestaurantTable
@@ -38,6 +41,9 @@ import kotlin.math.roundToInt
 private const val BACKEND_FLOOR_MAP_ID = "backend-authoritative-floor"
 private const val BACKEND_FLOOR_MAP_NAME = "Dining room"
 private const val BACKEND_DEFAULT_AREA_NAME = "Dining room"
+private const val BACKEND_DEFAULT_PX_PER_METER = 20f
+private const val SUNMI_D3_MINI_WIDTH_CM = 25f
+private const val SUNMI_D3_MINI_HEIGHT_CM = 21f
 private val LEGACY_LOCAL_SERVICE_SPOT_ID_REGEX = Regex("""table-\d+$""")
 
 interface BackendAuthoritativeFloorMapSink {
@@ -476,6 +482,13 @@ private class BackendTableTruthClient(
                     hidden = tile.optBoolean("hidden", false),
                     areaType = tile.optStringOrNull("areaType") ?: tile.optStringOrNull("area_type"),
                     surfaceMaterial = tile.optStringOrNull("surfaceMaterial") ?: tile.optStringOrNull("surface_material"),
+                    surfaceTint = (tile.optStringOrNull("surfaceTint") ?: tile.optStringOrNull("surface_tint"))
+                        ?.takeIf { it.matches(Regex("^#[0-9a-fA-F]{6}$")) },
+                    plankWidthMm = tile.optIntOrNull("plankWidthMm") ?: tile.optIntOrNull("plank_width_mm"),
+                    plankLengthMm = tile.optIntOrNull("plankLengthMm") ?: tile.optIntOrNull("plank_length_mm"),
+                    plankDirection = (tile.optStringOrNull("plankDirection") ?: tile.optStringOrNull("plank_direction"))
+                        ?.takeIf { it in setOf("horizontal", "vertical") },
+                    pxPerMeter = pxPerMeter,
                     p1XPercent = tile.optFloatOrNull("p1XPercent") ?: tile.optFloatOrNull("p1_x_percent"),
                     p1YPercent = tile.optFloatOrNull("p1YPercent") ?: tile.optFloatOrNull("p1_y_percent"),
                     p2XPercent = tile.optFloatOrNull("p2XPercent") ?: tile.optFloatOrNull("p2_x_percent"),
@@ -506,6 +519,18 @@ private class BackendTableTruthClient(
                 val shape = obj.optStringOrNull("shape")
                 val chairLayout = obj.optStringOrNull("chairLayout") ?: obj.optStringOrNull("chair_layout")
                 val objectColor = obj.optStringOrNull("color")?.takeIf { it.matches(Regex("^#[0-9a-fA-F]{6}$")) }
+                val tableMaterial = parseFloorPlanTableMaterial(
+                    obj.optStringOrNull("tableMaterial") ?: obj.optStringOrNull("table_material"),
+                )
+                val barDeskMaterial = parseFloorPlanBarDeskMaterial(
+                    obj.optStringOrNull("barDeskMaterial") ?: obj.optStringOrNull("bar_desk_material"),
+                )
+                val barDeskGrainRotationDeg = normalizeFloorPlanDegrees(
+                    obj.optFloatOrNull("barDeskGrainRotationDeg")
+                        ?: obj.optFloatOrNull("bar_desk_grain_rotation_deg"),
+                )
+                val cushionColor = (obj.optStringOrNull("cushionColor") ?: obj.optStringOrNull("cushion_color"))
+                    ?.takeIf { it.matches(Regex("^#[0-9a-fA-F]{6}$")) }
                 val backrestDirection = (obj.optStringOrNull("backrestDirection")
                     ?: obj.optStringOrNull("backrest_direction"))
                     ?.takeIf { it in setOf("top", "right", "bottom", "left") }
@@ -518,12 +543,43 @@ private class BackendTableTruthClient(
                 val sofaStyle = parseFloorPlanSofaStyle(
                     obj.optStringOrNull("sofaStyle") ?: obj.optStringOrNull("sofa_style"),
                 )
+                val chairStyle = if (type == "chair") {
+                    parseFloorPlanChairStyle(
+                        obj.optStringOrNull("chairStyle") ?: obj.optStringOrNull("chair_style"),
+                    )
+                } else {
+                    null
+                }
+                val plantStyle = if (type == "plant") {
+                    parseFloorPlanPlantStyle(
+                        obj.optStringOrNull("plantStyle") ?: obj.optStringOrNull("plant_style"),
+                    )
+                } else {
+                    null
+                }
+                val deviceStyle = if (type == "pos-terminal") {
+                    parseFloorPlanDeviceStyle(
+                        obj.optStringOrNull("deviceStyle") ?: obj.optStringOrNull("device_style"),
+                    )
+                } else {
+                    null
+                }
                 val statusChipAnchor = FloorPlanMarkerAnchor.fromRawValue(
                     obj.optStringOrNull("statusChipAnchor") ?: obj.optStringOrNull("status_chip_anchor"),
                 )
                 val seatMarkerAnchor = FloorPlanMarkerAnchor.fromRawValue(
                     obj.optStringOrNull("seatMarkerAnchor") ?: obj.optStringOrNull("seat_marker_anchor"),
                 )
+                val resolvedWidth = if (type == "pos-terminal" && deviceStyle == FloorPlanDeviceStyle.SUNMI_D3_MINI) {
+                    floorPlanCentimetersToWorldPx(SUNMI_D3_MINI_WIDTH_CM, pxPerMeter)
+                } else {
+                    width
+                }
+                val resolvedHeight = if (type == "pos-terminal" && deviceStyle == FloorPlanDeviceStyle.SUNMI_D3_MINI) {
+                    floorPlanCentimetersToWorldPx(SUNMI_D3_MINI_HEIGHT_CM, pxPerMeter)
+                } else {
+                    height
+                }
                 if (type == "table") {
                     tableObjects += BackendFloorPlanTableObject(
                         id = objectId,
@@ -538,6 +594,7 @@ private class BackendTableTruthClient(
                         shape = shape,
                         chairLayout = chairLayout,
                         color = objectColor,
+                        tableMaterial = tableMaterial,
                         backrestDirection = backrestDirection,
                         backrestMode = backrestMode,
                         statusChipAnchor = statusChipAnchor,
@@ -550,18 +607,24 @@ private class BackendTableTruthClient(
                         label = label,
                         x = x.roundToInt(),
                         y = y.roundToInt(),
-                        width = width.roundToInt().coerceAtLeast(1),
-                        height = height.roundToInt().coerceAtLeast(1),
+                        width = resolvedWidth.roundToInt().coerceAtLeast(1),
+                        height = resolvedHeight.roundToInt().coerceAtLeast(1),
                         xPx = x,
                         yPx = y,
-                        widthPx = width.coerceAtLeast(0.01f),
-                        heightPx = height.coerceAtLeast(0.01f),
+                        widthPx = resolvedWidth.coerceAtLeast(0.01f),
+                        heightPx = resolvedHeight.coerceAtLeast(0.01f),
                         rotation = rotation,
                         color = objectColor,
+                        barDeskMaterial = barDeskMaterial,
+                        barDeskGrainRotationDeg = barDeskGrainRotationDeg,
                         backrestDirection = backrestDirection,
                         backrestMode = backrestMode,
                         armrestMode = armrestMode,
                         sofaStyle = sofaStyle,
+                        chairStyle = chairStyle,
+                        plantStyle = plantStyle,
+                        deviceStyle = deviceStyle,
+                        cushionColor = cushionColor,
                         locked = obj.optBoolean("locked", false),
                         hidden = obj.optBoolean("hidden", false),
                         shape = shape,
@@ -675,6 +738,7 @@ private data class BackendFloorPlanTableObject(
     val shape: String?,
     val chairLayout: String?,
     val color: String?,
+    val tableMaterial: String?,
     val backrestDirection: String?,
     val backrestMode: String?,
     val statusChipAnchor: FloorPlanMarkerAnchor?,
@@ -833,6 +897,7 @@ private fun buildAuthoritativeBackendFloorMap(
             chairLayout = tableObject.chairLayout,
             tableNumber = tableObject.tableNumber,
             color = tableObject.color,
+            tableMaterial = tableObject.tableMaterial,
             backrestDirection = tableObject.backrestDirection,
             backrestMode = tableObject.backrestMode,
             statusChipAnchor = tableObject.statusChipAnchor,
@@ -893,8 +958,64 @@ private fun parseFloorPlanSofaStyle(raw: String?): FloorPlanSofaStyle? {
     return when (raw?.trim()?.lowercase()) {
         "premium_leather", "premium-leather", "leather", "premium" -> FloorPlanSofaStyle.PREMIUM_LEATHER
         "terrace_poly_rattan", "terrace-poly-rattan", "poly_rattan", "poly-rattan", "rattan" -> FloorPlanSofaStyle.TERRACE_POLY_RATTAN
+        "booth_straight_2seat_no_arms", "booth-straight-2seat-no-arms", "booth_straight", "booth-straight" -> FloorPlanSofaStyle.BOOTH_STRAIGHT_2SEAT_NO_ARMS
+        "booth_curved_no_arms", "booth-curved-no-arms", "booth_curved", "booth-curved" -> FloorPlanSofaStyle.BOOTH_CURVED_NO_ARMS
         else -> null
     }
+}
+
+private fun parseFloorPlanChairStyle(raw: String?): FloorPlanChairStyle? {
+    return when (raw?.trim()?.replace('-', '_')?.uppercase()) {
+        "TERRACE_POLY_RATTAN" -> FloorPlanChairStyle.TERRACE_POLY_RATTAN
+        else -> null
+    }
+}
+
+private fun parseFloorPlanPlantStyle(raw: String?): FloorPlanPlantStyle? {
+    return when (raw?.trim()?.replace('-', '_')?.uppercase()) {
+        "TERRACE_TUJA", "EVERGREEN_CONIFER", "CONIFER" -> FloorPlanPlantStyle.TERRACE_TUJA
+        "TERRACE_FLOWERING_SHRUB", "FLOWERING_SHRUB", "SHRUB" -> FloorPlanPlantStyle.TERRACE_FLOWERING_SHRUB
+        else -> null
+    }
+}
+
+private fun parseFloorPlanDeviceStyle(raw: String?): FloorPlanDeviceStyle? {
+    return when (raw?.trim()?.replace('-', '_')?.uppercase()) {
+        "SUNMI_D3_MINI", "SUNMI_D3", "POS_TERMINAL" -> FloorPlanDeviceStyle.SUNMI_D3_MINI
+        else -> null
+    }
+}
+
+private fun parseFloorPlanTableMaterial(raw: String?): String? {
+    return when (raw?.trim()?.replace('-', '_')?.uppercase()) {
+        "LIGHT_WOOD" -> "LIGHT_WOOD"
+        "DARK_WOOD" -> "DARK_WOOD"
+        "DARK_COMPOSITE" -> "DARK_COMPOSITE"
+        "GREY_STONE", "GRAY_STONE" -> "GREY_STONE"
+        "TERRACE_TRANSPARENT" -> "TERRACE_TRANSPARENT"
+        else -> null
+    }
+}
+
+private fun parseFloorPlanBarDeskMaterial(raw: String?): String? {
+    return when (raw?.trim()?.replace('-', '_')?.uppercase()) {
+        "LIGHT_WOOD" -> "LIGHT_WOOD"
+        "LIGHT_STONE" -> "LIGHT_STONE"
+        "DARK_WOOD" -> "DARK_WOOD"
+        "DARK_STONE" -> "DARK_STONE"
+        "WOOD_BRASS_TRIM", "WOOD_WITH_BRASS_TRIM" -> "WOOD_BRASS_TRIM"
+        else -> null
+    }
+}
+
+private fun normalizeFloorPlanDegrees(raw: Float?): Float? {
+    raw ?: return null
+    return ((raw % 360f) + 360f) % 360f
+}
+
+private fun floorPlanCentimetersToWorldPx(centimeters: Float, pxPerMeter: Float?): Float {
+    val scale = pxPerMeter?.takeIf { it > 0f } ?: BACKEND_DEFAULT_PX_PER_METER
+    return centimeters / 100f * scale
 }
 
 private fun parseAttentionFlag(raw: String): TableAttentionFlag {

@@ -263,6 +263,7 @@ data class RestaurantTable(
     val chairLayout: String? = null,
     val tableNumber: Int? = null,
     val color: String? = null,
+    val tableMaterial: String? = null,
     val backrestDirection: String? = null,
     val backrestMode: String? = null,
     val statusChipAnchor: FloorPlanMarkerAnchor? = null,
@@ -286,6 +287,11 @@ data class FloorMapArea(
     val hidden: Boolean = false,
     val areaType: String? = null,
     val surfaceMaterial: String? = null,
+    val surfaceTint: String? = null,
+    val plankWidthMm: Int? = null,
+    val plankLengthMm: Int? = null,
+    val plankDirection: String? = null,
+    val pxPerMeter: Float? = null,
     val p1XPercent: Float? = null,
     val p1YPercent: Float? = null,
     val p2XPercent: Float? = null,
@@ -298,6 +304,21 @@ data class FloorMapArea(
 enum class FloorPlanSofaStyle {
     PREMIUM_LEATHER,
     TERRACE_POLY_RATTAN,
+    BOOTH_STRAIGHT_2SEAT_NO_ARMS,
+    BOOTH_CURVED_NO_ARMS,
+}
+
+enum class FloorPlanChairStyle {
+    TERRACE_POLY_RATTAN,
+}
+
+enum class FloorPlanPlantStyle {
+    TERRACE_TUJA,
+    TERRACE_FLOWERING_SHRUB,
+}
+
+enum class FloorPlanDeviceStyle {
+    SUNMI_D3_MINI,
 }
 
 data class FloorMapObject(
@@ -315,10 +336,16 @@ data class FloorMapObject(
     val heightPx: Float = height.toFloat(),
     val rotation: Float = 0f,
     val color: String? = null,
+    val barDeskMaterial: String? = null,
+    val barDeskGrainRotationDeg: Float? = null,
     val backrestDirection: String? = null,
     val backrestMode: String? = null,
     val armrestMode: String? = null,
     val sofaStyle: FloorPlanSofaStyle? = null,
+    val chairStyle: FloorPlanChairStyle? = null,
+    val plantStyle: FloorPlanPlantStyle? = null,
+    val deviceStyle: FloorPlanDeviceStyle? = null,
+    val cushionColor: String? = null,
     val locked: Boolean = false,
     val hidden: Boolean = false,
     val shape: String? = null,

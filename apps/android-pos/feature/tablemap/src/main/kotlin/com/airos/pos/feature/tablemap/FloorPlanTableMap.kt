@@ -41,9 +41,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
@@ -52,6 +57,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
@@ -65,13 +72,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.airos.pos.core.model.FloorMapArea
 import com.airos.pos.core.model.FloorMapObject
+import com.airos.pos.core.model.FloorPlanChairStyle
+import com.airos.pos.core.model.FloorPlanDeviceStyle
 import com.airos.pos.core.model.FloorPlanMarkerAnchor
+import com.airos.pos.core.model.FloorPlanPlantStyle
 import com.airos.pos.core.model.FloorPlanSofaStyle
 import com.airos.pos.core.model.RestaurantTable
 import com.airos.pos.core.model.ServiceSpotType
 import com.airos.pos.core.model.StaffFloorPlanViewportPreference
 import kotlinx.coroutines.delay
 import kotlin.math.abs
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -106,9 +117,26 @@ private val FloorPlanOccupiedColor = TableMapVisualTokens.OccupiedColor
 private val FloorPlanDirtyColor = TableMapVisualTokens.DirtyColor
 private val FloorPlanReservedColor = TableMapVisualTokens.ReservedColor
 private val FloorPlanBoundsPadding = 48f
+private const val FLOOR_PLAN_DEFAULT_PLANK_WIDTH_MM = 120
+private const val FLOOR_PLAN_DEFAULT_PLANK_LENGTH_MM = 4500
+private const val FLOOR_PLAN_DEFAULT_PX_PER_METER = 20f
+private const val FLOOR_PLAN_WEATHERED_PLANK_ASSET_ROW_COUNT = 6f
+private const val FLOOR_PLAN_PREMIUM_STONE_ASSET_SIZE_MM = 2400
+private const val FLOOR_PLAN_WORLD_UNIT_MM = 10f
+private const val FLOOR_PLAN_ASSET_TILE_OVERLAP_PX = 1f
 private const val FLOOR_PLAN_DEBUG_TAG = "FloorPlanDebug"
 private const val FLOOR_PLAN_MIN_ZOOM = 0.20f
 private const val FLOOR_PLAN_MAX_ZOOM = 8.0f
+private val FloorPlanOpaqueWhiteMatteColorFilter = ColorFilter.colorMatrix(
+    ColorMatrix(
+        floatArrayOf(
+            1f, 0f, 0f, 0f, 0f,
+            0f, 1f, 0f, 0f, 0f,
+            0f, 0f, 1f, 0f, 0f,
+            -0.333f, -0.333f, -0.333f, 1f, 0f,
+        ),
+    ),
+)
 private const val FLOOR_PLAN_ZOOM_SENSITIVITY = 1.0f
 private const val FLOOR_PLAN_DEBUG_MARKER = "FLOORPLAN RENDERER WORLD-TO-SCREEN V1"
 private const val FLOOR_PLAN_CAMERA_SYMBOL_PX = 40f
@@ -786,6 +814,8 @@ private fun FloorPlanAreasLayer(
     panOffset: Offset,
     zoom: Float,
 ) {
+    val premiumStoneLightAsset = ImageBitmap.imageResource(id = R.drawable.floor_premium_stone_light_v1)
+    val weatheredPlanksAsset = ImageBitmap.imageResource(id = R.drawable.floor_terrace_weathered_planks_120mm_v2)
     Canvas(modifier = Modifier.fillMaxSize()) {
         placements.forEach { placement ->
             val screen = placement.rect.toScreenRect(panOffset, zoom)
@@ -802,6 +832,8 @@ private fun FloorPlanAreasLayer(
                 drawFloorPlanAreaShape(
                     area = placement.area,
                     targetSize = Size(areaWidthPx, areaHeightPx),
+                    premiumStoneLightAsset = premiumStoneLightAsset,
+                    weatheredPlanksAsset = weatheredPlanksAsset,
                 )
             }
         }
@@ -811,8 +843,14 @@ private fun FloorPlanAreasLayer(
 private fun DrawScope.drawFloorPlanAreaShape(
     area: FloorMapArea,
     targetSize: Size,
+    premiumStoneLightAsset: ImageBitmap,
+    weatheredPlanksAsset: ImageBitmap,
 ) {
     val floor = activeFloorPlanSurfaceTheme().floor
+    val stroke = max(1f, 1.dp.toPx())
+    val floorAssetMaterial = area.floorAssetMaterial()
+    val woodPlankMaterial = area.woodPlankMaterial()
+    val stoneMaterial = area.stoneFloorMaterial()
     val fillTop = floor.baseMiddle.copy(alpha = 0.06f)
     val fillBottom = areaSurfaceColor(area).copy(alpha = 0.08f)
     val borderColor = areaSurfaceBorderColor(area).copy(alpha = 0.24f)
@@ -821,7 +859,6 @@ private fun DrawScope.drawFloorPlanAreaShape(
         startY = 0f,
         endY = targetSize.height,
     )
-    val stroke = max(1f, 1.dp.toPx())
 
     when (area.shape.lowercase()) {
         "triangle" -> {
@@ -841,16 +878,85 @@ private fun DrawScope.drawFloorPlanAreaShape(
                 close()
             }
 
-            drawPath(path = path, brush = fillBrush)
+            if (floorAssetMaterial != null) {
+                clipPath(path) {
+                    drawFloorPlanAssetAreaSurface(
+                        area = area,
+                        targetSize = targetSize,
+                        material = floorAssetMaterial,
+                        premiumStoneLightAsset = premiumStoneLightAsset,
+                        weatheredPlanksAsset = weatheredPlanksAsset,
+                    )
+                }
+            } else if (woodPlankMaterial != null) {
+                drawPath(
+                    path = path,
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            woodPlankMaterial.baseTop,
+                            woodPlankMaterial.baseBottom,
+                        ),
+                        startY = 0f,
+                        endY = targetSize.height,
+                    ),
+                )
+            } else if (stoneMaterial != null) {
+                drawPath(
+                    path = path,
+                    brush = Brush.linearGradient(
+                        colors = listOf(stoneMaterial.baseTop, stoneMaterial.baseMiddle, stoneMaterial.baseBottom),
+                        start = Offset.Zero,
+                        end = Offset(targetSize.width * 0.8f, targetSize.height),
+                    ),
+                )
+            } else {
+                drawPath(path = path, brush = fillBrush)
+            }
             drawPath(path = path, color = borderColor, style = Stroke(width = stroke))
         }
 
         "circle", "ellipse" -> {
-            drawOval(
-                brush = fillBrush,
-                topLeft = Offset.Zero,
-                size = targetSize,
-            )
+            if (floorAssetMaterial != null) {
+                val path = Path().apply {
+                    addOval(Rect(Offset.Zero, targetSize))
+                }
+                clipPath(path) {
+                    drawFloorPlanAssetAreaSurface(
+                        area = area,
+                        targetSize = targetSize,
+                        material = floorAssetMaterial,
+                        premiumStoneLightAsset = premiumStoneLightAsset,
+                        weatheredPlanksAsset = weatheredPlanksAsset,
+                    )
+                }
+            } else if (woodPlankMaterial != null) {
+                val wood = woodPlankMaterial
+                drawOval(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(wood.baseTop, wood.baseMiddle, wood.baseBottom),
+                        startY = 0f,
+                        endY = targetSize.height,
+                    ),
+                    topLeft = Offset.Zero,
+                    size = targetSize,
+                )
+            } else if (stoneMaterial != null) {
+                drawOval(
+                    brush = Brush.linearGradient(
+                        colors = listOf(stoneMaterial.baseTop, stoneMaterial.baseMiddle, stoneMaterial.baseBottom),
+                        start = Offset.Zero,
+                        end = Offset(targetSize.width * 0.8f, targetSize.height),
+                    ),
+                    topLeft = Offset.Zero,
+                    size = targetSize,
+                )
+            } else {
+                drawOval(
+                    brush = fillBrush,
+                    topLeft = Offset.Zero,
+                    size = targetSize,
+                )
+            }
             drawOval(
                 color = borderColor,
                 topLeft = Offset.Zero,
@@ -860,12 +966,43 @@ private fun DrawScope.drawFloorPlanAreaShape(
         }
 
         "roundedrectangle", "rounded-rectangle", "rounded_rect" -> {
-            drawRoundRect(
-                brush = fillBrush,
-                topLeft = Offset.Zero,
-                size = targetSize,
-                cornerRadius = CornerRadius(14f, 14f),
-            )
+            if (floorAssetMaterial != null) {
+                val cornerRadius = CornerRadius(14f, 14f)
+                val path = Path().apply {
+                    addRoundRect(RoundRect(Rect(Offset.Zero, targetSize), cornerRadius))
+                }
+                clipPath(path) {
+                    drawFloorPlanAssetAreaSurface(
+                        area = area,
+                        targetSize = targetSize,
+                        material = floorAssetMaterial,
+                        premiumStoneLightAsset = premiumStoneLightAsset,
+                        weatheredPlanksAsset = weatheredPlanksAsset,
+                    )
+                }
+            } else if (woodPlankMaterial != null) {
+                drawFloorPlanWoodPlankAreaSurface(
+                    area = area,
+                    targetSize = targetSize,
+                    material = woodPlankMaterial,
+                    stroke = stroke,
+                    verticalPlanks = area.hasVerticalPlanks(),
+                )
+            } else if (stoneMaterial != null) {
+                drawFloorPlanStoneAreaSurface(
+                    targetSize = targetSize,
+                    material = stoneMaterial,
+                    stroke = stroke,
+                    cornerRadius = CornerRadius(14f, 14f),
+                )
+            } else {
+                drawRoundRect(
+                    brush = fillBrush,
+                    topLeft = Offset.Zero,
+                    size = targetSize,
+                    cornerRadius = CornerRadius(14f, 14f),
+                )
+            }
             drawRoundRect(
                 color = borderColor,
                 topLeft = Offset.Zero,
@@ -876,11 +1013,37 @@ private fun DrawScope.drawFloorPlanAreaShape(
         }
 
         else -> {
-            drawRect(
-                brush = fillBrush,
-                topLeft = Offset.Zero,
-                size = targetSize,
-            )
+            if (floorAssetMaterial != null) {
+                clipRect(left = 0f, top = 0f, right = targetSize.width, bottom = targetSize.height) {
+                    drawFloorPlanAssetAreaSurface(
+                        area = area,
+                        targetSize = targetSize,
+                        material = floorAssetMaterial,
+                        premiumStoneLightAsset = premiumStoneLightAsset,
+                        weatheredPlanksAsset = weatheredPlanksAsset,
+                    )
+                }
+            } else if (woodPlankMaterial != null) {
+                drawFloorPlanWoodPlankAreaSurface(
+                    area = area,
+                    targetSize = targetSize,
+                    material = woodPlankMaterial,
+                    stroke = stroke,
+                    verticalPlanks = area.hasVerticalPlanks(),
+                )
+            } else if (stoneMaterial != null) {
+                drawFloorPlanStoneAreaSurface(
+                    targetSize = targetSize,
+                    material = stoneMaterial,
+                    stroke = stroke,
+                )
+            } else {
+                drawRect(
+                    brush = fillBrush,
+                    topLeft = Offset.Zero,
+                    size = targetSize,
+                )
+            }
             drawRect(
                 color = borderColor,
                 topLeft = Offset.Zero,
@@ -995,6 +1158,729 @@ private fun areaSurfaceColor(area: FloorMapArea): Color {
     }
 }
 
+private fun FloorMapArea.woodPlankMaterial(): FloorPlanLightWoodPlankSurfaceTokens? {
+    val value = surfaceMaterial
+        ?.trim()
+        ?.replace('-', '_')
+        ?.uppercase()
+        ?: return null
+    return when (value) {
+        "LIGHT_WOOD_PLANKS" -> activeFloorPlanSurfaceTheme().lightWoodPlanks
+        else -> null
+    }
+}
+
+private fun FloorMapArea.stoneFloorMaterial(): FloorPlanFloorSurfaceTokens? {
+    val value = surfaceMaterial
+        ?.trim()
+        ?.replace('-', '_')
+        ?.uppercase()
+        ?: return null
+    val theme = activeFloorPlanSurfaceTheme()
+    return when (value) {
+        "PREMIUM_STONE", "DARK_WOOD_PLANKS" -> theme.floor
+        "GREY_STONE" -> theme.greyStoneFloor
+        else -> null
+    }
+}
+
+private enum class FloorPlanFloorAssetMaterial {
+    PREMIUM_STONE_LIGHT,
+    WEATHERED_120MM_PLANKS,
+}
+
+private fun FloorMapArea.floorAssetMaterial(): FloorPlanFloorAssetMaterial? {
+    val value = surfaceMaterial
+        ?.trim()
+        ?.replace('-', '_')
+        ?.uppercase()
+        ?: return null
+    return when (value) {
+        "PREMIUM_STONE", "PREMIUM_STONE_LIGHT" -> FloorPlanFloorAssetMaterial.PREMIUM_STONE_LIGHT
+        "LIGHT_WOOD_PLANKS", "WEATHERED_120MM_PLANKS" -> FloorPlanFloorAssetMaterial.WEATHERED_120MM_PLANKS
+        else -> null
+    }
+}
+
+private fun FloorMapArea.hasVerticalPlanks(): Boolean {
+    return plankDirection?.trim()?.lowercase() == "vertical"
+}
+
+private fun DrawScope.drawFloorPlanAssetAreaSurface(
+    area: FloorMapArea,
+    targetSize: Size,
+    material: FloorPlanFloorAssetMaterial,
+    premiumStoneLightAsset: ImageBitmap,
+    weatheredPlanksAsset: ImageBitmap,
+) {
+    val image = when (material) {
+        FloorPlanFloorAssetMaterial.PREMIUM_STONE_LIGHT -> premiumStoneLightAsset
+        FloorPlanFloorAssetMaterial.WEATHERED_120MM_PLANKS -> weatheredPlanksAsset
+    }
+
+    if (material == FloorPlanFloorAssetMaterial.WEATHERED_120MM_PLANKS) {
+        drawFloorPlanWeatheredPlankAssetAreaSurface(
+            area = area,
+            targetSize = targetSize,
+            weatheredPlanksAsset = weatheredPlanksAsset,
+        )
+        drawRect(
+            color = Color(0xFF7A6355).copy(alpha = 0.12f),
+            topLeft = Offset.Zero,
+            size = targetSize,
+        )
+        val weatheredTint = parseFloorPlanObjectColor(area.surfaceTint)
+        if (weatheredTint != null) {
+            drawRect(
+                color = weatheredTint.copy(alpha = 0.14f),
+                topLeft = Offset.Zero,
+                size = targetSize,
+            )
+        }
+        return
+    }
+
+    val pxPerWorldX = targetSize.width / area.widthPx.coerceAtLeast(1f)
+    val pxPerWorldY = targetSize.height / area.heightPx.coerceAtLeast(1f)
+    val pxPerMeter = area.pxPerMeter?.takeIf { it > 0f } ?: FLOOR_PLAN_DEFAULT_PX_PER_METER
+    val tileWorldSize = when (material) {
+        FloorPlanFloorAssetMaterial.WEATHERED_120MM_PLANKS -> {
+            val plankWidthWorld = ((area.plankWidthMm ?: FLOOR_PLAN_DEFAULT_PLANK_WIDTH_MM)
+                .coerceAtLeast(1)).toFloat() / 1000f * pxPerMeter
+            val plankLengthWorld = ((area.plankLengthMm ?: FLOOR_PLAN_DEFAULT_PLANK_LENGTH_MM)
+                .coerceAtLeast(1)).toFloat() / 1000f * pxPerMeter
+            val plankBandWorld = plankWidthWorld * FLOOR_PLAN_WEATHERED_PLANK_ASSET_ROW_COUNT
+            if (area.hasVerticalPlanks()) {
+                FloorPlanAssetTileWorldSize(width = plankBandWorld, height = plankLengthWorld, rotateAssetQuarterTurn = true)
+            } else {
+                FloorPlanAssetTileWorldSize(width = plankLengthWorld, height = plankBandWorld, rotateAssetQuarterTurn = false)
+            }
+        }
+        FloorPlanFloorAssetMaterial.PREMIUM_STONE_LIGHT -> {
+            val stoneWorld = FLOOR_PLAN_PREMIUM_STONE_ASSET_SIZE_MM / 1000f * pxPerMeter
+            FloorPlanAssetTileWorldSize(width = stoneWorld, height = stoneWorld, rotateAssetQuarterTurn = false)
+        }
+    }
+    val tileWidthPx = (tileWorldSize.width * pxPerWorldX).coerceAtLeast(1f)
+    val tileHeightPx = (tileWorldSize.height * pxPerWorldY).coerceAtLeast(1f)
+    val startX = -floorPlanPositiveModulo(area.xPx, tileWorldSize.width) * pxPerWorldX
+    val startY = -floorPlanPositiveModulo(area.yPx, tileWorldSize.height) * pxPerWorldY
+    drawFloorPlanTiledImage(
+        image = image,
+        targetSize = targetSize,
+        tileWidthPx = tileWidthPx,
+        tileHeightPx = tileHeightPx,
+        startX = startX,
+        startY = startY,
+        rotateAssetQuarterTurn = tileWorldSize.rotateAssetQuarterTurn,
+    )
+
+    if (material == FloorPlanFloorAssetMaterial.WEATHERED_120MM_PLANKS) {
+        drawRect(
+            color = Color(0xFF7A6355).copy(alpha = 0.12f),
+            topLeft = Offset.Zero,
+            size = targetSize,
+        )
+    }
+
+    val tint = parseFloorPlanObjectColor(area.surfaceTint)
+    if (tint != null) {
+        drawRect(
+            color = tint.copy(alpha = 0.14f),
+            topLeft = Offset.Zero,
+            size = targetSize,
+        )
+    }
+}
+
+
+private fun DrawScope.drawFloorPlanWeatheredPlankAssetAreaSurface(
+    area: FloorMapArea,
+    targetSize: Size,
+    weatheredPlanksAsset: ImageBitmap,
+) {
+    val pxPerWorldX = targetSize.width / area.widthPx.coerceAtLeast(1f)
+    val pxPerWorldY = targetSize.height / area.heightPx.coerceAtLeast(1f)
+    val pxPerMeter = area.pxPerMeter?.takeIf { it > 0f } ?: FLOOR_PLAN_DEFAULT_PX_PER_METER
+    val plankWidthWorld = ((area.plankWidthMm ?: FLOOR_PLAN_DEFAULT_PLANK_WIDTH_MM)
+        .coerceAtLeast(1)).toFloat() / 1000f * pxPerMeter
+    val plankLengthWorld = ((area.plankLengthMm ?: FLOOR_PLAN_DEFAULT_PLANK_LENGTH_MM)
+        .coerceAtLeast(1)).toFloat() / 1000f * pxPerMeter
+    if (area.hasVerticalPlanks()) {
+        drawFloorPlanVerticalWeatheredPlankAssetRows(
+            targetSize = targetSize,
+            image = weatheredPlanksAsset,
+            areaPrimaryWorld = area.yPx,
+            areaCrossWorld = area.xPx,
+            pxPerPrimaryWorld = pxPerWorldY,
+            pxPerCrossWorld = pxPerWorldX,
+            plankWidthWorld = plankWidthWorld,
+            plankLengthWorld = plankLengthWorld,
+        )
+    } else {
+        drawFloorPlanHorizontalWeatheredPlankAssetRows(
+            targetSize = targetSize,
+            image = weatheredPlanksAsset,
+            areaPrimaryWorld = area.xPx,
+            areaCrossWorld = area.yPx,
+            pxPerPrimaryWorld = pxPerWorldX,
+            pxPerCrossWorld = pxPerWorldY,
+            plankWidthWorld = plankWidthWorld,
+            plankLengthWorld = plankLengthWorld,
+        )
+    }
+}
+
+private fun DrawScope.drawFloorPlanHorizontalWeatheredPlankAssetRows(
+    targetSize: Size,
+    image: ImageBitmap,
+    areaPrimaryWorld: Float,
+    areaCrossWorld: Float,
+    pxPerPrimaryWorld: Float,
+    pxPerCrossWorld: Float,
+    plankWidthWorld: Float,
+    plankLengthWorld: Float,
+) {
+    val plankWidthPx = (plankWidthWorld * pxPerCrossWorld).coerceAtLeast(1f)
+    val plankLengthPx = (plankLengthWorld * pxPerPrimaryWorld).coerceAtLeast(1f)
+    val firstRowIndex = floor((areaCrossWorld / plankWidthWorld).toDouble()).toInt() - 1
+    val lastRowIndex = floor(((areaCrossWorld + targetSize.height / pxPerCrossWorld) / plankWidthWorld).toDouble()).toInt() + 1
+    for (rowIndex in firstRowIndex..lastRowIndex) {
+        val rowTop = (rowIndex * plankWidthWorld - areaCrossWorld) * pxPerCrossWorld
+        val rowBottom = rowTop + plankWidthPx
+        if (rowBottom <= 0f || rowTop >= targetSize.height) continue
+        val staggerWorld = floorPlanPlankStaggerFraction(rowIndex) * plankLengthWorld
+        val firstSegmentIndex = floor(((areaPrimaryWorld + staggerWorld) / plankLengthWorld).toDouble()).toInt() - 1
+        val lastSegmentIndex = floor(((areaPrimaryWorld + targetSize.width / pxPerPrimaryWorld + staggerWorld) / plankLengthWorld).toDouble()).toInt() + 1
+        for (segmentIndex in firstSegmentIndex..lastSegmentIndex) {
+            val segmentLeft = (segmentIndex * plankLengthWorld - staggerWorld - areaPrimaryWorld) * pxPerPrimaryWorld
+            val segmentRight = segmentLeft + plankLengthPx
+            if (segmentRight <= 0f || segmentLeft >= targetSize.width) continue
+            val clipLeft = segmentLeft.coerceAtLeast(0f)
+            val clipRight = segmentRight.coerceAtMost(targetSize.width)
+            val clipTop = rowTop.coerceAtLeast(0f)
+            val clipBottom = rowBottom.coerceAtMost(targetSize.height)
+            if (clipRight <= clipLeft || clipBottom <= clipTop) continue
+            val sourceRowIndex = floorPlanPositiveModuloInt(rowIndex * 5 + segmentIndex * 3, FLOOR_PLAN_WEATHERED_PLANK_ASSET_ROW_COUNT.roundToInt())
+            clipRect(left = clipLeft, top = clipTop, right = clipRight, bottom = clipBottom) {
+                drawFloorPlanWeatheredPlankAssetStrip(
+                    image = image,
+                    sourceRowIndex = sourceRowIndex,
+                    dstOffset = Offset(segmentLeft, rowTop),
+                    dstSize = Size(plankLengthPx + FLOOR_PLAN_ASSET_TILE_OVERLAP_PX, plankWidthPx + FLOOR_PLAN_ASSET_TILE_OVERLAP_PX),
+                    rotateAssetQuarterTurn = false,
+                )
+            }
+            drawWeatheredPlankButtSeam(
+                start = Offset(segmentLeft, clipTop),
+                end = Offset(segmentLeft, clipBottom),
+            )
+        }
+    }
+}
+
+private fun DrawScope.drawFloorPlanVerticalWeatheredPlankAssetRows(
+    targetSize: Size,
+    image: ImageBitmap,
+    areaPrimaryWorld: Float,
+    areaCrossWorld: Float,
+    pxPerPrimaryWorld: Float,
+    pxPerCrossWorld: Float,
+    plankWidthWorld: Float,
+    plankLengthWorld: Float,
+) {
+    val plankWidthPx = (plankWidthWorld * pxPerCrossWorld).coerceAtLeast(1f)
+    val plankLengthPx = (plankLengthWorld * pxPerPrimaryWorld).coerceAtLeast(1f)
+    val firstColumnIndex = floor((areaCrossWorld / plankWidthWorld).toDouble()).toInt() - 1
+    val lastColumnIndex = floor(((areaCrossWorld + targetSize.width / pxPerCrossWorld) / plankWidthWorld).toDouble()).toInt() + 1
+    for (columnIndex in firstColumnIndex..lastColumnIndex) {
+        val columnLeft = (columnIndex * plankWidthWorld - areaCrossWorld) * pxPerCrossWorld
+        val columnRight = columnLeft + plankWidthPx
+        if (columnRight <= 0f || columnLeft >= targetSize.width) continue
+        val staggerWorld = floorPlanPlankStaggerFraction(columnIndex) * plankLengthWorld
+        val firstSegmentIndex = floor(((areaPrimaryWorld + staggerWorld) / plankLengthWorld).toDouble()).toInt() - 1
+        val lastSegmentIndex = floor(((areaPrimaryWorld + targetSize.height / pxPerPrimaryWorld + staggerWorld) / plankLengthWorld).toDouble()).toInt() + 1
+        for (segmentIndex in firstSegmentIndex..lastSegmentIndex) {
+            val segmentTop = (segmentIndex * plankLengthWorld - staggerWorld - areaPrimaryWorld) * pxPerPrimaryWorld
+            val segmentBottom = segmentTop + plankLengthPx
+            if (segmentBottom <= 0f || segmentTop >= targetSize.height) continue
+            val clipLeft = columnLeft.coerceAtLeast(0f)
+            val clipRight = columnRight.coerceAtMost(targetSize.width)
+            val clipTop = segmentTop.coerceAtLeast(0f)
+            val clipBottom = segmentBottom.coerceAtMost(targetSize.height)
+            if (clipRight <= clipLeft || clipBottom <= clipTop) continue
+            val sourceRowIndex = floorPlanPositiveModuloInt(columnIndex * 5 + segmentIndex * 3, FLOOR_PLAN_WEATHERED_PLANK_ASSET_ROW_COUNT.roundToInt())
+            clipRect(left = clipLeft, top = clipTop, right = clipRight, bottom = clipBottom) {
+                drawFloorPlanWeatheredPlankAssetStrip(
+                    image = image,
+                    sourceRowIndex = sourceRowIndex,
+                    dstOffset = Offset(columnLeft, segmentTop),
+                    dstSize = Size(plankWidthPx + FLOOR_PLAN_ASSET_TILE_OVERLAP_PX, plankLengthPx + FLOOR_PLAN_ASSET_TILE_OVERLAP_PX),
+                    rotateAssetQuarterTurn = true,
+                )
+            }
+            drawWeatheredPlankButtSeam(
+                start = Offset(clipLeft, segmentTop),
+                end = Offset(clipRight, segmentTop),
+            )
+        }
+    }
+}
+
+private fun DrawScope.drawFloorPlanWeatheredPlankAssetStrip(
+    image: ImageBitmap,
+    sourceRowIndex: Int,
+    dstOffset: Offset,
+    dstSize: Size,
+    rotateAssetQuarterTurn: Boolean,
+) {
+    val sourceRowCount = FLOOR_PLAN_WEATHERED_PLANK_ASSET_ROW_COUNT.roundToInt().coerceAtLeast(1)
+    val safeSourceRowIndex = floorPlanPositiveModuloInt(sourceRowIndex, sourceRowCount)
+    val sourceTop = (safeSourceRowIndex * image.height) / sourceRowCount
+    val sourceBottom = ((safeSourceRowIndex + 1) * image.height) / sourceRowCount
+    val sourceHeight = (sourceBottom - sourceTop).coerceAtLeast(1)
+    val drawWidth = dstSize.width.roundToInt().coerceAtLeast(1)
+    val drawHeight = dstSize.height.roundToInt().coerceAtLeast(1)
+    if (rotateAssetQuarterTurn) {
+        withTransform({
+            translate(left = dstOffset.x, top = dstOffset.y)
+            rotate(
+                degrees = 90f,
+                pivot = Offset(drawWidth / 2f, drawHeight / 2f),
+            )
+        }) {
+            drawImage(
+                image = image,
+                srcOffset = IntOffset(0, sourceTop),
+                srcSize = IntSize(image.width, sourceHeight),
+                dstOffset = IntOffset(((drawWidth - drawHeight) / 2f).roundToInt(), ((drawHeight - drawWidth) / 2f).roundToInt()),
+                dstSize = IntSize(drawHeight, drawWidth),
+                filterQuality = FilterQuality.High,
+            )
+        }
+    } else {
+        drawImage(
+            image = image,
+            srcOffset = IntOffset(0, sourceTop),
+            srcSize = IntSize(image.width, sourceHeight),
+            dstOffset = IntOffset(dstOffset.x.roundToInt(), dstOffset.y.roundToInt()),
+            dstSize = IntSize(drawWidth, drawHeight),
+            filterQuality = FilterQuality.High,
+        )
+    }
+}
+
+private fun DrawScope.drawWeatheredPlankButtSeam(
+    start: Offset,
+    end: Offset,
+) {
+    if (start.x == end.x && (start.x <= 0f || start.x >= size.width)) return
+    if (start.y == end.y && (start.y <= 0f || start.y >= size.height)) return
+    val seamWidth = max(0.32f, 0.46.dp.toPx())
+    drawLine(
+        color = Color(0xFF1F1A17).copy(alpha = 0.26f),
+        start = start,
+        end = end,
+        strokeWidth = seamWidth,
+    )
+    val highlightOffset = if (start.x == end.x) Offset(seamWidth, 0f) else Offset(0f, seamWidth)
+    drawLine(
+        color = Color.White.copy(alpha = 0.035f),
+        start = start + highlightOffset,
+        end = end + highlightOffset,
+        strokeWidth = max(0.22f, seamWidth * 0.55f),
+    )
+}
+
+private fun floorPlanPositiveModuloInt(value: Int, period: Int): Int {
+    val safePeriod = period.takeIf { it > 0 } ?: return 0
+    val result = value % safePeriod
+    return if (result < 0) result + safePeriod else result
+}
+
+private data class FloorPlanAssetTileWorldSize(
+    val width: Float,
+    val height: Float,
+    val rotateAssetQuarterTurn: Boolean,
+)
+
+private fun floorPlanPositiveModulo(value: Float, period: Float): Float {
+    val safePeriod = period.takeIf { it > 0f } ?: return 0f
+    val result = value % safePeriod
+    return if (result < 0f) result + safePeriod else result
+}
+
+private fun DrawScope.drawFloorPlanTiledImage(
+    image: ImageBitmap,
+    targetSize: Size,
+    tileWidthPx: Float,
+    tileHeightPx: Float,
+    startX: Float,
+    startY: Float,
+    rotateAssetQuarterTurn: Boolean,
+) {
+    val drawWidth = tileWidthPx.roundToInt().coerceAtLeast(1) + 1
+    val drawHeight = tileHeightPx.roundToInt().coerceAtLeast(1) + 1
+    val stepX = (tileWidthPx - FLOOR_PLAN_ASSET_TILE_OVERLAP_PX).coerceAtLeast(1f)
+    val stepY = (tileHeightPx - FLOOR_PLAN_ASSET_TILE_OVERLAP_PX).coerceAtLeast(1f)
+    var y = startY
+    while (y < targetSize.height) {
+        var x = startX
+        while (x < targetSize.width) {
+            if (rotateAssetQuarterTurn) {
+                withTransform({
+                    translate(left = x, top = y)
+                    rotate(
+                        degrees = 90f,
+                        pivot = Offset(drawWidth / 2f, drawHeight / 2f),
+                    )
+                }) {
+                    drawImage(
+                        image = image,
+                        srcOffset = IntOffset(0, 0),
+                        srcSize = IntSize(image.width, image.height),
+                        dstOffset = IntOffset(((drawWidth - drawHeight) / 2f).roundToInt(), ((drawHeight - drawWidth) / 2f).roundToInt()),
+                        dstSize = IntSize(drawHeight, drawWidth),
+                        filterQuality = FilterQuality.High,
+                    )
+                }
+            } else {
+                withTransform({ translate(left = x, top = y) }) {
+                    drawImage(
+                        image = image,
+                        srcOffset = IntOffset(0, 0),
+                        srcSize = IntSize(image.width, image.height),
+                        dstOffset = IntOffset.Zero,
+                        dstSize = IntSize(drawWidth, drawHeight),
+                        filterQuality = FilterQuality.High,
+                    )
+                }
+            }
+            x += stepX
+        }
+        y += stepY
+    }
+}
+
+private fun DrawScope.drawFloorPlanStoneAreaSurface(
+    targetSize: Size,
+    material: FloorPlanFloorSurfaceTokens,
+    stroke: Float,
+    cornerRadius: CornerRadius? = null,
+) {
+    val width = targetSize.width.coerceAtLeast(1f)
+    val height = targetSize.height.coerceAtLeast(1f)
+    val baseBrush = Brush.linearGradient(
+        colors = listOf(material.baseTop, material.baseMiddle, material.baseBottom),
+        start = Offset.Zero,
+        end = Offset(width * 0.72f, height),
+    )
+    if (cornerRadius != null) {
+        drawRoundRect(brush = baseBrush, topLeft = Offset.Zero, size = targetSize, cornerRadius = cornerRadius)
+    } else {
+        drawRect(brush = baseBrush, topLeft = Offset.Zero, size = targetSize)
+    }
+
+    fun drawStoneOverlay(brush: Brush) {
+        if (cornerRadius != null) {
+            drawRoundRect(brush = brush, topLeft = Offset.Zero, size = targetSize, cornerRadius = cornerRadius)
+        } else {
+            drawRect(brush = brush, topLeft = Offset.Zero, size = targetSize)
+        }
+    }
+
+    val maxDim = max(width, height)
+    drawStoneOverlay(
+        Brush.radialGradient(
+            colors = listOf(material.plankHighlight.copy(alpha = 0.12f), Color.Transparent),
+            center = Offset(width * 0.18f, height * 0.24f),
+            radius = maxDim * 0.52f,
+        ),
+    )
+    drawStoneOverlay(
+        Brush.radialGradient(
+            colors = listOf(material.plankShadow.copy(alpha = 0.18f), Color.Transparent),
+            center = Offset(width * 0.78f, height * 0.62f),
+            radius = maxDim * 0.58f,
+        ),
+    )
+    drawStoneOverlay(
+        Brush.radialGradient(
+            colors = listOf(material.grain.copy(alpha = material.grain.alpha * 0.78f), Color.Transparent),
+            center = Offset(width * 0.48f, height * 0.86f),
+            radius = maxDim * 0.46f,
+        ),
+    )
+
+    val veinStroke = max(0.28f, min(stroke * 0.46f, 0.58.dp.toPx()))
+    fun drawStoneVein(
+        start: Offset,
+        control: Offset,
+        end: Offset,
+        color: Color,
+        strokeWidth: Float,
+    ) {
+        val path = Path().apply {
+            moveTo(start.x, start.y)
+            quadraticBezierTo(control.x, control.y, end.x, end.y)
+        }
+        drawPath(path = path, color = color, style = Stroke(width = strokeWidth))
+    }
+
+    drawStoneVein(
+        start = Offset(-width * 0.08f, height * 0.25f),
+        control = Offset(width * 0.34f, height * 0.10f),
+        end = Offset(width * 1.05f, height * 0.42f),
+        color = material.grain.copy(alpha = material.grain.alpha * 0.72f),
+        strokeWidth = veinStroke,
+    )
+    drawStoneVein(
+        start = Offset(width * 0.08f, height * 0.78f),
+        control = Offset(width * 0.42f, height * 0.64f),
+        end = Offset(width * 0.92f, height * 0.92f),
+        color = material.plankSeam.copy(alpha = material.plankSeam.alpha * 0.42f),
+        strokeWidth = max(0.24f, veinStroke * 0.82f),
+    )
+    drawStoneVein(
+        start = Offset(width * 0.62f, -height * 0.05f),
+        control = Offset(width * 0.70f, height * 0.34f),
+        end = Offset(width * 0.42f, height * 1.04f),
+        color = material.plankHighlight.copy(alpha = material.plankHighlight.alpha * 0.36f),
+        strokeWidth = max(0.22f, veinStroke * 0.65f),
+    )
+
+    if (cornerRadius != null) {
+        drawRoundRect(
+            brush = Brush.radialGradient(
+                colors = listOf(Color.Transparent, material.vignette),
+                center = Offset(width * 0.50f, height * 0.50f),
+                radius = max(width, height) * 0.78f,
+            ),
+            topLeft = Offset.Zero,
+            size = targetSize,
+            cornerRadius = cornerRadius,
+        )
+    } else {
+        drawRect(
+            brush = Brush.radialGradient(
+                colors = listOf(Color.Transparent, material.vignette),
+                center = Offset(width * 0.50f, height * 0.50f),
+                radius = max(width, height) * 0.78f,
+            ),
+            topLeft = Offset.Zero,
+            size = targetSize,
+        )
+    }
+}
+
+private fun floorPlanMaterialTone(index: Int): Float {
+    val bucket = ((index * 37 + 11) % 17).toFloat() / 16f
+    return bucket * 2f - 1f
+}
+
+private fun floorPlanPlankSegmentScale(index: Int): Float {
+    val bucket = ((index * 29 + 7) % 9).toFloat() / 8f
+    return 0.84f + bucket * 0.28f
+}
+
+private fun floorPlanPlankStaggerFraction(index: Int): Float {
+    return ((index * 43 + 17) % 100).toFloat() / 100f
+}
+
+private fun DrawScope.drawFloorPlanWoodPlankAreaSurface(
+    area: FloorMapArea,
+    targetSize: Size,
+    material: FloorPlanLightWoodPlankSurfaceTokens,
+    stroke: Float,
+    verticalPlanks: Boolean = false,
+) {
+    val width = targetSize.width.coerceAtLeast(1f)
+    val height = targetSize.height.coerceAtLeast(1f)
+    val worldWidth = area.widthPx.coerceAtLeast(1f)
+    val worldHeight = area.heightPx.coerceAtLeast(1f)
+    val pxPerWorldX = width / worldWidth
+    val pxPerWorldY = height / worldHeight
+    val plankWorldWidth = ((area.plankWidthMm ?: FLOOR_PLAN_DEFAULT_PLANK_WIDTH_MM)
+        .coerceAtLeast(1)).toFloat() / FLOOR_PLAN_WORLD_UNIT_MM
+    val plankWorldLength = ((area.plankLengthMm ?: FLOOR_PLAN_DEFAULT_PLANK_LENGTH_MM)
+        .coerceAtLeast(1)).toFloat() / FLOOR_PLAN_WORLD_UNIT_MM
+    val plankHeight = floorPlanClamp(plankWorldWidth * pxPerWorldY, 5f, 34f)
+    val plankLength = floorPlanClamp(plankWorldLength * pxPerWorldX, 48f, width.coerceAtLeast(48f))
+    val seamStroke = max(0.65f, min(stroke, 1.45.dp.toPx()))
+    val highlightStroke = max(0.35f, min(stroke * 0.60f, 0.80.dp.toPx()))
+
+    drawRect(
+        brush = Brush.verticalGradient(
+            colors = listOf(material.baseTop, material.baseMiddle, material.baseBottom),
+            startY = 0f,
+            endY = height,
+        ),
+        topLeft = Offset.Zero,
+        size = targetSize,
+    )
+
+    if (verticalPlanks) {
+        val plankColWidth = floorPlanClamp(plankWorldWidth * pxPerWorldX, 5f, 34f)
+        val plankColLength = floorPlanClamp(plankWorldLength * pxPerWorldY, 48f, height.coerceAtLeast(48f))
+        var colLeft = 0f
+        var colIndex = 0
+        while (colLeft < width) {
+            val colRight = (colLeft + plankColWidth).coerceAtMost(width)
+            val tone = floorPlanMaterialTone(colIndex)
+            val plankTint = if (tone >= 0f) {
+                material.grainLight.copy(alpha = 0.030f + tone * 0.040f)
+            } else {
+                material.grainDark.copy(alpha = 0.018f + -tone * 0.028f)
+            }
+            drawRect(
+                color = plankTint,
+                topLeft = Offset(colLeft, 0f),
+                size = Size(colRight - colLeft, height),
+            )
+            if (colLeft > 0f) {
+                drawLine(
+                    color = material.seam,
+                    start = Offset(colLeft, 0f),
+                    end = Offset(colLeft, height),
+                    strokeWidth = seamStroke,
+                )
+                drawLine(
+                    color = material.seamHighlight,
+                    start = Offset(colLeft + seamStroke, 0f),
+                    end = Offset(colLeft + seamStroke, height),
+                    strokeWidth = highlightStroke,
+                )
+            }
+            val segmentLength = plankColLength * floorPlanPlankSegmentScale(colIndex)
+            val stagger = -segmentLength * floorPlanPlankStaggerFraction(colIndex)
+            var y = stagger
+            while (y < height) {
+                if (y > 0f) {
+                    drawLine(
+                        color = material.seam.copy(alpha = material.seam.alpha * 0.78f),
+                        start = Offset(colLeft, y),
+                        end = Offset(colRight, y),
+                        strokeWidth = seamStroke,
+                    )
+                    drawLine(
+                        color = material.seamHighlight.copy(alpha = material.seamHighlight.alpha * 0.76f),
+                        start = Offset(colLeft, y + seamStroke),
+                        end = Offset(colRight, y + seamStroke),
+                        strokeWidth = highlightStroke,
+                    )
+                }
+                y += segmentLength
+            }
+            val grainX = colLeft + (colRight - colLeft) * 0.55f
+            drawLine(
+                color = material.grainDark.copy(alpha = material.grainDark.alpha * (0.70f + abs(tone) * 0.30f)),
+                start = Offset(grainX, 12f),
+                end = Offset(grainX + tone * 1.8f, height - 12f),
+                strokeWidth = max(0.35f, 0.42.dp.toPx()),
+            )
+            drawLine(
+                color = material.grainLight.copy(alpha = 0.075f + max(tone, 0f) * 0.030f),
+                start = Offset(colLeft + (colRight - colLeft) * 0.28f, 8f),
+                end = Offset(colLeft + (colRight - colLeft) * (0.34f + tone * 0.035f), height - 10f),
+                strokeWidth = max(0.25f, 0.30.dp.toPx()),
+            )
+            colLeft += plankColWidth
+            colIndex += 1
+        }
+        drawRect(
+            brush = Brush.radialGradient(
+                colors = listOf(Color.Transparent, material.edge.copy(alpha = material.edge.alpha * 0.34f)),
+                center = Offset(width * 0.5f, height * 0.5f),
+                radius = max(width, height) * 0.72f,
+            ),
+            topLeft = Offset.Zero,
+            size = targetSize,
+        )
+        return
+    }
+
+    var rowTop = 0f
+    var rowIndex = 0
+    while (rowTop < height) {
+        val rowBottom = (rowTop + plankHeight).coerceAtMost(height)
+        val tone = floorPlanMaterialTone(rowIndex)
+        val plankTint = if (tone >= 0f) {
+            material.grainLight.copy(alpha = 0.030f + tone * 0.040f)
+        } else {
+            material.grainDark.copy(alpha = 0.018f + -tone * 0.028f)
+        }
+        drawRect(
+            color = plankTint,
+            topLeft = Offset(0f, rowTop),
+            size = Size(width, rowBottom - rowTop),
+        )
+
+        if (rowTop > 0f) {
+            drawLine(
+                color = material.seam,
+                start = Offset(0f, rowTop),
+                end = Offset(width, rowTop),
+                strokeWidth = seamStroke,
+            )
+            drawLine(
+                color = material.seamHighlight,
+                start = Offset(0f, rowTop + seamStroke),
+                end = Offset(width, rowTop + seamStroke),
+                strokeWidth = highlightStroke,
+            )
+        }
+
+        val segmentLength = plankLength * floorPlanPlankSegmentScale(rowIndex)
+        val stagger = -segmentLength * floorPlanPlankStaggerFraction(rowIndex)
+        var x = stagger
+        while (x < width) {
+            if (x > 0f) {
+                drawLine(
+                    color = material.seam.copy(alpha = material.seam.alpha * 0.78f),
+                    start = Offset(x, rowTop),
+                    end = Offset(x, rowBottom),
+                    strokeWidth = seamStroke,
+                )
+                drawLine(
+                    color = material.seamHighlight.copy(alpha = material.seamHighlight.alpha * 0.76f),
+                    start = Offset(x + seamStroke, rowTop),
+                    end = Offset(x + seamStroke, rowBottom),
+                    strokeWidth = highlightStroke,
+                )
+            }
+            x += segmentLength
+        }
+
+        val grainY = rowTop + (rowBottom - rowTop) * 0.55f
+        drawLine(
+            color = material.grainDark.copy(alpha = material.grainDark.alpha * (0.70f + abs(tone) * 0.30f)),
+            start = Offset(12f, grainY),
+            end = Offset(width - 12f, grainY + tone * 1.8f),
+            strokeWidth = max(0.35f, 0.42.dp.toPx()),
+        )
+        drawLine(
+            color = material.grainLight.copy(alpha = 0.075f + max(tone, 0f) * 0.030f),
+            start = Offset(8f, rowTop + (rowBottom - rowTop) * 0.30f),
+            end = Offset(width - 10f, rowTop + (rowBottom - rowTop) * (0.36f + tone * 0.035f)),
+            strokeWidth = max(0.25f, 0.30.dp.toPx()),
+        )
+
+        rowTop += plankHeight
+        rowIndex += 1
+    }
+
+    drawRect(
+        brush = Brush.radialGradient(
+            colors = listOf(Color.Transparent, material.edge.copy(alpha = material.edge.alpha * 0.30f)),
+            center = Offset(width * 0.5f, height * 0.5f),
+            radius = max(width, height) * 0.74f,
+        ),
+        topLeft = Offset.Zero,
+        size = targetSize,
+    )
+
+}
+
 private fun areaSurfaceBorderColor(area: FloorMapArea): Color {
     return when (area.areaType?.lowercase()) {
         "kitchen" -> Color(0xFFB6922F)
@@ -1049,7 +1935,7 @@ private fun FloorMapObject.editorVisualHeightPx(worldScreen: FloorPlanRect): Flo
 
 private fun FloorMapObject.shouldRenderInWorldObjectLayer(): Boolean {
     return when (type.lowercase()) {
-        "wall", "bar-counter" -> true
+        "wall" -> true
         else -> false
     }
 }
@@ -1116,17 +2002,38 @@ private fun DrawScope.drawFloorPlanWorldObjectShape(
                 topLeft = Offset.Zero,
                 targetSize = targetSize,
                 stroke = stroke,
+                barDeskMaterial = floorObject.barDeskMaterial,
+                barDeskGrainRotationDeg = floorObject.barDeskGrainRotationDeg,
             )
         }
     }
+}
+
+private fun resolveFloorPlanBarCounterMaterial(barDeskMaterial: String?): FloorPlanBarCounterSurfaceTokens {
+    val value = normalizedFloorPlanBarDeskMaterial(barDeskMaterial)
+    val theme = activeFloorPlanSurfaceTheme()
+    return when (value) {
+        "DARK_STONE" -> theme.darkStoneBarCounter
+        else -> theme.barCounter
+    }
+}
+
+private fun normalizedFloorPlanBarDeskMaterial(barDeskMaterial: String?): String? {
+    return barDeskMaterial
+        ?.trim()
+        ?.replace('-', '_')
+        ?.uppercase()
 }
 
 private fun DrawScope.drawFloorPlanBarCounterSurface(
     topLeft: Offset,
     targetSize: Size,
     stroke: Float,
+    barDeskMaterial: String? = null,
+    barDeskGrainRotationDeg: Float? = null,
 ) {
-    val material = activeFloorPlanSurfaceTheme().barCounter
+    val material = resolveFloorPlanBarCounterMaterial(barDeskMaterial)
+    val isStone = normalizedFloorPlanBarDeskMaterial(barDeskMaterial) == "DARK_STONE"
     val width = targetSize.width.coerceAtLeast(1f)
     val height = targetSize.height.coerceAtLeast(1f)
     val minDim = min(width, height)
@@ -1194,22 +2101,67 @@ private fun DrawScope.drawFloorPlanBarCounterSurface(
         cornerRadius = radius,
     )
 
-    drawFloorPlanWoodGrainLines(
-        topLeft = topLeft,
-        targetSize = topBandSize,
-        horizontal = horizontalGrain,
-        subtle = false,
-        grainLight = material.grainLight,
-        grainDark = material.grainDark,
-    )
-    drawFloorPlanWoodGrainLines(
-        topLeft = frontBandTopLeft,
-        targetSize = frontBandSize,
-        horizontal = horizontalGrain,
-        subtle = true,
-        grainLight = material.grainLight,
-        grainDark = material.grainDark,
-    )
+    if (isStone) {
+        drawRoundRect(
+            brush = Brush.radialGradient(
+                colors = listOf(material.grainLight.copy(alpha = 0.09f), Color.Transparent),
+                center = if (horizontalGrain) {
+                    Offset(topLeft.x + topBandSize.width * 0.22f, topLeft.y + topBandSize.height * 0.30f)
+                } else {
+                    Offset(topLeft.x + topBandSize.width * 0.30f, topLeft.y + topBandSize.height * 0.22f)
+                },
+                radius = max(topBandSize.width, topBandSize.height) * 0.62f,
+            ),
+            topLeft = topLeft,
+            size = topBandSize,
+            cornerRadius = radius,
+        )
+        drawRoundRect(
+            brush = Brush.radialGradient(
+                colors = listOf(material.grainDark.copy(alpha = 0.20f), Color.Transparent),
+                center = if (horizontalGrain) {
+                    Offset(topLeft.x + topBandSize.width * 0.86f, topLeft.y + topBandSize.height * 0.70f)
+                } else {
+                    Offset(topLeft.x + topBandSize.width * 0.70f, topLeft.y + topBandSize.height * 0.86f)
+                },
+                radius = max(topBandSize.width, topBandSize.height) * 0.58f,
+            ),
+            topLeft = topLeft,
+            size = topBandSize,
+            cornerRadius = radius,
+        )
+        drawFloorPlanCounterStoneVeins(
+            topLeft = topLeft,
+            targetSize = topBandSize,
+            horizontal = horizontalGrain,
+            veinLight = material.grainLight,
+            veinDark = material.grainDark,
+        )
+        drawFloorPlanCounterStoneVeins(
+            topLeft = frontBandTopLeft,
+            targetSize = frontBandSize,
+            horizontal = horizontalGrain,
+            veinLight = material.grainLight.copy(alpha = material.grainLight.alpha * 0.55f),
+            veinDark = material.grainDark.copy(alpha = 0.42f),
+        )
+    } else {
+        drawFloorPlanWoodGrainLines(
+            topLeft = topLeft,
+            targetSize = topBandSize,
+            horizontal = horizontalGrain,
+            subtle = false,
+            grainLight = material.grainLight,
+            grainDark = material.grainDark,
+        )
+        drawFloorPlanWoodGrainLines(
+            topLeft = frontBandTopLeft,
+            targetSize = frontBandSize,
+            horizontal = horizontalGrain,
+            subtle = true,
+            grainLight = material.grainLight,
+            grainDark = material.grainDark,
+        )
+    }
 
     val seamStroke = max(stroke, minDim * 0.020f)
     if (horizontalGrain) {
@@ -1264,13 +2216,54 @@ private fun DrawScope.drawFloorPlanBarCounterSurface(
         end = Offset(topLeft.x + width - railInset, topLeft.y + height - railInset),
         strokeWidth = railStroke,
     )
-    drawRoundRect(
-        color = material.edge,
-        topLeft = topLeft,
-        size = Size(width, height),
-        cornerRadius = radius,
-        style = Stroke(width = max(stroke, minDim * 0.018f)),
-    )
+}
+
+private fun DrawScope.drawFloorPlanCounterStoneVeins(
+    topLeft: Offset,
+    targetSize: Size,
+    horizontal: Boolean,
+    veinLight: Color,
+    veinDark: Color,
+) {
+    val width = targetSize.width.coerceAtLeast(1f)
+    val height = targetSize.height.coerceAtLeast(1f)
+    val longSide = if (horizontal) width else height
+    val shortSide = if (horizontal) height else width
+    val veinCount = max(3, (longSide / 86f).toInt())
+    for (index in 0..veinCount) {
+        val progress = index.toFloat() / veinCount.toFloat()
+        val offsetFraction = 0.18f + (((index * 31 + 9) % 59).toFloat() / 100f)
+        val offset = offsetFraction * shortSide
+        val wobble = (((index * 17 + 5) % 21).toFloat() - 10f) * 0.42f
+        val color = if (index % 3 == 0) {
+            veinLight.copy(alpha = veinLight.alpha * 0.58f)
+        } else {
+            veinDark.copy(alpha = 0.26f)
+        }
+        val strokeWidth = max(0.28f, 0.42.dp.toPx())
+        val path = Path()
+        if (horizontal) {
+            val startX = topLeft.x + width * progress - 18f
+            path.moveTo(startX, topLeft.y + offset)
+            path.quadraticBezierTo(
+                startX + width * 0.17f,
+                topLeft.y + offset + wobble,
+                startX + width * 0.42f,
+                topLeft.y + offset - wobble * 0.62f,
+            )
+        } else {
+            val startY = topLeft.y + height * progress - 18f
+            path.moveTo(topLeft.x + offset, startY)
+            path.quadraticBezierTo(
+                topLeft.x + offset + wobble,
+                startY + height * 0.17f,
+                topLeft.x + offset - wobble * 0.62f,
+                startY + height * 0.42f,
+            )
+        }
+        drawPath(path = path, color = veinDark.copy(alpha = 0.16f), style = Stroke(width = strokeWidth * 1.8f))
+        drawPath(path = path, color = color, style = Stroke(width = strokeWidth))
+    }
 }
 
 @Composable
@@ -1318,6 +2311,38 @@ private fun FloorPlanObjectNode(
                 screenWidthPx = objectWidthPx,
             )
         }
+        "armchair" -> {
+            Box(modifier = baseModifier.requiredSize(widthDp, heightDp)) {
+                FloorPlanPremiumArmchairAssetSurface(
+                    backrestDirection = floorObject.backrestDirection,
+                    objectColor = parseFloorPlanObjectColor(floorObject.color),
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+        "chair" -> {
+            Box(modifier = baseModifier.requiredSize(widthDp, heightDp)) {
+                if (floorObject.chairStyle == FloorPlanChairStyle.TERRACE_POLY_RATTAN) {
+                    FloorPlanPolyRattanDarkChairAssetSurface(
+                        backrestDirection = floorObject.backrestDirection,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else {
+                    FloorPlanLabeledObjectSurface(
+                        label = floorObject.label,
+                        widthDp = widthDp,
+                        heightDp = heightDp,
+                        screenWidthPx = objectWidthPx,
+                        modifier = Modifier,
+                        objectType = objectType,
+                        objectColorHex = floorObject.color,
+                        objectBackrestDirection = floorObject.backrestDirection,
+                        objectArmrestMode = floorObject.armrestMode,
+                        showLabel = false,
+                    )
+                }
+            }
+        }
         "sofa", "couch" -> {
             Box(modifier = baseModifier.requiredSize(widthDp, heightDp)) {
                 FloorPlanSofaSurface(
@@ -1325,9 +2350,38 @@ private fun FloorPlanObjectNode(
                     backrestDirection = floorObject.backrestDirection,
                     armrestMode = floorObject.armrestMode,
                     seatCount = floorObject.capacity,
+                    objectColorHex = floorObject.color,
+                    cushionColorHex = floorObject.cushionColor,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
+        }
+        "plant" -> {
+            Box(modifier = baseModifier.requiredSize(widthDp, heightDp)) {
+                FloorPlanPlantAssetSurface(
+                    plantStyle = floorObject.plantStyle,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+        "pos-terminal" -> {
+            Box(modifier = baseModifier.requiredSize(widthDp, heightDp)) {
+                FloorPlanDeviceAssetSurface(
+                    deviceStyle = floorObject.deviceStyle,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+        "bar-counter" -> {
+            FloorPlanBarCounterObjectSurface(
+                label = floorObject.label,
+                widthDp = widthDp,
+                heightDp = heightDp,
+                screenWidthPx = objectWidthPx,
+                modifier = baseModifier,
+                barDeskMaterial = floorObject.barDeskMaterial,
+                barDeskGrainRotationDeg = floorObject.barDeskGrainRotationDeg,
+            )
         }
         else -> {
             FloorPlanLabeledObjectSurface(
@@ -1338,6 +2392,7 @@ private fun FloorPlanObjectNode(
                 modifier = baseModifier,
                 objectType = objectType,
                 objectColorHex = floorObject.color,
+                objectBarDeskMaterial = floorObject.barDeskMaterial,
                 objectBackrestDirection = floorObject.backrestDirection,
                 objectArmrestMode = floorObject.armrestMode,
                 showLabel = objectType != "wall" && objectType != "door" &&
@@ -1356,14 +2411,22 @@ private fun FloorPlanSofaSurface(
     backrestDirection: String?,
     armrestMode: String?,
     seatCount: Int?,
+    objectColorHex: String?,
+    cushionColorHex: String?,
     modifier: Modifier = Modifier,
 ) {
     val resolvedSofaStyle = sofaStyle ?: FloorPlanSofaStyle.PREMIUM_LEATHER
     val normalizedArmrestMode = normalizeFloorPlanSofaArmrestMode(armrestMode)
+    val objectColor = parseFloorPlanObjectColor(objectColorHex)
+    val cushionColor = parseFloorPlanObjectColor(cushionColorHex)
     when (resolvedSofaStyle) {
         FloorPlanSofaStyle.PREMIUM_LEATHER -> {
             FloorPlanLeatherSofaAssetSurface(
                 backrestDirection = backrestDirection,
+                armrestMode = normalizedArmrestMode,
+                seatCount = seatCount,
+                objectColor = objectColor,
+                cushionColor = cushionColor,
                 modifier = modifier,
             )
         }
@@ -1372,6 +2435,22 @@ private fun FloorPlanSofaSurface(
                 backrestDirection = backrestDirection,
                 armrestMode = normalizedArmrestMode,
                 seatCount = seatCount,
+                objectColor = objectColor,
+                cushionColor = cushionColor,
+                modifier = modifier,
+            )
+        }
+        FloorPlanSofaStyle.BOOTH_STRAIGHT_2SEAT_NO_ARMS -> {
+            FloorPlanBoothSofaAssetSurface(
+                drawableId = R.drawable.sofa_booth_straight_2seat_no_arms_topdown_v1,
+                backrestDirection = backrestDirection,
+                modifier = modifier,
+            )
+        }
+        FloorPlanSofaStyle.BOOTH_CURVED_NO_ARMS -> {
+            FloorPlanBoothSofaAssetSurface(
+                drawableId = R.drawable.sofa_booth_curved_no_arms_topdown_v1,
+                backrestDirection = backrestDirection,
                 modifier = modifier,
             )
         }
@@ -1381,9 +2460,17 @@ private fun FloorPlanSofaSurface(
 @Composable
 private fun FloorPlanLeatherSofaAssetSurface(
     backrestDirection: String?,
+    armrestMode: String,
+    seatCount: Int?,
+    objectColor: Color?,
+    cushionColor: Color?,
     modifier: Modifier = Modifier,
 ) {
-    val sofaAsset = ImageBitmap.imageResource(id = R.drawable.sofa2_premium_topdown_asset_v2)
+    val premiumAsset = premiumLeatherSofaAssetSpec(
+        seatCount = seatCount,
+        armrestMode = armrestMode,
+    )
+    val sofaAsset = ImageBitmap.imageResource(id = premiumAsset.drawableId)
     Canvas(modifier = modifier) {
         val localRotationDeg = sofaAssetLocalRotationDeg(backrestDirection)
         val canvasWidth = size.width.coerceAtLeast(1f)
@@ -1408,10 +2495,204 @@ private fun FloorPlanLeatherSofaAssetSurface(
                 )
             }
         }) {
+            fun drawPremiumAsset(
+                colorFilter: ColorFilter? = null,
+                alpha: Float = 1f,
+            ) {
+                drawFloorPlanSeatingAssetImage(
+                    image = sofaAsset,
+                    assetSpec = premiumAsset,
+                    dstOffset = drawOffset,
+                    dstSize = drawSize,
+                    alpha = alpha,
+                    colorFilter = colorFilter,
+                )
+            }
+
+            drawPremiumAsset()
+
+            if (objectColor != null && !premiumAsset.hasOpaqueWhiteMatte) {
+                drawPremiumAsset(
+                    colorFilter = ColorFilter.tint(objectColor, BlendMode.SrcIn),
+                    alpha = 0.30f,
+                )
+            }
+
+            if (cushionColor != null && !premiumAsset.hasOpaqueWhiteMatte) {
+                val left = drawOffset.x + drawWidth * 0.18f
+                val top = drawOffset.y + drawHeight * 0.40f
+                val right = drawOffset.x + drawWidth * 0.82f
+                val bottom = drawOffset.y + drawHeight * 0.84f
+                clipRect(left = left, top = top, right = right, bottom = bottom) {
+                    drawPremiumAsset(
+                        colorFilter = ColorFilter.tint(cushionColor, BlendMode.SrcIn),
+                        alpha = 0.46f,
+                    )
+                }
+            }
+        }
+    }
+}
+
+private data class FloorPlanSeatingAssetSpec(
+    val drawableId: Int,
+    val sourceOffset: IntOffset = IntOffset(0, 0),
+    val sourceSize: IntSize? = null,
+    val hasOpaqueWhiteMatte: Boolean = false,
+)
+
+private fun premiumLeatherSofaAssetSpec(
+    seatCount: Int?,
+    armrestMode: String,
+): FloorPlanSeatingAssetSpec {
+    val normalizedSeatCount = (seatCount ?: 2).coerceAtLeast(1)
+    return if (normalizedSeatCount <= 2) {
+        when (armrestMode) {
+            "left-only" -> FloorPlanSeatingAssetSpec(
+                drawableId = R.drawable.sofa_premium_2seat_topdown_left_v1,
+                sourceOffset = IntOffset(201, 376),
+                sourceSize = IntSize(824, 516),
+                hasOpaqueWhiteMatte = true,
+            )
+            "right-only" -> FloorPlanSeatingAssetSpec(
+                drawableId = R.drawable.sofa_premium_2seat_topdown_right_v1,
+                sourceOffset = IntOffset(0, 0),
+                sourceSize = IntSize(1095, 876),
+                hasOpaqueWhiteMatte = true,
+            )
+            "none" -> FloorPlanSeatingAssetSpec(R.drawable.sofa2_premium_topdown_asset_v2)
+            else -> FloorPlanSeatingAssetSpec(
+                drawableId = R.drawable.sofa_premium_2seat_topdown_both_v1,
+                sourceOffset = IntOffset(170, 337),
+                sourceSize = IntSize(926, 512),
+                hasOpaqueWhiteMatte = true,
+            )
+        }
+    } else {
+        when (armrestMode) {
+            "left-only" -> FloorPlanSeatingAssetSpec(
+                drawableId = R.drawable.sofa_premium_3seat_topdown_left_v1,
+                sourceOffset = IntOffset(71, 366),
+                sourceSize = IntSize(1106, 503),
+                hasOpaqueWhiteMatte = true,
+            )
+            "right-only" -> FloorPlanSeatingAssetSpec(
+                drawableId = R.drawable.sofa_premium_3seat_topdown_right_v1,
+                sourceOffset = IntOffset(101, 383),
+                sourceSize = IntSize(1063, 484),
+                hasOpaqueWhiteMatte = true,
+            )
+            "none" -> FloorPlanSeatingAssetSpec(
+                drawableId = R.drawable.sofa_premium_3seat_topdown_none_v1,
+                sourceOffset = IntOffset(149, 372),
+                sourceSize = IntSize(974, 486),
+                hasOpaqueWhiteMatte = true,
+            )
+            else -> FloorPlanSeatingAssetSpec(
+                drawableId = R.drawable.sofa_premium_3seat_topdown_both_v1,
+                sourceOffset = IntOffset(127, 425),
+                sourceSize = IntSize(994, 416),
+                hasOpaqueWhiteMatte = true,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FloorPlanPremiumArmchairAssetSurface(
+    backrestDirection: String?,
+    objectColor: Color?,
+    modifier: Modifier = Modifier,
+) {
+    val armchairAssetSpec = FloorPlanSeatingAssetSpec(
+        drawableId = R.drawable.armchair_premium_leather_topdown_asset_v1,
+        sourceOffset = IntOffset(225, 222),
+        sourceSize = IntSize(801, 811),
+        hasOpaqueWhiteMatte = true,
+    )
+    val armchairAsset = ImageBitmap.imageResource(id = armchairAssetSpec.drawableId)
+    Canvas(modifier = modifier) {
+        val localRotationDeg = sofaAssetLocalRotationDeg(backrestDirection)
+        val canvasWidth = size.width.coerceAtLeast(1f)
+        val canvasHeight = size.height.coerceAtLeast(1f)
+        val swapsAxes = localRotationDeg == 90f || localRotationDeg == 270f
+        val drawWidth = if (swapsAxes) canvasHeight else canvasWidth
+        val drawHeight = if (swapsAxes) canvasWidth else canvasHeight
+        val drawOffset = IntOffset(
+            x = ((canvasWidth - drawWidth) / 2f).roundToInt(),
+            y = ((canvasHeight - drawHeight) / 2f).roundToInt(),
+        )
+        val drawSize = IntSize(
+            width = drawWidth.roundToInt().coerceAtLeast(1),
+            height = drawHeight.roundToInt().coerceAtLeast(1),
+        )
+
+        withTransform({
+            if (localRotationDeg != 0f) {
+                rotate(
+                    degrees = localRotationDeg,
+                    pivot = Offset(canvasWidth / 2f, canvasHeight / 2f),
+                )
+            }
+        }) {
+            fun drawArmchairAsset(
+                colorFilter: ColorFilter? = null,
+                alpha: Float = 1f,
+            ) {
+                drawFloorPlanSeatingAssetImage(
+                    image = armchairAsset,
+                    assetSpec = armchairAssetSpec,
+                    dstOffset = drawOffset,
+                    dstSize = drawSize,
+                    alpha = alpha,
+                    colorFilter = colorFilter,
+                )
+            }
+
+            drawArmchairAsset()
+            if (objectColor != null && !armchairAssetSpec.hasOpaqueWhiteMatte) {
+                drawArmchairAsset(
+                    colorFilter = ColorFilter.tint(objectColor, BlendMode.SrcIn),
+                    alpha = 0.24f,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FloorPlanPolyRattanDarkChairAssetSurface(
+    backrestDirection: String?,
+    modifier: Modifier = Modifier,
+) {
+    val chairAsset = ImageBitmap.imageResource(id = R.drawable.chair_poly_rattan_dark_topdown_v1)
+    Canvas(modifier = modifier) {
+        val localRotationDeg = sofaAssetLocalRotationDeg(backrestDirection)
+        val canvasWidth = size.width.coerceAtLeast(1f)
+        val canvasHeight = size.height.coerceAtLeast(1f)
+        val swapsAxes = localRotationDeg == 90f || localRotationDeg == 270f
+        val drawWidth = if (swapsAxes) canvasHeight else canvasWidth
+        val drawHeight = if (swapsAxes) canvasWidth else canvasHeight
+        val drawOffset = IntOffset(
+            x = ((canvasWidth - drawWidth) / 2f).roundToInt(),
+            y = ((canvasHeight - drawHeight) / 2f).roundToInt(),
+        )
+        val drawSize = IntSize(
+            width = drawWidth.roundToInt().coerceAtLeast(1),
+            height = drawHeight.roundToInt().coerceAtLeast(1),
+        )
+        withTransform({
+            if (localRotationDeg != 0f) {
+                rotate(
+                    degrees = localRotationDeg,
+                    pivot = Offset(canvasWidth / 2f, canvasHeight / 2f),
+                )
+            }
+        }) {
             drawImage(
-                image = sofaAsset,
+                image = chairAsset,
                 srcOffset = IntOffset(0, 0),
-                srcSize = IntSize(sofaAsset.width, sofaAsset.height),
+                srcSize = IntSize(chairAsset.width, chairAsset.height),
                 dstOffset = drawOffset,
                 dstSize = drawSize,
                 filterQuality = FilterQuality.Medium,
@@ -1421,23 +2702,225 @@ private fun FloorPlanLeatherSofaAssetSurface(
 }
 
 @Composable
+private fun FloorPlanBoothSofaAssetSurface(
+    drawableId: Int,
+    backrestDirection: String?,
+    modifier: Modifier = Modifier,
+) {
+    val boothAssetSpec = boothSofaAssetSpec(drawableId)
+    val boothAsset = ImageBitmap.imageResource(id = boothAssetSpec.drawableId)
+    Canvas(modifier = modifier) {
+        val localRotationDeg = sofaAssetLocalRotationDeg(backrestDirection)
+        val canvasWidth = size.width.coerceAtLeast(1f)
+        val canvasHeight = size.height.coerceAtLeast(1f)
+        val swapsAxes = localRotationDeg == 90f || localRotationDeg == 270f
+        val drawWidth = if (swapsAxes) canvasHeight else canvasWidth
+        val drawHeight = if (swapsAxes) canvasWidth else canvasHeight
+        val drawOffset = IntOffset(
+            x = ((canvasWidth - drawWidth) / 2f).roundToInt(),
+            y = ((canvasHeight - drawHeight) / 2f).roundToInt(),
+        )
+        val drawSize = IntSize(
+            width = drawWidth.roundToInt().coerceAtLeast(1),
+            height = drawHeight.roundToInt().coerceAtLeast(1),
+        )
+
+        withTransform({
+            if (localRotationDeg != 0f) {
+                rotate(
+                    degrees = localRotationDeg,
+                    pivot = Offset(canvasWidth / 2f, canvasHeight / 2f),
+                )
+            }
+        }) {
+            drawFloorPlanSeatingAssetImage(
+                image = boothAsset,
+                assetSpec = boothAssetSpec,
+                dstOffset = drawOffset,
+                dstSize = drawSize,
+            )
+        }
+    }
+}
+
+private fun boothSofaAssetSpec(drawableId: Int): FloorPlanSeatingAssetSpec {
+    return when (drawableId) {
+        R.drawable.sofa_booth_straight_2seat_no_arms_topdown_v1 -> FloorPlanSeatingAssetSpec(
+            drawableId = drawableId,
+            sourceOffset = IntOffset(203, 191),
+            sourceSize = IntSize(1126, 632),
+            hasOpaqueWhiteMatte = true,
+        )
+        R.drawable.sofa_booth_curved_no_arms_topdown_v1 -> FloorPlanSeatingAssetSpec(
+            drawableId = drawableId,
+            sourceOffset = IntOffset(25, 293),
+            sourceSize = IntSize(1203, 603),
+            hasOpaqueWhiteMatte = true,
+        )
+        else -> FloorPlanSeatingAssetSpec(drawableId = drawableId)
+    }
+}
+
+private fun DrawScope.drawFloorPlanSeatingAssetImage(
+    image: ImageBitmap,
+    assetSpec: FloorPlanSeatingAssetSpec,
+    dstOffset: IntOffset,
+    dstSize: IntSize,
+    alpha: Float = 1f,
+    colorFilter: ColorFilter? = null,
+) {
+    drawImage(
+        image = image,
+        srcOffset = assetSpec.sourceOffset,
+        srcSize = assetSpec.sourceSize ?: IntSize(image.width, image.height),
+        dstOffset = dstOffset,
+        dstSize = dstSize,
+        alpha = alpha,
+        colorFilter = colorFilter ?: if (assetSpec.hasOpaqueWhiteMatte) {
+            FloorPlanOpaqueWhiteMatteColorFilter
+        } else {
+            null
+        },
+        filterQuality = FilterQuality.Medium,
+    )
+}
+
+private data class FloorPlanObjectAssetSpec(
+    val drawableId: Int,
+    val sourceOffset: IntOffset = IntOffset(0, 0),
+    val sourceSize: IntSize? = null,
+)
+
+@Composable
+private fun FloorPlanPlantAssetSurface(
+    plantStyle: FloorPlanPlantStyle?,
+    modifier: Modifier = Modifier,
+) {
+    val assetSpec = when (plantStyle) {
+        FloorPlanPlantStyle.TERRACE_FLOWERING_SHRUB -> FloorPlanObjectAssetSpec(
+            drawableId = R.drawable.plant_terrace_flowering_round_topdown_v1,
+            sourceOffset = IntOffset(82, 108),
+            sourceSize = IntSize(1088, 1024),
+        )
+        else -> FloorPlanObjectAssetSpec(
+            drawableId = R.drawable.plant_terrace_tuja_topdown_v1,
+            sourceOffset = IntOffset(170, 148),
+            sourceSize = IntSize(930, 930),
+        )
+    }
+    val asset = ImageBitmap.imageResource(id = assetSpec.drawableId)
+    Canvas(modifier = modifier) {
+        drawFloorPlanObjectAssetImage(asset = asset, assetSpec = assetSpec)
+    }
+}
+
+@Composable
+private fun FloorPlanDeviceAssetSurface(
+    deviceStyle: FloorPlanDeviceStyle?,
+    modifier: Modifier = Modifier,
+) {
+    val assetSpec = when (deviceStyle) {
+        FloorPlanDeviceStyle.SUNMI_D3_MINI,
+        null -> FloorPlanObjectAssetSpec(
+            drawableId = R.drawable.sunmi_d3_mini_transparent,
+        )
+    }
+    val asset = ImageBitmap.imageResource(id = assetSpec.drawableId)
+    Canvas(modifier = modifier) {
+        drawFloorPlanObjectAssetImage(asset = asset, assetSpec = assetSpec)
+    }
+}
+
+private fun DrawScope.drawFloorPlanObjectAssetImage(
+    asset: ImageBitmap,
+    assetSpec: FloorPlanObjectAssetSpec,
+) {
+    drawImage(
+        image = asset,
+        srcOffset = assetSpec.sourceOffset,
+        srcSize = assetSpec.sourceSize ?: IntSize(asset.width, asset.height),
+        dstOffset = IntOffset(0, 0),
+        dstSize = IntSize(
+            width = size.width.roundToInt().coerceAtLeast(1),
+            height = size.height.roundToInt().coerceAtLeast(1),
+        ),
+        filterQuality = FilterQuality.Medium,
+    )
+}
+
+@Composable
 private fun FloorPlanTerracePolyRattanSofaSurface(
     backrestDirection: String?,
     armrestMode: String,
     seatCount: Int?,
+    objectColor: Color?,
+    cushionColor: Color?,
     modifier: Modifier = Modifier,
 ) {
-    Canvas(modifier = modifier) {
-        drawFloorPlanTerracePolyRattanSofa(
-            topLeft = Offset.Zero,
-            targetSize = size,
-            stroke = max(1f, 1.dp.toPx()),
-            seatCount = seatCount?.coerceIn(1, 4) ?: estimateFloorPlanSofaSeatCount(size),
-            backrestDirection = backrestDirection,
-            armrestMode = armrestMode,
+    val rattanAsset = when (armrestMode) {
+        "none" -> FloorPlanRattanSofaAssetSpec(
+            drawableId = R.drawable.sofa2_poly_rattan_topdown_none_v1,
+            sourceOffset = IntOffset(169, 136),
+            sourceSize = IntSize(1435, 589),
+        )
+        "left-only" -> FloorPlanRattanSofaAssetSpec(
+            drawableId = R.drawable.sofa2_poly_rattan_topdown_right_v1,
+            sourceOffset = IntOffset(186, 186),
+            sourceSize = IntSize(1442, 517),
+        )
+        "right-only" -> FloorPlanRattanSofaAssetSpec(
+            drawableId = R.drawable.sofa2_poly_rattan_topdown_left_v1,
+            sourceOffset = IntOffset(153, 129),
+            sourceSize = IntSize(1452, 602),
+        )
+        else -> FloorPlanRattanSofaAssetSpec(
+            drawableId = R.drawable.sofa2_poly_rattan_topdown_asset_v1,
+            sourceOffset = IntOffset(154, 170),
+            sourceSize = IntSize(1466, 543),
         )
     }
+    val sofaAsset = ImageBitmap.imageResource(id = rattanAsset.drawableId)
+    Canvas(modifier = modifier) {
+        val localRotationDeg = sofaAssetLocalRotationDeg(backrestDirection)
+        val canvasWidth = size.width.coerceAtLeast(1f)
+        val canvasHeight = size.height.coerceAtLeast(1f)
+        val swapsAxes = localRotationDeg == 90f || localRotationDeg == 270f
+        val drawWidth = if (swapsAxes) canvasHeight else canvasWidth
+        val drawHeight = if (swapsAxes) canvasWidth else canvasHeight
+        val drawOffset = IntOffset(
+            x = ((canvasWidth - drawWidth) / 2f).roundToInt(),
+            y = ((canvasHeight - drawHeight) / 2f).roundToInt(),
+        )
+        val drawSize = IntSize(
+            width = drawWidth.roundToInt().coerceAtLeast(1),
+            height = drawHeight.roundToInt().coerceAtLeast(1),
+        )
+        withTransform({
+            if (localRotationDeg != 0f) {
+                rotate(
+                    degrees = localRotationDeg,
+                    pivot = Offset(canvasWidth / 2f, canvasHeight / 2f),
+                )
+            }
+        }) {
+            drawImage(
+                image = sofaAsset,
+                srcOffset = rattanAsset.sourceOffset,
+                srcSize = rattanAsset.sourceSize,
+                dstOffset = drawOffset,
+                dstSize = drawSize,
+                filterQuality = FilterQuality.Medium,
+                blendMode = BlendMode.Darken,
+            )
+        }
+    }
 }
+
+private data class FloorPlanRattanSofaAssetSpec(
+    val drawableId: Int,
+    val sourceOffset: IntOffset,
+    val sourceSize: IntSize,
+)
 
 private fun normalizeFloorPlanSofaArmrestMode(armrestMode: String?): String {
     return when (armrestMode) {
@@ -1462,6 +2945,8 @@ private fun DrawScope.drawFloorPlanTerracePolyRattanSofa(
     seatCount: Int,
     backrestDirection: String?,
     armrestMode: String?,
+    objectColor: Color?,
+    cushionColor: Color?,
 ) {
     val safeSize = floorPlanSafeSize(targetSize)
     val localRotationDeg = sofaAssetLocalRotationDeg(backrestDirection)
@@ -1479,6 +2964,8 @@ private fun DrawScope.drawFloorPlanTerracePolyRattanSofa(
             stroke = stroke,
             seatCount = seatCount,
             armrestMode = normalizedArmrestMode,
+            objectColor = objectColor,
+            cushionColor = cushionColor,
         )
     }
 }
@@ -1489,21 +2976,25 @@ private fun DrawScope.drawFloorPlanTerracePolyRattanSofaOriented(
     stroke: Float,
     seatCount: Int,
     armrestMode: String,
+    objectColor: Color?,
+    cushionColor: Color?,
 ) {
     val width = targetSize.width.coerceAtLeast(1f)
     val height = targetSize.height.coerceAtLeast(1f)
     val minDim = min(width, height)
     val outlineStroke = max(0.8f, min(stroke, minDim * 0.052f))
 
-    val frameTop = Color(0xFF46545B)
-    val frameBottom = Color(0xFF232C31)
-    val frameBorder = Color(0xFF151B1F).copy(alpha = 0.72f)
-    val weaveLight = Color(0xFF68787F).copy(alpha = 0.26f)
-    val weaveDark = Color(0xFF151B1F).copy(alpha = 0.32f)
-    val cushionTop = Color(0xFFDAD5C8)
-    val cushionBottom = Color(0xFFB8B1A3)
-    val cushionBorder = Color(0xFF6D665D).copy(alpha = 0.48f)
-    val cushionHighlight = Color(0xFFF3EEE0).copy(alpha = 0.22f)
+    val frameBase = objectColor ?: Color(0xFF3F4447)
+    val cushionBase = cushionColor ?: Color(0xFFB8A17A)
+    val frameTop = frameBase.mixWith(Color.White, 0.11f)
+    val frameBottom = frameBase.mixWith(Color.Black, 0.48f)
+    val frameBorder = frameBase.mixWith(Color.Black, 0.72f).copy(alpha = 0.82f)
+    val weaveLight = frameBase.mixWith(Color.White, 0.34f).copy(alpha = 0.34f)
+    val weaveDark = frameBase.mixWith(Color.Black, 0.62f).copy(alpha = 0.38f)
+    val cushionTop = cushionBase.mixWith(Color.White, 0.16f)
+    val cushionBottom = cushionBase.mixWith(Color.Black, 0.22f)
+    val cushionBorder = cushionBase.mixWith(Color.Black, 0.58f).copy(alpha = 0.54f)
+    val cushionHighlight = cushionBase.mixWith(Color.White, 0.42f).copy(alpha = 0.22f)
 
     val outerInset = floorPlanClamp(minDim * 0.030f, 1.2f, 5.0f)
     val frameTopLeft = Offset(topLeft.x + outerInset, topLeft.y + outerInset)
@@ -1646,6 +3137,23 @@ private fun DrawScope.drawFloorPlanRattanWeave(
         )
         offset += weaveStep
     }
+
+    offset = first
+    while (offset <= last) {
+        drawLine(
+            color = dark.copy(alpha = dark.alpha * 0.62f),
+            start = Offset(offset, topLeft.y + height),
+            end = Offset(offset + height, topLeft.y),
+            strokeWidth = max(0.35f, stroke * 0.26f),
+        )
+        drawLine(
+            color = light.copy(alpha = light.alpha * 0.46f),
+            start = Offset(offset + weaveStep * 0.50f, topLeft.y + height),
+            end = Offset(offset + weaveStep * 0.50f + height, topLeft.y),
+            strokeWidth = max(0.30f, stroke * 0.22f),
+        )
+        offset += weaveStep
+    }
 }
 
 private fun DrawScope.drawFloorPlanTerraceSofaCushions(
@@ -1694,6 +3202,290 @@ private fun DrawScope.drawFloorPlanTerraceSofaCushions(
 }
 
 @Composable
+private fun FloorPlanBarCounterObjectSurface(
+    label: String,
+    widthDp: androidx.compose.ui.unit.Dp,
+    heightDp: androidx.compose.ui.unit.Dp,
+    screenWidthPx: Float,
+    modifier: Modifier,
+    barDeskMaterial: String?,
+    barDeskGrainRotationDeg: Float?,
+) {
+    val normalizedMaterial = normalizedFloorPlanBarDeskMaterial(barDeskMaterial)
+    val materialAsset = ImageBitmap.imageResource(
+        id = resolveFloorPlanBarCounterMaterialDrawableId(normalizedMaterial),
+    )
+    Box(modifier = modifier.requiredSize(widthDp, heightDp)) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val stroke = max(1f, 1.dp.toPx())
+            drawFloorPlanAssetBarCounterSurface(
+                asset = materialAsset,
+                material = normalizedMaterial,
+                grainRotationDeg = barDeskGrainRotationDeg,
+                stroke = stroke,
+            )
+        }
+
+        if (label.isNotBlank() && screenWidthPx >= 48f) {
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                Text(
+                    text = label,
+                    modifier = Modifier
+                        .background(FloorPlanHintSurface.copy(alpha = 0.86f), RoundedCornerShape(999.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                    style = floorPlanLabelStyle(screenWidthPx),
+                    color = TableMapVisualTokens.TextSecondary,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
+    }
+}
+
+private fun resolveFloorPlanBarCounterMaterialDrawableId(material: String?): Int {
+    return when (material) {
+        "LIGHT_WOOD" -> R.drawable.bar_counter_surface_light_wood_topdown_v1
+        "LIGHT_STONE" -> R.drawable.bar_counter_surface_light_stone_topdown_v1
+        "DARK_STONE" -> R.drawable.bar_counter_surface_dark_stone_topdown_v1
+        else -> R.drawable.bar_counter_surface_dark_wood_topdown_v1
+    }
+}
+
+private fun DrawScope.drawFloorPlanAssetBarCounterSurface(
+    asset: ImageBitmap,
+    material: String?,
+    grainRotationDeg: Float?,
+    stroke: Float,
+) {
+    val width = size.width.coerceAtLeast(1f)
+    val height = size.height.coerceAtLeast(1f)
+    val minDim = min(width, height)
+    val radiusValue = floorPlanClamp(minDim * 0.045f, 3f, 10f)
+    val radius = CornerRadius(radiusValue, radiusValue)
+    val horizontal = width >= height
+    val topTierFraction = 0.66f
+    val frontTierFraction = 1f - topTierFraction
+    val topTierTopLeft = Offset.Zero
+    val topTierSize = if (horizontal) {
+        Size(width, height * topTierFraction)
+    } else {
+        Size(width * topTierFraction, height)
+    }
+    val frontTierTopLeft = if (horizontal) {
+        Offset(0f, topTierSize.height)
+    } else {
+        Offset(topTierSize.width, 0f)
+    }
+    val frontTierSize = if (horizontal) {
+        Size(width, (height * frontTierFraction).coerceAtLeast(1f))
+    } else {
+        Size((width * frontTierFraction).coerceAtLeast(1f), height)
+    }
+    val clipPath = Path().apply {
+        addRoundRect(RoundRect(Rect(Offset.Zero, Size(width, height)), radius))
+    }
+
+    clipPath(clipPath) {
+        drawBarCounterAssetTier(
+            asset = asset,
+            material = material,
+            grainRotationDeg = grainRotationDeg,
+            topLeft = topTierTopLeft,
+            targetSize = topTierSize,
+            overlay = barCounterAssetOverlay(material = material, tier = "top"),
+        )
+        drawBarCounterAssetTier(
+            asset = asset,
+            material = material,
+            grainRotationDeg = grainRotationDeg,
+            topLeft = frontTierTopLeft,
+            targetSize = frontTierSize,
+            overlay = barCounterAssetOverlay(material = material, tier = "front"),
+        )
+        drawRect(
+            brush = Brush.linearGradient(
+                colors = listOf(Color.Transparent, Color.White.copy(alpha = 0.10f), Color.Transparent),
+                start = Offset.Zero,
+                end = Offset(width, height),
+            ),
+            topLeft = Offset.Zero,
+            size = Size(width, height),
+        )
+    }
+
+    val seamStroke = max(stroke, minDim * 0.035f)
+    if (horizontal) {
+        val seamY = topTierSize.height
+        drawLine(
+            color = Color.Black.copy(alpha = 0.38f),
+            start = Offset(0f, seamY),
+            end = Offset(width, seamY),
+            strokeWidth = seamStroke,
+        )
+        drawLine(
+            color = Color.White.copy(alpha = 0.24f),
+            start = Offset(0f, seamY - seamStroke * 0.55f),
+            end = Offset(width, seamY - seamStroke * 0.55f),
+            strokeWidth = max(0.75f, seamStroke * 0.45f),
+        )
+    } else {
+        val seamX = topTierSize.width
+        drawLine(
+            color = Color.Black.copy(alpha = 0.38f),
+            start = Offset(seamX, 0f),
+            end = Offset(seamX, height),
+            strokeWidth = seamStroke,
+        )
+        drawLine(
+            color = Color.White.copy(alpha = 0.24f),
+            start = Offset(seamX - seamStroke * 0.55f, 0f),
+            end = Offset(seamX - seamStroke * 0.55f, height),
+            strokeWidth = max(0.75f, seamStroke * 0.45f),
+        )
+    }
+
+    val railInset = max(3f, minDim * 0.09f)
+    val railStroke = max(stroke, minDim * 0.030f)
+    drawLine(
+        color = Color.White.copy(alpha = 0.24f),
+        start = Offset(railInset, railInset),
+        end = if (horizontal) {
+            Offset(width - railInset, railInset)
+        } else {
+            Offset(railInset, height - railInset)
+        },
+        strokeWidth = railStroke,
+    )
+    drawLine(
+        color = Color.Black.copy(alpha = 0.24f),
+        start = if (horizontal) {
+            Offset(railInset, height - railInset)
+        } else {
+            Offset(width - railInset, railInset)
+        },
+        end = Offset(width - railInset, height - railInset),
+        strokeWidth = railStroke,
+    )
+}
+
+private fun isFloorPlanWoodBarCounterMaterial(material: String?): Boolean {
+    return material == "LIGHT_WOOD" || material == "DARK_WOOD"
+}
+
+private fun normalizeFloorPlanGrainRotationDeg(value: Float?): Float {
+    value ?: return 0f
+    return ((value % 360f) + 360f) % 360f
+}
+
+private fun DrawScope.drawBarCounterAssetTier(
+    asset: ImageBitmap,
+    material: String?,
+    grainRotationDeg: Float?,
+    topLeft: Offset,
+    targetSize: Size,
+    overlay: Color,
+) {
+    val width = targetSize.width.coerceAtLeast(1f)
+    val height = targetSize.height.coerceAtLeast(1f)
+    val rotatesGrain = isFloorPlanWoodBarCounterMaterial(material)
+    val rotation = if (rotatesGrain) normalizeFloorPlanGrainRotationDeg(grainRotationDeg) else 0f
+    val scale = if (rotatesGrain && rotation % 180f != 0f) 1.5f else 1f
+    val drawWidth = width * scale
+    val drawHeight = height * scale
+    val drawTopLeft = Offset(
+        x = topLeft.x - (drawWidth - width) / 2f,
+        y = topLeft.y - (drawHeight - height) / 2f,
+    )
+    val center = Offset(topLeft.x + width / 2f, topLeft.y + height / 2f)
+
+    clipRect(
+        left = topLeft.x,
+        top = topLeft.y,
+        right = topLeft.x + width,
+        bottom = topLeft.y + height,
+    ) {
+        withTransform({
+            if (rotatesGrain) {
+                rotate(degrees = rotation, pivot = center)
+            }
+        }) {
+            drawImage(
+                image = asset,
+                srcOffset = IntOffset(0, 0),
+                srcSize = IntSize(asset.width, asset.height),
+                dstOffset = IntOffset(drawTopLeft.x.roundToInt(), drawTopLeft.y.roundToInt()),
+                dstSize = IntSize(
+                    width = drawWidth.roundToInt().coerceAtLeast(1),
+                    height = drawHeight.roundToInt().coerceAtLeast(1),
+                ),
+                filterQuality = FilterQuality.Medium,
+            )
+        }
+    }
+    drawRect(
+        color = overlay,
+        topLeft = topLeft,
+        size = targetSize,
+    )
+}
+
+private fun barCounterAssetOverlay(material: String?, tier: String): Color {
+    val isLight = material == "LIGHT_WOOD" || material == "LIGHT_STONE"
+    val isStone = material == "LIGHT_STONE" || material == "DARK_STONE"
+    return when (tier) {
+        "top" -> when {
+            isStone && isLight -> Color.White.copy(alpha = 0.12f)
+            isStone -> Color(0xFF111718).copy(alpha = 0.18f)
+            isLight -> Color(0xFFFFE3A8).copy(alpha = 0.08f)
+            else -> Color(0xFF170B04).copy(alpha = 0.12f)
+        }
+        else -> when {
+            isStone && isLight -> Color(0xFF4F5956).copy(alpha = 0.22f)
+            isStone -> Color.Black.copy(alpha = 0.34f)
+            isLight -> Color(0xFF55300F).copy(alpha = 0.20f)
+            else -> Color.Black.copy(alpha = 0.28f)
+        }
+    }
+}
+
+private fun DrawScope.drawFloorPlanWoodBrassBarCounterAsset(
+    asset: ImageBitmap,
+    stroke: Float,
+) {
+    val width = size.width.coerceAtLeast(1f)
+    val height = size.height.coerceAtLeast(1f)
+    val radiusValue = floorPlanClamp(min(width, height) * 0.10f, 4f, 18f)
+    val path = Path().apply {
+        addRoundRect(RoundRect(Rect(Offset.Zero, Size(width, height)), CornerRadius(radiusValue, radiusValue)))
+    }
+
+    clipPath(path) {
+        drawImage(
+            image = asset,
+            srcOffset = IntOffset(44, 386),
+            srcSize = IntSize(1360, 350),
+            dstOffset = IntOffset(0, 0),
+            dstSize = IntSize(width.roundToInt().coerceAtLeast(1), height.roundToInt().coerceAtLeast(1)),
+            filterQuality = FilterQuality.Medium,
+        )
+        drawRect(
+            color = Color.Black.copy(alpha = 0.18f),
+            topLeft = Offset.Zero,
+            size = Size(width, height),
+        )
+    }
+    drawRoundRect(
+        color = Color(0xFFE0AE6A).copy(alpha = 0.72f),
+        topLeft = Offset.Zero,
+        size = Size(width, height),
+        cornerRadius = CornerRadius(radiusValue, radiusValue),
+        style = Stroke(width = max(stroke, min(width, height) * 0.018f)),
+    )
+}
+
+@Composable
 private fun FloorPlanLabeledObjectSurface(
     label: String,
     widthDp: androidx.compose.ui.unit.Dp,
@@ -1702,6 +3494,7 @@ private fun FloorPlanLabeledObjectSurface(
     modifier: Modifier,
     objectType: String,
     objectColorHex: String? = null,
+    objectBarDeskMaterial: String? = null,
     objectBackrestDirection: String? = null,
     objectArmrestMode: String? = null,
     showLabel: Boolean = true,
@@ -1730,6 +3523,7 @@ private fun FloorPlanLabeledObjectSurface(
                         topLeft = Offset.Zero,
                         targetSize = size,
                         stroke = stroke,
+                        barDeskMaterial = objectBarDeskMaterial,
                     )
                 }
                 "chair", "armchair" -> {
@@ -2090,6 +3884,9 @@ private fun FloorPlanTableNode(
         ),
     )
     val isBarSeat = table.spotType == ServiceSpotType.BAR_SEAT
+    val compositeTableAsset = ImageBitmap.imageResource(id = R.drawable.floor_terrace_weathered_planks_120mm_v2)
+    val greyStoneTableAsset = ImageBitmap.imageResource(id = R.drawable.floor_premium_stone_light_v1)
+    val terraceTransparentTableAsset = ImageBitmap.imageResource(id = R.drawable.table_terrace_transparent)
     val anchoredStatusOutside = statusChipAnchor != null && statusChipAnchor != FloorPlanMarkerAnchor.CENTER
     val anchoredBarSeatVisible = isBarSeat && anchoredStatusOutside && bodyWidthPx >= 22f && bodyHeightPx >= 22f
     val showLabel = bodyWidthPx >= 30f && bodyHeightPx >= 22f
@@ -2289,6 +4086,10 @@ private fun FloorPlanTableNode(
                 borderColor = bodyStroke,
                 borderWidthPx = borderWidthPx,
                 baseColor = parseFloorPlanObjectColor(table.color),
+                tableMaterial = table.tableMaterial,
+                compositeTableAsset = compositeTableAsset,
+                greyStoneTableAsset = greyStoneTableAsset,
+                terraceTransparentTableAsset = terraceTransparentTableAsset,
                 backrestDirection = table.backrestDirection,
                 backrestMode = table.backrestMode,
             )
@@ -2804,6 +4605,45 @@ private fun tableBodyFillColor(): Color {
     return Color(0xFF3B1D0D)
 }
 
+private fun resolveFloorPlanTableMaterial(tableMaterial: String?): FloorPlanTableSurfaceTokens {
+    val value = tableMaterial
+        ?.trim()
+        ?.replace('-', '_')
+        ?.uppercase()
+    val theme = activeFloorPlanSurfaceTheme()
+    return when (value) {
+        "LIGHT_WOOD" -> theme.lightWoodTable
+        "DARK_COMPOSITE" -> FloorPlanTableSurfaceTokens(
+            top = Color(0xFF545B55),
+            middle = Color(0xFF343A36),
+            bottom = Color(0xFF151918),
+            highlight = Color(0xFFBBC5BD).copy(alpha = 0.16f),
+            grainLight = Color(0xFFC0B8A4).copy(alpha = 0.55f),
+            grainDark = Color(0xFF060807),
+            edgeDark = Color(0xFF070909),
+            edgeWarm = Color(0xFF81846F).copy(alpha = 0.60f),
+        )
+        "GREY_STONE" -> FloorPlanTableSurfaceTokens(
+            top = Color(0xFF6E7778),
+            middle = Color(0xFF4C5556),
+            bottom = Color(0xFF202627),
+            highlight = Color(0xFFD8E4E3).copy(alpha = 0.18f),
+            grainLight = Color(0xFFD0DDDC).copy(alpha = 0.44f),
+            grainDark = Color(0xFF0B0F10),
+            edgeDark = Color(0xFF111617),
+            edgeWarm = Color(0xFF94A0A0).copy(alpha = 0.42f),
+        )
+        else -> theme.table
+    }
+}
+
+private fun normalizedFloorPlanTableMaterial(tableMaterial: String?): String? {
+    return tableMaterial
+        ?.trim()
+        ?.replace('-', '_')
+        ?.uppercase()
+}
+
 private fun DrawScope.drawFloorPlanTableSurface(
     isRound: Boolean,
     isBarSeat: Boolean,
@@ -2812,6 +4652,10 @@ private fun DrawScope.drawFloorPlanTableSurface(
     borderColor: Color,
     borderWidthPx: Float,
     baseColor: Color?,
+    tableMaterial: String?,
+    compositeTableAsset: ImageBitmap,
+    greyStoneTableAsset: ImageBitmap,
+    terraceTransparentTableAsset: ImageBitmap,
     backrestDirection: String?,
     backrestMode: String?,
 ) {
@@ -2829,7 +4673,29 @@ private fun DrawScope.drawFloorPlanTableSurface(
         return
     }
 
-    val material = activeFloorPlanSurfaceTheme().table
+    val normalizedMaterial = normalizedFloorPlanTableMaterial(tableMaterial)
+    if (
+        normalizedMaterial == "DARK_COMPOSITE" ||
+        normalizedMaterial == "GREY_STONE" ||
+        normalizedMaterial == "TERRACE_TRANSPARENT"
+    ) {
+        drawFloorPlanTexturedTableAsset(
+            isRound = isRound,
+            topLeft = topLeft,
+            targetSize = targetSize,
+            borderColor = borderColor,
+            borderWidthPx = borderWidthPx,
+            material = normalizedMaterial,
+            asset = when (normalizedMaterial) {
+                "GREY_STONE" -> greyStoneTableAsset
+                "TERRACE_TRANSPARENT" -> terraceTransparentTableAsset
+                else -> compositeTableAsset
+            },
+        )
+        return
+    }
+
+    val material = resolveFloorPlanTableMaterial(tableMaterial)
     val resolvedTop = baseColor?.mixWith(Color.White, 0.05f) ?: material.top
     val resolvedMiddle = baseColor?.mixWith(material.middle, 0.55f) ?: material.middle
     val resolvedBottom = baseColor?.mixWith(material.bottom, 0.62f) ?: material.bottom
@@ -2945,6 +4811,100 @@ private fun DrawScope.drawFloorPlanTableSurface(
             topLeft = Offset(topLeft.x + innerInset, topLeft.y + innerInset),
             size = innerSize,
             style = Stroke(width = insetStroke),
+        )
+        drawRect(
+            color = borderColor,
+            topLeft = topLeft,
+            size = targetSize,
+            style = Stroke(width = borderWidthPx),
+        )
+    }
+}
+
+private fun DrawScope.drawFloorPlanTexturedTableAsset(
+    isRound: Boolean,
+    topLeft: Offset,
+    targetSize: Size,
+    borderColor: Color,
+    borderWidthPx: Float,
+    material: String,
+    asset: ImageBitmap,
+) {
+    val minDim = min(targetSize.width, targetSize.height).coerceAtLeast(1f)
+    val path = Path().apply {
+        if (isRound) {
+            addOval(Rect(topLeft, targetSize))
+        } else {
+            addRect(Rect(topLeft, targetSize))
+        }
+    }
+    clipPath(path) {
+        drawImage(
+            image = asset,
+            srcOffset = IntOffset(0, 0),
+            srcSize = IntSize(asset.width, asset.height),
+            dstOffset = IntOffset(topLeft.x.roundToInt(), topLeft.y.roundToInt()),
+            dstSize = IntSize(
+                width = targetSize.width.roundToInt().coerceAtLeast(1),
+                height = targetSize.height.roundToInt().coerceAtLeast(1),
+            ),
+            filterQuality = FilterQuality.Medium,
+        )
+        if (material != "TERRACE_TRANSPARENT") {
+            drawRect(
+                color = if (material == "DARK_COMPOSITE") {
+                    Color(0xFF101313).copy(alpha = 0.46f)
+                } else {
+                    Color(0xFF283033).copy(alpha = 0.34f)
+                },
+                topLeft = topLeft,
+                size = targetSize,
+            )
+        }
+    }
+
+    if (material == "DARK_COMPOSITE") {
+        val plankCount = 4
+        val step = targetSize.height / plankCount
+        for (index in 1 until plankCount) {
+            val y = topLeft.y + step * index
+            drawLine(
+                color = Color.Black.copy(alpha = 0.42f),
+                start = Offset(topLeft.x, y),
+                end = Offset(topLeft.x + targetSize.width, y),
+                strokeWidth = max(0.75f, borderWidthPx * 0.75f),
+            )
+        }
+    } else if (material == "GREY_STONE") {
+        drawFloorPlanCounterStoneVeins(
+            topLeft = topLeft,
+            targetSize = targetSize,
+            horizontal = targetSize.width >= targetSize.height,
+            veinLight = Color(0xFFD3DEDE).copy(alpha = 0.18f),
+            veinDark = Color(0xFF0B0F10).copy(alpha = 0.24f),
+        )
+    }
+
+    val rimWidth = max(borderWidthPx, minDim * 0.045f)
+    if (isRound) {
+        drawOval(
+            color = Color.Black.copy(alpha = 0.46f),
+            topLeft = topLeft,
+            size = targetSize,
+            style = Stroke(width = rimWidth),
+        )
+        drawOval(
+            color = borderColor,
+            topLeft = topLeft,
+            size = targetSize,
+            style = Stroke(width = borderWidthPx),
+        )
+    } else {
+        drawRect(
+            color = Color.Black.copy(alpha = 0.46f),
+            topLeft = topLeft,
+            size = targetSize,
+            style = Stroke(width = rimWidth),
         )
         drawRect(
             color = borderColor,
