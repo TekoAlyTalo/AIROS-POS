@@ -52,6 +52,7 @@ import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.TransformOrigin
@@ -2374,10 +2375,8 @@ private fun FloorPlanObjectNode(
         }
         "bar-counter" -> {
             FloorPlanBarCounterObjectSurface(
-                label = floorObject.label,
                 widthDp = widthDp,
                 heightDp = heightDp,
-                screenWidthPx = objectWidthPx,
                 modifier = baseModifier,
                 barDeskMaterial = floorObject.barDeskMaterial,
                 barDeskGrainRotationDeg = floorObject.barDeskGrainRotationDeg,
@@ -3203,10 +3202,8 @@ private fun DrawScope.drawFloorPlanTerraceSofaCushions(
 
 @Composable
 private fun FloorPlanBarCounterObjectSurface(
-    label: String,
     widthDp: androidx.compose.ui.unit.Dp,
     heightDp: androidx.compose.ui.unit.Dp,
-    screenWidthPx: Float,
     modifier: Modifier,
     barDeskMaterial: String?,
     barDeskGrainRotationDeg: Float?,
@@ -3225,22 +3222,6 @@ private fun FloorPlanBarCounterObjectSurface(
                 stroke = stroke,
             )
         }
-
-        if (label.isNotBlank() && screenWidthPx >= 48f) {
-            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                Text(
-                    text = label,
-                    modifier = Modifier
-                        .background(FloorPlanHintSurface.copy(alpha = 0.86f), RoundedCornerShape(999.dp))
-                        .padding(horizontal = 6.dp, vertical = 2.dp),
-                    style = floorPlanLabelStyle(screenWidthPx),
-                    color = TableMapVisualTokens.TextSecondary,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    textAlign = TextAlign.Center,
-                )
-            }
-        }
     }
 }
 
@@ -3253,6 +3234,78 @@ private fun resolveFloorPlanBarCounterMaterialDrawableId(material: String?): Int
     }
 }
 
+private data class FloorPlanBarCounterPalette(
+    val baseStart: Color,
+    val baseEnd: Color,
+    val serviceStart: Color,
+    val serviceEnd: Color,
+    val workStart: Color,
+    val workEnd: Color,
+    val separator: Color,
+    val serviceHighlight: Color,
+    val ambientHighlight: Color,
+)
+
+private fun resolveFloorPlanBarCounterPalette(material: String?): FloorPlanBarCounterPalette {
+    val normalizedMaterial = normalizedFloorPlanBarDeskMaterial(material)
+    val isStone = normalizedMaterial == "LIGHT_STONE" || normalizedMaterial == "DARK_STONE"
+    val isLight = normalizedMaterial == "LIGHT_WOOD" || normalizedMaterial == "LIGHT_STONE"
+
+    return if (isStone) {
+        if (isLight) {
+            FloorPlanBarCounterPalette(
+                baseStart = Color(0xFF1C2122).copy(alpha = 0.04f),
+                baseEnd = Color(0xFF0E1213).copy(alpha = 0.10f),
+                serviceStart = Color.White.copy(alpha = 0.10f),
+                serviceEnd = Color(0xFFB1B8B5).copy(alpha = 0.10f),
+                workStart = Color(0xFF9CA39F).copy(alpha = 0.20f),
+                workEnd = Color(0xFF343D3D).copy(alpha = 0.26f),
+                separator = Color(0xFF101415).copy(alpha = 0.14f),
+                serviceHighlight = Color.White.copy(alpha = 0.18f),
+                ambientHighlight = Color.White.copy(alpha = 0.03f),
+            )
+        } else {
+            FloorPlanBarCounterPalette(
+                baseStart = Color(0xFF111516).copy(alpha = 0.05f),
+                baseEnd = Color(0xFF050809).copy(alpha = 0.12f),
+                serviceStart = Color(0xFFE3E8E6).copy(alpha = 0.06f),
+                serviceEnd = Color(0xFF3A4142).copy(alpha = 0.10f),
+                workStart = Color(0xFF434C4E).copy(alpha = 0.10f),
+                workEnd = Color(0xFF14191B).copy(alpha = 0.30f),
+                separator = Color.Black.copy(alpha = 0.18f),
+                serviceHighlight = Color(0xFFF1F5F4).copy(alpha = 0.12f),
+                ambientHighlight = Color.White.copy(alpha = 0.02f),
+            )
+        }
+    } else {
+        if (isLight) {
+            FloorPlanBarCounterPalette(
+                baseStart = Color(0xFF381F0D).copy(alpha = 0.04f),
+                baseEnd = Color(0xFF180C06).copy(alpha = 0.10f),
+                serviceStart = Color(0xFFFFF8EC).copy(alpha = 0.12f),
+                serviceEnd = Color(0xFFCB9254).copy(alpha = 0.12f),
+                workStart = Color(0xFF8A633A).copy(alpha = 0.14f),
+                workEnd = Color(0xFF402612).copy(alpha = 0.28f),
+                separator = Color(0xFF2B180A).copy(alpha = 0.14f),
+                serviceHighlight = Color(0xFFFFF8E5).copy(alpha = 0.18f),
+                ambientHighlight = Color(0xFFFFF4DC).copy(alpha = 0.03f),
+            )
+        } else {
+            FloorPlanBarCounterPalette(
+                baseStart = Color(0xFF221208).copy(alpha = 0.05f),
+                baseEnd = Color(0xFF0C0603).copy(alpha = 0.12f),
+                serviceStart = Color(0xFFDFB781).copy(alpha = 0.08f),
+                serviceEnd = Color(0xFF4F2A13).copy(alpha = 0.12f),
+                workStart = Color(0xFF502E16).copy(alpha = 0.12f),
+                workEnd = Color(0xFF180C06).copy(alpha = 0.32f),
+                separator = Color(0xFF0D0704).copy(alpha = 0.18f),
+                serviceHighlight = Color(0xFFF3DCB9).copy(alpha = 0.14f),
+                ambientHighlight = Color(0xFFFFEDD2).copy(alpha = 0.02f),
+            )
+        }
+    }
+}
+
 private fun DrawScope.drawFloorPlanAssetBarCounterSurface(
     asset: ImageBitmap,
     material: String?,
@@ -3262,51 +3315,53 @@ private fun DrawScope.drawFloorPlanAssetBarCounterSurface(
     val width = size.width.coerceAtLeast(1f)
     val height = size.height.coerceAtLeast(1f)
     val minDim = min(width, height)
-    val radiusValue = floorPlanClamp(minDim * 0.045f, 3f, 10f)
-    val radius = CornerRadius(radiusValue, radiusValue)
-    val horizontal = width >= height
-    val topTierFraction = 0.66f
-    val frontTierFraction = 1f - topTierFraction
-    val topTierTopLeft = Offset.Zero
-    val topTierSize = if (horizontal) {
-        Size(width, height * topTierFraction)
-    } else {
-        Size(width * topTierFraction, height)
-    }
-    val frontTierTopLeft = if (horizontal) {
-        Offset(0f, topTierSize.height)
-    } else {
-        Offset(topTierSize.width, 0f)
-    }
-    val frontTierSize = if (horizontal) {
-        Size(width, (height * frontTierFraction).coerceAtLeast(1f))
-    } else {
-        Size((width * frontTierFraction).coerceAtLeast(1f), height)
-    }
-    val clipPath = Path().apply {
-        addRoundRect(RoundRect(Rect(Offset.Zero, Size(width, height)), radius))
-    }
+    val servingTopHeight = height * 0.35f
+    val workingTopHeight = (height - servingTopHeight).coerceAtLeast(1f)
+    val palette = resolveFloorPlanBarCounterPalette(material)
+    val gradientEnd = Offset(0f, height)
 
-    clipPath(clipPath) {
-        drawBarCounterAssetTier(
+    clipRect(left = 0f, top = 0f, right = width, bottom = height) {
+        drawFloorPlanBarCounterMaterialFill(
             asset = asset,
             material = material,
             grainRotationDeg = grainRotationDeg,
-            topLeft = topTierTopLeft,
-            targetSize = topTierSize,
-            overlay = barCounterAssetOverlay(material = material, tier = "top"),
-        )
-        drawBarCounterAssetTier(
-            asset = asset,
-            material = material,
-            grainRotationDeg = grainRotationDeg,
-            topLeft = frontTierTopLeft,
-            targetSize = frontTierSize,
-            overlay = barCounterAssetOverlay(material = material, tier = "front"),
         )
         drawRect(
             brush = Brush.linearGradient(
-                colors = listOf(Color.Transparent, Color.White.copy(alpha = 0.10f), Color.Transparent),
+                colors = listOf(palette.baseStart, palette.baseEnd),
+                start = Offset.Zero,
+                end = gradientEnd,
+            ),
+            topLeft = Offset.Zero,
+            size = Size(width, height),
+        )
+        drawRect(
+            brush = Brush.linearGradient(
+                colors = listOf(palette.serviceStart, palette.serviceEnd),
+                start = Offset.Zero,
+                end = gradientEnd,
+            ),
+            topLeft = Offset.Zero,
+            size = Size(width, servingTopHeight),
+        )
+        drawRect(
+            brush = Brush.linearGradient(
+                colors = listOf(palette.workStart, palette.workEnd),
+                start = Offset.Zero,
+                end = gradientEnd,
+            ),
+            topLeft = Offset(0f, servingTopHeight),
+            size = Size(width, workingTopHeight),
+        )
+        drawLine(
+            color = palette.separator,
+            start = Offset(0f, servingTopHeight),
+            end = Offset(width, servingTopHeight),
+            strokeWidth = max(stroke, minDim * 0.006f),
+        )
+        drawRect(
+            brush = Brush.linearGradient(
+                colors = listOf(palette.ambientHighlight, Color.Transparent),
                 start = Offset.Zero,
                 end = Offset(width, height),
             ),
@@ -3315,58 +3370,12 @@ private fun DrawScope.drawFloorPlanAssetBarCounterSurface(
         )
     }
 
-    val seamStroke = max(stroke, minDim * 0.035f)
-    if (horizontal) {
-        val seamY = topTierSize.height
-        drawLine(
-            color = Color.Black.copy(alpha = 0.38f),
-            start = Offset(0f, seamY),
-            end = Offset(width, seamY),
-            strokeWidth = seamStroke,
-        )
-        drawLine(
-            color = Color.White.copy(alpha = 0.24f),
-            start = Offset(0f, seamY - seamStroke * 0.55f),
-            end = Offset(width, seamY - seamStroke * 0.55f),
-            strokeWidth = max(0.75f, seamStroke * 0.45f),
-        )
-    } else {
-        val seamX = topTierSize.width
-        drawLine(
-            color = Color.Black.copy(alpha = 0.38f),
-            start = Offset(seamX, 0f),
-            end = Offset(seamX, height),
-            strokeWidth = seamStroke,
-        )
-        drawLine(
-            color = Color.White.copy(alpha = 0.24f),
-            start = Offset(seamX - seamStroke * 0.55f, 0f),
-            end = Offset(seamX - seamStroke * 0.55f, height),
-            strokeWidth = max(0.75f, seamStroke * 0.45f),
-        )
-    }
-
-    val railInset = max(3f, minDim * 0.09f)
-    val railStroke = max(stroke, minDim * 0.030f)
     drawLine(
-        color = Color.White.copy(alpha = 0.24f),
-        start = Offset(railInset, railInset),
-        end = if (horizontal) {
-            Offset(width - railInset, railInset)
-        } else {
-            Offset(railInset, height - railInset)
-        },
-        strokeWidth = railStroke,
-    )
-    drawLine(
-        color = Color.Black.copy(alpha = 0.24f),
-        start = if (horizontal) {
-            Offset(railInset, height - railInset)
-        } else {
-            Offset(width - railInset, railInset)
-        },
-        end = Offset(width - railInset, height - railInset),
-        strokeWidth = railStroke,
+        color = palette.serviceHighlight,
+        start = Offset(width * 0.04f, height * 0.05f),
+        end = Offset(width * 0.96f, height * 0.05f),
+        strokeWidth = max(1f, minDim * 0.006f),
+        cap = StrokeCap.Round,
     )
 }
 
@@ -3379,74 +3388,40 @@ private fun normalizeFloorPlanGrainRotationDeg(value: Float?): Float {
     return ((value % 360f) + 360f) % 360f
 }
 
-private fun DrawScope.drawBarCounterAssetTier(
+private fun DrawScope.drawFloorPlanBarCounterMaterialFill(
     asset: ImageBitmap,
     material: String?,
     grainRotationDeg: Float?,
-    topLeft: Offset,
-    targetSize: Size,
-    overlay: Color,
 ) {
-    val width = targetSize.width.coerceAtLeast(1f)
-    val height = targetSize.height.coerceAtLeast(1f)
+    val width = size.width.coerceAtLeast(1f)
+    val height = size.height.coerceAtLeast(1f)
     val rotatesGrain = isFloorPlanWoodBarCounterMaterial(material)
     val rotation = if (rotatesGrain) normalizeFloorPlanGrainRotationDeg(grainRotationDeg) else 0f
-    val scale = if (rotatesGrain && rotation % 180f != 0f) 1.5f else 1f
-    val drawWidth = width * scale
-    val drawHeight = height * scale
+    val drawScale = 1.52f
+    val drawWidth = width * drawScale
+    val drawHeight = height * drawScale
     val drawTopLeft = Offset(
-        x = topLeft.x - (drawWidth - width) / 2f,
-        y = topLeft.y - (drawHeight - height) / 2f,
+        x = -(drawWidth - width) / 2f,
+        y = -(drawHeight - height) / 2f,
     )
-    val center = Offset(topLeft.x + width / 2f, topLeft.y + height / 2f)
+    val center = Offset(width / 2f, height / 2f)
 
-    clipRect(
-        left = topLeft.x,
-        top = topLeft.y,
-        right = topLeft.x + width,
-        bottom = topLeft.y + height,
-    ) {
-        withTransform({
-            if (rotatesGrain) {
-                rotate(degrees = rotation, pivot = center)
-            }
-        }) {
-            drawImage(
-                image = asset,
-                srcOffset = IntOffset(0, 0),
-                srcSize = IntSize(asset.width, asset.height),
-                dstOffset = IntOffset(drawTopLeft.x.roundToInt(), drawTopLeft.y.roundToInt()),
-                dstSize = IntSize(
-                    width = drawWidth.roundToInt().coerceAtLeast(1),
-                    height = drawHeight.roundToInt().coerceAtLeast(1),
-                ),
-                filterQuality = FilterQuality.Medium,
-            )
+    withTransform({
+        if (rotatesGrain) {
+            rotate(degrees = rotation, pivot = center)
         }
-    }
-    drawRect(
-        color = overlay,
-        topLeft = topLeft,
-        size = targetSize,
-    )
-}
-
-private fun barCounterAssetOverlay(material: String?, tier: String): Color {
-    val isLight = material == "LIGHT_WOOD" || material == "LIGHT_STONE"
-    val isStone = material == "LIGHT_STONE" || material == "DARK_STONE"
-    return when (tier) {
-        "top" -> when {
-            isStone && isLight -> Color.White.copy(alpha = 0.12f)
-            isStone -> Color(0xFF111718).copy(alpha = 0.18f)
-            isLight -> Color(0xFFFFE3A8).copy(alpha = 0.08f)
-            else -> Color(0xFF170B04).copy(alpha = 0.12f)
-        }
-        else -> when {
-            isStone && isLight -> Color(0xFF4F5956).copy(alpha = 0.22f)
-            isStone -> Color.Black.copy(alpha = 0.34f)
-            isLight -> Color(0xFF55300F).copy(alpha = 0.20f)
-            else -> Color.Black.copy(alpha = 0.28f)
-        }
+    }) {
+        drawImage(
+            image = asset,
+            srcOffset = IntOffset(0, 0),
+            srcSize = IntSize(asset.width, asset.height),
+            dstOffset = IntOffset(drawTopLeft.x.roundToInt(), drawTopLeft.y.roundToInt()),
+            dstSize = IntSize(
+                width = drawWidth.roundToInt().coerceAtLeast(1),
+                height = drawHeight.roundToInt().coerceAtLeast(1),
+            ),
+            filterQuality = FilterQuality.Medium,
+        )
     }
 }
 
