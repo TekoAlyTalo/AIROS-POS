@@ -208,13 +208,18 @@ class MenuViewModel(
     @Volatile private var currentTableMaxOpenBills: Int? = initialTableMaxOpenBills
     /** Tracks the saleId of the active persisted open sale. Null until the first item is added. */
     @Volatile private var currentSaleId: String? = null
+    private val shouldForceNewSale: Boolean = forceNewSale && activeSaleId == null
 
     private var lastHandledReceiptHandoffKey: String? = null
     private val mutableState = MutableStateFlow(
         MenuUiState(
             activeTableId = activeTableId,
             activeTableLabel = activeTableLabel,
-            ticketLines = activeTableId?.let(MenuTicketDraftStore::load).orEmpty(),
+            ticketLines = if (shouldForceNewSale) {
+                emptyList()
+            } else {
+                activeTableId?.let(MenuTicketDraftStore::load).orEmpty()
+            },
         ),
     )
     val uiState: StateFlow<MenuUiState> = mutableState.asStateFlow()
@@ -283,21 +288,12 @@ class MenuViewModel(
         // A non-null activeTableId means we were launched for a specific service spot; null = walk-in.
         openSaleRepository?.let { repo ->
             viewModelScope.launch {
+                if (shouldForceNewSale) {
+                    activeTableId?.let(MenuTicketDraftStore::clear)
+                }
                 val existingSale = when {
                     activeSaleId != null -> repo.loadOpenSaleById(activeSaleId)
-                    forceNewSale -> {
-                        val reusableSale = loadReusableOpenSaleForSingleBillSpot(
-                            repo = repo,
-                            serviceSpotId = activeTableId,
-                        )
-                        if (reusableSale != null) {
-                            Log.i(
-                                "AIROS",
-                                "[MenuViewModel] ignoring forceNewSale for single-bill service spot id=$activeTableId; reusing saleId=${reusableSale.saleId}",
-                            )
-                        }
-                        reusableSale
-                    }
+                    shouldForceNewSale -> null
                     else -> repo.loadOpenSaleForSpot(activeTableId)
                 }
                 if (existingSale != null) {
@@ -859,24 +855,37 @@ class MenuViewModel(
             return
         }
         val saleId = currentSaleId ?: run {
-            val reusableSale = loadReusableOpenSaleForSingleBillSpot(
-                repo = repo,
-                serviceSpotId = currentTableId,
-            )
-            val sale = if (reusableSale != null) {
+            val sale = if (shouldForceNewSale) {
                 Log.i(
                     "AIROS",
-                    "[MenuViewModel] reusing existing open sale for single-bill service spot id=$currentTableId saleId=${reusableSale.saleId}",
+                    "[MenuViewModel] creating new open sale for forceNewSale service spot id=$currentTableId",
                 )
-                reusableSale
-            } else {
-                // Lazily create the open sale on first item add.
                 repo.createOpenSale(
                     serviceSpotId = currentTableId,
                     serviceSpotLabel = currentTableLabel,
                     maxOpenBills = currentTableMaxOpenBills,
                     spotType = currentTableSpotType,
                 )
+            } else {
+                val reusableSale = loadReusableOpenSaleForSingleBillSpot(
+                    repo = repo,
+                    serviceSpotId = currentTableId,
+                )
+                if (reusableSale != null) {
+                    Log.i(
+                        "AIROS",
+                        "[MenuViewModel] reusing existing open sale for single-bill service spot id=$currentTableId saleId=${reusableSale.saleId}",
+                    )
+                    reusableSale
+                } else {
+                    // Lazily create the open sale on first item add.
+                    repo.createOpenSale(
+                        serviceSpotId = currentTableId,
+                        serviceSpotLabel = currentTableLabel,
+                        maxOpenBills = currentTableMaxOpenBills,
+                        spotType = currentTableSpotType,
+                    )
+                }
             }
             currentTableId = sale.serviceSpotId ?: currentTableId
             currentTableLabel = sale.serviceSpotLabel ?: currentTableLabel
