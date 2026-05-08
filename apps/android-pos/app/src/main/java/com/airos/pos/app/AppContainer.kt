@@ -63,6 +63,7 @@ interface AppContainer {
     val paymentRepository: PaymentRepository
     val settingsRepository: SettingsRepository
     val staffUiPreferencesRepository: StaffUiPreferencesRepository
+    val reservationsRepository: BackendReservationsRepository
     val nfcIdentityRepository: NfcIdentityRepository
     val nfcStaffResolver: NfcStaffResolver
     val syncQueueRepository: SyncQueueRepository
@@ -153,6 +154,9 @@ class DefaultAppContainer(
     override val settingsRepository: SettingsRepository = DataStoreSettingsRepository(terminalPreferencesStore)
     override val staffUiPreferencesRepository: StaffUiPreferencesRepository =
         DataStoreStaffUiPreferencesRepository(staffUiPreferencesStore)
+    override val reservationsRepository: BackendReservationsRepository = BackendReservationsRepository(
+        backendBaseUrlProvider = { currentLedgerBackendBaseUrl().orEmpty() },
+    )
     override val printerService: PrinterService = SunmiPrinterService(appContext)
     override val scannerService: ScannerService = SunmiScannerService(appContext)
     override val cameraPreviewService: CameraPreviewService = SunmiCameraPreviewService(appContext)

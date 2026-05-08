@@ -131,15 +131,18 @@ private const val NfcLogTag = "AIROS_NFC"
 private const val SunmiUiResultLogTag = "AIROS_SUNMI_UI_RESULT"
 private const val MenuPlaceResultSpotIdKey = "menu_place_result_spot_id"
 private const val MenuPlaceResultSpotLabelKey = "menu_place_result_spot_label"
+private const val ReservationPlaceResultTableIdKey = "reservation_place_result_table_id"
+private const val ReservationPlaceResultTableLabelKey = "reservation_place_result_table_label"
 private const val MenuMaxOpenBillsWireUnbounded = -1
 
 private object Routes {
     const val Auth = "auth"
     const val Shift = "shift"
     const val TableMap = "tablemap"
-    const val TableMapPattern = "tablemap?menuPlacePicker={menuPlacePicker}"
+    const val TableMapPattern = "tablemap?menuPlacePicker={menuPlacePicker}&reservationPlacePicker={reservationPlacePicker}"
     const val Menu = "menu"
     const val Transactions = "transactions"
+    const val Reservations = "reservations"
     const val MenuPattern = "menu?tableId={tableId}&tableLabel={tableLabel}&saleId={saleId}&forceNewSale={forceNewSale}&spotType={spotType}&maxOpenBillsWire={maxOpenBillsWire}&returnToTableView={returnToTableView}"
     const val Kitchen = "kitchen"
     const val Scanner = "scanner"
@@ -174,11 +177,11 @@ private object Routes {
         }
     }
 
-    fun tableMap(menuPlacePicker: Boolean = false): String {
-        return if (menuPlacePicker) {
-            "$TableMap?menuPlacePicker=true"
-        } else {
+    fun tableMap(menuPlacePicker: Boolean = false, reservationPlacePicker: Boolean = false): String {
+        return if (!menuPlacePicker && !reservationPlacePicker) {
             TableMap
+        } else {
+            "$TableMap?menuPlacePicker=$menuPlacePicker&reservationPlacePicker=$reservationPlacePicker"
         }
     }
 
@@ -217,11 +220,11 @@ private val mainRailDestinations = listOf(
         iconTint = Color(0xFFE2CCFF),
     ),
     RailDestination(
-        route = Routes.Scanner,
-        labelKey = CashierStringKey.RailScan,
-        icon = Icons.Filled.Search,
-        iconContainerColor = Color(0xFF2E2A4A),
-        iconTint = Color(0xFFD7C8FF),
+        route = Routes.Reservations,
+        labelKey = CashierStringKey.RailReservations,
+        icon = Icons.Filled.ReceiptLong,
+        iconContainerColor = Color(0xFF243A2F),
+        iconTint = Color(0xFFB7F3C8),
     ),
     RailDestination(
         route = Routes.Shift,
@@ -1144,10 +1147,15 @@ private fun SignedInApp(
                             type = NavType.BoolType
                             defaultValue = false
                         },
+                        navArgument("reservationPlacePicker") {
+                            type = NavType.BoolType
+                            defaultValue = false
+                        },
                     ),
                 ) { entry ->
                     val context = LocalContext.current
                     val menuPlacePicker = entry.arguments?.getBoolean("menuPlacePicker") ?: false
+                    val reservationPlacePicker = entry.arguments?.getBoolean("reservationPlacePicker") ?: false
                     val viewModel: TableMapViewModel = viewModel(
                         key = "tablemap-$currentStaffId",
                         factory = TableMapViewModel.factory(
@@ -1163,19 +1171,26 @@ private fun SignedInApp(
                     val state by viewModel.uiState.collectAsState()
                     val selectedTableId = state.selectedTableId
                     val selectedTableLabel = state.floorMap?.tables?.firstOrNull { it.id == selectedTableId }?.label
+                    fun finishPlaceSelection(tableId: String, tableLabel: String) {
+                        if (menuPlacePicker) {
+                            navController.previousBackStackEntry?.savedStateHandle?.set(MenuPlaceResultSpotIdKey, tableId)
+                            navController.previousBackStackEntry?.savedStateHandle?.set(MenuPlaceResultSpotLabelKey, tableLabel)
+                            navController.popBackStack()
+                        } else if (reservationPlacePicker) {
+                            navController.previousBackStackEntry?.savedStateHandle?.set(ReservationPlaceResultTableIdKey, tableId)
+                            navController.previousBackStackEntry?.savedStateHandle?.set(ReservationPlaceResultTableLabelKey, tableLabel)
+                            navController.popBackStack()
+                        }
+                    }
                     TableMapScreen(
                         state = state,
                         currentStaffId = currentStaffId,
                         preferRichFloorPlanStyle = useRichFloorPlanStyle,
-                        placeSelectionMode = menuPlacePicker,
+                        placeSelectionMode = menuPlacePicker || reservationPlacePicker,
                         cameraPreviewService = appContainer.cameraPreviewService,
                         onSelectTable = viewModel::selectTable,
                         onSelectPlace = { tableId, tableLabel ->
-                            if (menuPlacePicker) {
-                                navController.previousBackStackEntry?.savedStateHandle?.set(MenuPlaceResultSpotIdKey, tableId)
-                                navController.previousBackStackEntry?.savedStateHandle?.set(MenuPlaceResultSpotLabelKey, tableLabel)
-                                navController.popBackStack()
-                            }
+                            finishPlaceSelection(tableId, tableLabel)
                         },
                         onViewModeChange = viewModel::setViewMode,
                         onFloorPlanViewportChange = viewModel::setFloorPlanViewport,
@@ -1192,10 +1207,8 @@ private fun SignedInApp(
                                 }
                             } else if (source == TableSaleOpenSource.TABLE_TAP && transfer?.stage == TableTransferStage.PICKING_TARGET) {
                                 viewModel.transferSelectedBillsTo(tableId)
-                            } else if (menuPlacePicker) {
-                                navController.previousBackStackEntry?.savedStateHandle?.set(MenuPlaceResultSpotIdKey, tableId)
-                                navController.previousBackStackEntry?.savedStateHandle?.set(MenuPlaceResultSpotLabelKey, tableLabel)
-                                navController.popBackStack()
+                            } else if (menuPlacePicker || reservationPlacePicker) {
+                                finishPlaceSelection(tableId, tableLabel)
                             } else {
                                 val openBillCount = state.openChecksBySpotId[tableId]?.count ?: 0
                                 val blockTableTapMultiBill =
@@ -1283,6 +1296,32 @@ private fun SignedInApp(
                     TransactionsRoute(
                         openSaleRepository = appContainer.openSaleRepository,
                         salesLedgerOutboxDao = appContainer.database.salesLedgerOutboxDao(),
+                    )
+                }
+
+                composable(Routes.Reservations) { entry ->
+                    val strings = rememberCashierStrings()
+                    val reservationPlaceId by entry.savedStateHandle
+                        .getStateFlow<String?>(ReservationPlaceResultTableIdKey, null)
+                        .collectAsState()
+                    val reservationPlaceLabel by entry.savedStateHandle
+                        .getStateFlow<String?>(ReservationPlaceResultTableLabelKey, null)
+                        .collectAsState()
+                    ReservationsRoute(
+                        reservationsRepository = appContainer.reservationsRepository,
+                        tableRepository = appContainer.tableRepository,
+                        title = strings[CashierStringKey.ReservationsTitle],
+                        selectTableLabel = strings[CashierStringKey.ReservationsSelectTable],
+                        noTableSelectedLabel = strings[CashierStringKey.ReservationsNoTableSelected],
+                        pickedTableId = reservationPlaceId,
+                        pickedTableLabel = reservationPlaceLabel,
+                        onPickedTableConsumed = {
+                            entry.savedStateHandle.remove<String>(ReservationPlaceResultTableIdKey)
+                            entry.savedStateHandle.remove<String>(ReservationPlaceResultTableLabelKey)
+                        },
+                        onOpenTablePicker = {
+                            navController.navigate(Routes.tableMap(reservationPlacePicker = true))
+                        },
                     )
                 }
 
