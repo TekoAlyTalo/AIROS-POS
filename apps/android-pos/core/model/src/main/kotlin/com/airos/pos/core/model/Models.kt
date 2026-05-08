@@ -338,6 +338,7 @@ data class FloorMapObject(
     val color: String? = null,
     val barDeskMaterial: String? = null,
     val barDeskGrainRotationDeg: Float? = null,
+    val barDeskSegmentType: String? = null,
     val backrestDirection: String? = null,
     val backrestMode: String? = null,
     val armrestMode: String? = null,

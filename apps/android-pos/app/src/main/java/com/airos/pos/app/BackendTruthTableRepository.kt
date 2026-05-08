@@ -529,6 +529,10 @@ private class BackendTableTruthClient(
                     obj.optFloatOrNull("barDeskGrainRotationDeg")
                         ?: obj.optFloatOrNull("bar_desk_grain_rotation_deg"),
                 )
+                val barDeskSegmentType = (obj.optStringOrNull("barDeskSegmentType")
+                    ?: obj.optStringOrNull("bar_desk_segment_type"))
+                    ?.trim()?.lowercase()
+                    ?.takeIf { it in setOf("straight", "vertical", "square_end", "miter_45") }
                 val cushionColor = (obj.optStringOrNull("cushionColor") ?: obj.optStringOrNull("cushion_color"))
                     ?.takeIf { it.matches(Regex("^#[0-9a-fA-F]{6}$")) }
                 val backrestDirection = (obj.optStringOrNull("backrestDirection")
@@ -617,6 +621,7 @@ private class BackendTableTruthClient(
                         color = objectColor,
                         barDeskMaterial = barDeskMaterial,
                         barDeskGrainRotationDeg = barDeskGrainRotationDeg,
+                        barDeskSegmentType = barDeskSegmentType,
                         backrestDirection = backrestDirection,
                         backrestMode = backrestMode,
                         armrestMode = armrestMode,

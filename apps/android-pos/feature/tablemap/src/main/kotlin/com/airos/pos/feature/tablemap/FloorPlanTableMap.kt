@@ -2380,6 +2380,7 @@ private fun FloorPlanObjectNode(
                 modifier = baseModifier,
                 barDeskMaterial = floorObject.barDeskMaterial,
                 barDeskGrainRotationDeg = floorObject.barDeskGrainRotationDeg,
+                barDeskSegmentType = floorObject.barDeskSegmentType,
             )
         }
         else -> {
@@ -3207,21 +3208,59 @@ private fun FloorPlanBarCounterObjectSurface(
     modifier: Modifier,
     barDeskMaterial: String?,
     barDeskGrainRotationDeg: Float?,
+    barDeskSegmentType: String? = null,
 ) {
     val normalizedMaterial = normalizedFloorPlanBarDeskMaterial(barDeskMaterial)
+    val useDarkWoodAsset = shouldUseFloorPlanDarkWoodBarCounterAsset(normalizedMaterial)
     val materialAsset = ImageBitmap.imageResource(
-        id = resolveFloorPlanBarCounterMaterialDrawableId(normalizedMaterial),
+        id = if (useDarkWoodAsset) {
+            resolveFloorPlanDarkWoodBarCounterSegmentDrawableId(widthDp.value, heightDp.value, barDeskSegmentType)
+        } else {
+            resolveFloorPlanBarCounterMaterialDrawableId(normalizedMaterial)
+        },
     )
     Box(modifier = modifier.requiredSize(widthDp, heightDp)) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             val stroke = max(1f, 1.dp.toPx())
-            drawFloorPlanAssetBarCounterSurface(
-                asset = materialAsset,
-                material = normalizedMaterial,
-                grainRotationDeg = barDeskGrainRotationDeg,
-                stroke = stroke,
-            )
+            if (useDarkWoodAsset) {
+                drawFloorPlanBarCounterSegmentAsset(asset = materialAsset)
+            } else {
+                drawFloorPlanAssetBarCounterSurface(
+                    asset = materialAsset,
+                    material = normalizedMaterial,
+                    grainRotationDeg = barDeskGrainRotationDeg,
+                    stroke = stroke,
+                )
+            }
         }
+    }
+}
+
+private fun shouldUseFloorPlanDarkWoodBarCounterAsset(material: String?): Boolean {
+    return material == null || material == "DARK_WOOD"
+}
+
+private fun resolveFloorPlanDarkWoodBarCounterSegmentDrawableId(
+    widthDp: Float,
+    heightDp: Float,
+    segmentType: String? = null,
+): Int {
+    when (segmentType?.trim()?.lowercase()) {
+        "miter_45"   -> return R.drawable.bar_counter_miter_45_dark_wood_topdown_v1
+        "straight"   -> return R.drawable.bar_counter_straight_dark_wood_topdown_v1
+        "vertical"   -> return R.drawable.bar_counter_vertical_end_dark_wood_topdown_v1
+        "square_end" -> return R.drawable.bar_counter_square_end_dark_wood_topdown_v1
+    }
+
+    // fallback: ratio-based for objects without explicit segmentType
+    val width = widthDp.coerceAtLeast(1f)
+    val height = heightDp.coerceAtLeast(1f)
+    val ratio = width / height
+
+    return when {
+        ratio >= 1.25f -> R.drawable.bar_counter_straight_dark_wood_topdown_v1
+        ratio <= 0.80f -> R.drawable.bar_counter_vertical_end_dark_wood_topdown_v1
+        else           -> R.drawable.bar_counter_square_end_dark_wood_topdown_v1
     }
 }
 
@@ -3234,16 +3273,36 @@ private fun resolveFloorPlanBarCounterMaterialDrawableId(material: String?): Int
     }
 }
 
+private fun DrawScope.drawFloorPlanBarCounterSegmentAsset(asset: ImageBitmap) {
+    val width = size.width.roundToInt().coerceAtLeast(1)
+    val height = size.height.roundToInt().coerceAtLeast(1)
+    drawImage(
+        image = asset,
+        srcOffset = IntOffset(0, 0),
+        srcSize = IntSize(asset.width, asset.height),
+        dstOffset = IntOffset(0, 0),
+        dstSize = IntSize(width, height),
+        filterQuality = FilterQuality.High,
+    )
+}
+
 private data class FloorPlanBarCounterPalette(
     val baseStart: Color,
     val baseEnd: Color,
+    val materialWash: Color,
     val serviceStart: Color,
     val serviceEnd: Color,
     val workStart: Color,
     val workEnd: Color,
+    val ledgeShadow: Color,
+    val ledgeHighlight: Color,
     val separator: Color,
+    val edgeStroke: Color,
+    val edgeHighlight: Color,
+    val bottomShadow: Color,
     val serviceHighlight: Color,
     val ambientHighlight: Color,
+    val assetOpacity: Float,
 )
 
 private fun resolveFloorPlanBarCounterPalette(material: String?): FloorPlanBarCounterPalette {
@@ -3254,53 +3313,81 @@ private fun resolveFloorPlanBarCounterPalette(material: String?): FloorPlanBarCo
     return if (isStone) {
         if (isLight) {
             FloorPlanBarCounterPalette(
-                baseStart = Color(0xFF1C2122).copy(alpha = 0.04f),
-                baseEnd = Color(0xFF0E1213).copy(alpha = 0.10f),
+                baseStart = Color(0xFFAEB7B3),
+                baseEnd = Color(0xFF596461),
+                materialWash = Color(0xFF4E5653).copy(alpha = 0.42f),
                 serviceStart = Color.White.copy(alpha = 0.10f),
-                serviceEnd = Color(0xFFB1B8B5).copy(alpha = 0.10f),
-                workStart = Color(0xFF9CA39F).copy(alpha = 0.20f),
-                workEnd = Color(0xFF343D3D).copy(alpha = 0.26f),
-                separator = Color(0xFF101415).copy(alpha = 0.14f),
-                serviceHighlight = Color.White.copy(alpha = 0.18f),
-                ambientHighlight = Color.White.copy(alpha = 0.03f),
+                serviceEnd = Color.White.copy(alpha = 0.02f),
+                workStart = Color.Black.copy(alpha = 0.04f),
+                workEnd = Color.Black.copy(alpha = 0.22f),
+                ledgeShadow = Color.Black.copy(alpha = 0.32f),
+                ledgeHighlight = Color.White.copy(alpha = 0.18f),
+                separator = Color(0xFF121616).copy(alpha = 0.46f),
+                edgeStroke = Color(0xFF181D1D).copy(alpha = 0.78f),
+                edgeHighlight = Color.White.copy(alpha = 0.16f),
+                bottomShadow = Color.Black.copy(alpha = 0.30f),
+                serviceHighlight = Color.White.copy(alpha = 0.20f),
+                ambientHighlight = Color.White.copy(alpha = 0.06f),
+                assetOpacity = 0.50f,
             )
         } else {
             FloorPlanBarCounterPalette(
-                baseStart = Color(0xFF111516).copy(alpha = 0.05f),
-                baseEnd = Color(0xFF050809).copy(alpha = 0.12f),
-                serviceStart = Color(0xFFE3E8E6).copy(alpha = 0.06f),
-                serviceEnd = Color(0xFF3A4142).copy(alpha = 0.10f),
-                workStart = Color(0xFF434C4E).copy(alpha = 0.10f),
-                workEnd = Color(0xFF14191B).copy(alpha = 0.30f),
-                separator = Color.Black.copy(alpha = 0.18f),
-                serviceHighlight = Color(0xFFF1F5F4).copy(alpha = 0.12f),
-                ambientHighlight = Color.White.copy(alpha = 0.02f),
+                baseStart = Color(0xFF30383A),
+                baseEnd = Color(0xFF111719),
+                materialWash = Color(0xFF040708).copy(alpha = 0.28f),
+                serviceStart = Color.White.copy(alpha = 0.08f),
+                serviceEnd = Color.White.copy(alpha = 0.01f),
+                workStart = Color.Black.copy(alpha = 0.06f),
+                workEnd = Color.Black.copy(alpha = 0.28f),
+                ledgeShadow = Color.Black.copy(alpha = 0.38f),
+                ledgeHighlight = Color(0xFFF1F5F4).copy(alpha = 0.13f),
+                separator = Color.Black.copy(alpha = 0.58f),
+                edgeStroke = Color.Black.copy(alpha = 0.78f),
+                edgeHighlight = Color(0xFFF1F5F4).copy(alpha = 0.10f),
+                bottomShadow = Color.Black.copy(alpha = 0.36f),
+                serviceHighlight = Color(0xFFF1F5F4).copy(alpha = 0.15f),
+                ambientHighlight = Color.White.copy(alpha = 0.04f),
+                assetOpacity = 0.48f,
             )
         }
     } else {
         if (isLight) {
             FloorPlanBarCounterPalette(
-                baseStart = Color(0xFF381F0D).copy(alpha = 0.04f),
-                baseEnd = Color(0xFF180C06).copy(alpha = 0.10f),
-                serviceStart = Color(0xFFFFF8EC).copy(alpha = 0.12f),
-                serviceEnd = Color(0xFFCB9254).copy(alpha = 0.12f),
-                workStart = Color(0xFF8A633A).copy(alpha = 0.14f),
-                workEnd = Color(0xFF402612).copy(alpha = 0.28f),
-                separator = Color(0xFF2B180A).copy(alpha = 0.14f),
-                serviceHighlight = Color(0xFFFFF8E5).copy(alpha = 0.18f),
-                ambientHighlight = Color(0xFFFFF4DC).copy(alpha = 0.03f),
+                baseStart = Color(0xFFB77A3F),
+                baseEnd = Color(0xFF633719),
+                materialWash = Color(0xFF5A2C0D).copy(alpha = 0.30f),
+                serviceStart = Color(0xFFFFD698).copy(alpha = 0.13f),
+                serviceEnd = Color(0xFFFFD698).copy(alpha = 0.03f),
+                workStart = Color(0xFF3A1907).copy(alpha = 0.06f),
+                workEnd = Color(0xFF1E0C04).copy(alpha = 0.26f),
+                ledgeShadow = Color(0xFF230E04).copy(alpha = 0.36f),
+                ledgeHighlight = Color(0xFFFFE8BE).copy(alpha = 0.22f),
+                separator = Color(0xFF2B1407).copy(alpha = 0.52f),
+                edgeStroke = Color(0xFF261005).copy(alpha = 0.72f),
+                edgeHighlight = Color(0xFFFFE5B8).copy(alpha = 0.20f),
+                bottomShadow = Color(0xFF140802).copy(alpha = 0.34f),
+                serviceHighlight = Color(0xFFFFEECD).copy(alpha = 0.24f),
+                ambientHighlight = Color(0xFFFFDCAA).copy(alpha = 0.07f),
+                assetOpacity = 0.42f,
             )
         } else {
             FloorPlanBarCounterPalette(
-                baseStart = Color(0xFF221208).copy(alpha = 0.05f),
-                baseEnd = Color(0xFF0C0603).copy(alpha = 0.12f),
-                serviceStart = Color(0xFFDFB781).copy(alpha = 0.08f),
-                serviceEnd = Color(0xFF4F2A13).copy(alpha = 0.12f),
-                workStart = Color(0xFF502E16).copy(alpha = 0.12f),
-                workEnd = Color(0xFF180C06).copy(alpha = 0.32f),
-                separator = Color(0xFF0D0704).copy(alpha = 0.18f),
-                serviceHighlight = Color(0xFFF3DCB9).copy(alpha = 0.14f),
-                ambientHighlight = Color(0xFFFFEDD2).copy(alpha = 0.02f),
+                baseStart = Color(0xFF6C3A18),
+                baseEnd = Color(0xFF251006),
+                materialWash = Color(0xFF180903).copy(alpha = 0.26f),
+                serviceStart = Color(0xFFCD8243).copy(alpha = 0.13f),
+                serviceEnd = Color(0xFFCD8243).copy(alpha = 0.03f),
+                workStart = Color.Black.copy(alpha = 0.05f),
+                workEnd = Color.Black.copy(alpha = 0.30f),
+                ledgeShadow = Color(0xFF0A0401).copy(alpha = 0.42f),
+                ledgeHighlight = Color(0xFFE2A867).copy(alpha = 0.17f),
+                separator = Color(0xFF0A0401).copy(alpha = 0.58f),
+                edgeStroke = Color(0xFF0A0401).copy(alpha = 0.78f),
+                edgeHighlight = Color(0xFFE2A867).copy(alpha = 0.14f),
+                bottomShadow = Color.Black.copy(alpha = 0.38f),
+                serviceHighlight = Color(0xFFE8B67D).copy(alpha = 0.18f),
+                ambientHighlight = Color(0xFFFFCF96).copy(alpha = 0.045f),
+                assetOpacity = 0.46f,
             )
         }
     }
@@ -3318,46 +3405,69 @@ private fun DrawScope.drawFloorPlanAssetBarCounterSurface(
     val servingTopHeight = height * 0.35f
     val workingTopHeight = (height - servingTopHeight).coerceAtLeast(1f)
     val palette = resolveFloorPlanBarCounterPalette(material)
-    val gradientEnd = Offset(0f, height)
+    val ledgeShadowHeight = floorPlanClamp(minDim * 0.12f, 4f, 14f)
+    val edgeStrokeWidth = max(stroke, minDim * 0.018f)
+    val highlightStrokeWidth = max(1f, minDim * 0.006f)
 
     clipRect(left = 0f, top = 0f, right = width, bottom = height) {
-        drawFloorPlanBarCounterMaterialFill(
-            asset = asset,
-            material = material,
-            grainRotationDeg = grainRotationDeg,
-        )
         drawRect(
-            brush = Brush.linearGradient(
+            brush = Brush.verticalGradient(
                 colors = listOf(palette.baseStart, palette.baseEnd),
-                start = Offset.Zero,
-                end = gradientEnd,
+                startY = 0f,
+                endY = height,
             ),
             topLeft = Offset.Zero,
             size = Size(width, height),
         )
+        drawFloorPlanBarCounterMaterialFill(
+            asset = asset,
+            material = material,
+            grainRotationDeg = grainRotationDeg,
+            alpha = palette.assetOpacity,
+        )
         drawRect(
-            brush = Brush.linearGradient(
+            color = palette.materialWash,
+            topLeft = Offset.Zero,
+            size = Size(width, height),
+        )
+        drawRect(
+            brush = Brush.verticalGradient(
                 colors = listOf(palette.serviceStart, palette.serviceEnd),
-                start = Offset.Zero,
-                end = gradientEnd,
+                startY = 0f,
+                endY = servingTopHeight,
             ),
             topLeft = Offset.Zero,
             size = Size(width, servingTopHeight),
         )
         drawRect(
-            brush = Brush.linearGradient(
+            brush = Brush.verticalGradient(
                 colors = listOf(palette.workStart, palette.workEnd),
-                start = Offset.Zero,
-                end = gradientEnd,
+                startY = servingTopHeight,
+                endY = height,
             ),
             topLeft = Offset(0f, servingTopHeight),
             size = Size(width, workingTopHeight),
+        )
+        drawRect(
+            brush = Brush.verticalGradient(
+                colors = listOf(palette.ledgeShadow, Color.Transparent),
+                startY = servingTopHeight,
+                endY = servingTopHeight + ledgeShadowHeight,
+            ),
+            topLeft = Offset(0f, servingTopHeight),
+            size = Size(width, ledgeShadowHeight),
+        )
+        drawLine(
+            color = palette.ledgeHighlight,
+            start = Offset(0f, servingTopHeight - highlightStrokeWidth * 0.65f),
+            end = Offset(width, servingTopHeight - highlightStrokeWidth * 0.65f),
+            strokeWidth = highlightStrokeWidth,
         )
         drawLine(
             color = palette.separator,
             start = Offset(0f, servingTopHeight),
             end = Offset(width, servingTopHeight),
-            strokeWidth = max(stroke, minDim * 0.006f),
+            strokeWidth = max(stroke, minDim * 0.010f),
         )
         drawRect(
             brush = Brush.linearGradient(
@@ -3370,11 +3480,31 @@ private fun DrawScope.drawFloorPlanAssetBarCounterSurface(
         )
     }
 
+    drawRect(
+        color = palette.edgeStroke,
+        topLeft = Offset.Zero,
+        size = Size(width, height),
+        style = Stroke(width = edgeStrokeWidth),
+    )
+    drawLine(
+        color = palette.edgeHighlight,
+        start = Offset(width * 0.03f, edgeStrokeWidth * 0.65f),
+        end = Offset(width * 0.97f, edgeStrokeWidth * 0.65f),
+        strokeWidth = highlightStrokeWidth,
+        cap = StrokeCap.Round,
+    )
+    drawLine(
+        color = palette.bottomShadow,
+        start = Offset(width * 0.02f, height - edgeStrokeWidth * 0.65f),
+        end = Offset(width * 0.98f, height - edgeStrokeWidth * 0.65f),
+        strokeWidth = max(stroke, edgeStrokeWidth),
+        cap = StrokeCap.Round,
+    )
     drawLine(
         color = palette.serviceHighlight,
-        start = Offset(width * 0.04f, height * 0.05f),
-        end = Offset(width * 0.96f, height * 0.05f),
-        strokeWidth = max(1f, minDim * 0.006f),
+        start = Offset(width * 0.05f, height * 0.07f),
+        end = Offset(width * 0.95f, height * 0.07f),
+        strokeWidth = highlightStrokeWidth,
         cap = StrokeCap.Round,
     )
 }
@@ -3392,6 +3522,7 @@ private fun DrawScope.drawFloorPlanBarCounterMaterialFill(
     asset: ImageBitmap,
     material: String?,
     grainRotationDeg: Float?,
+    alpha: Float,
 ) {
     val width = size.width.coerceAtLeast(1f)
     val height = size.height.coerceAtLeast(1f)
@@ -3420,6 +3551,7 @@ private fun DrawScope.drawFloorPlanBarCounterMaterialFill(
                 width = drawWidth.roundToInt().coerceAtLeast(1),
                 height = drawHeight.roundToInt().coerceAtLeast(1),
             ),
+            alpha = alpha,
             filterQuality = FilterQuality.Medium,
         )
     }
