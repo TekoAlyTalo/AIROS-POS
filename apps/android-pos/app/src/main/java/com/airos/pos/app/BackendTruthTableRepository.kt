@@ -235,14 +235,24 @@ private class BackendTableTruthClient(
     private val connectTimeoutMs: Int = 1_500,
     private val readTimeoutMs: Int = 2_000,
 ) {
+    private val latestSnapshotLock = Any()
+    private var latestBackendTableTruthByServiceSpotId: Map<String, BackendTableTruth> = emptyMap()
+    private var latestInUseFloorPlanSnapshot: BackendFloorPlanSnapshot? = null
+
     fun observeBackendTableTruth(): Flow<Map<String, BackendTableTruth>> = flow {
-        var latest = emptyMap<String, BackendTableTruth>()
+        var latest = readLatestBackendTableTruth()
         emit(latest)
         while (true) {
             val next = fetchTableOverviewTruth()
             if (next != null) {
-                latest = next
+                latest = storeLatestBackendTableTruth(next)
                 emit(latest)
+            } else {
+                val retained = readLatestBackendTableTruth()
+                if (retained != latest) {
+                    latest = retained
+                    emit(latest)
+                }
             }
             delay(pollIntervalMillis)
         }
@@ -252,15 +262,43 @@ private class BackendTableTruthClient(
         // Eager first fetch so the initial combine() emission already carries the
         // authoritative floor plan (and thus the camera binding) instead of null.
         var latest: BackendFloorPlanSnapshot? = fetchInUseFloorPlan()
+            ?.let(::storeLatestInUseFloorPlan)
+            ?: readLatestInUseFloorPlan()
         emit(latest)
         while (true) {
             delay(pollIntervalMillis * 2)
             val next = fetchInUseFloorPlan()
-            if (next != null || latest != null) {
-                latest = next
+            if (next != null) {
+                latest = storeLatestInUseFloorPlan(next)
                 emit(latest)
+            } else {
+                val retained = readLatestInUseFloorPlan()
+                if (retained != null && retained != latest) {
+                    latest = retained
+                    emit(latest)
+                }
             }
         }
+    }
+
+    private fun readLatestBackendTableTruth(): Map<String, BackendTableTruth> =
+        synchronized(latestSnapshotLock) { latestBackendTableTruthByServiceSpotId }
+
+    private fun storeLatestBackendTableTruth(
+        truthByServiceSpotId: Map<String, BackendTableTruth>,
+    ): Map<String, BackendTableTruth> = synchronized(latestSnapshotLock) {
+        latestBackendTableTruthByServiceSpotId = truthByServiceSpotId
+        truthByServiceSpotId
+    }
+
+    private fun readLatestInUseFloorPlan(): BackendFloorPlanSnapshot? =
+        synchronized(latestSnapshotLock) { latestInUseFloorPlanSnapshot }
+
+    private fun storeLatestInUseFloorPlan(
+        floorPlan: BackendFloorPlanSnapshot,
+    ): BackendFloorPlanSnapshot = synchronized(latestSnapshotLock) {
+        latestInUseFloorPlanSnapshot = floorPlan
+        floorPlan
     }
 
     suspend fun postOpenBillContext(
