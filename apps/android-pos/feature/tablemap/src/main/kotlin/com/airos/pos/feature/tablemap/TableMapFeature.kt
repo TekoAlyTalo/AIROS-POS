@@ -776,27 +776,16 @@ fun TableMapScreen(
         showTransferredMessage,
         transferredMessage,
     ) {
-        buildList {
-            if (showTransferredMessage) {
-                add(
-                    TableTickerEntry(
-                        kind = TableTickerEntryKind.TRANSFERRED,
-                        message = transferredMessage,
-                    ),
+        buildScheduledTickerEntries(
+            transferredEntry = transferredMessage?.takeIf { showTransferredMessage }?.let { message ->
+                TableTickerEntry(
+                    kind = TableTickerEntryKind.TRANSFERRED,
+                    message = message,
                 )
-            }
-            attentionTickerEntries.forEach { entry ->
-                val repeatCount = when (entry.kind) {
-                    TableTickerEntryKind.SERVE,
-                    TableTickerEntryKind.CHECK,
-                    -> 4
-                    TableTickerEntryKind.NEEDS_CLEANING -> 2
-                    else -> 1
-                }
-                repeat(repeatCount) { add(entry) }
-            }
-            addAll(reservationTickerEntries)
-        }
+            },
+            attentionEntries = attentionTickerEntries,
+            reservationEntries = reservationTickerEntries,
+        )
     }
     val desiredPreviewTarget = selectedTable?.previewTarget()
     val selectedPreviewTarget = when {
@@ -2272,6 +2261,128 @@ private fun TableGridCard(
     }
 }
 
+
+private fun buildScheduledTickerEntries(
+    transferredEntry: TableTickerEntry?,
+    attentionEntries: List<TableTickerEntry>,
+    reservationEntries: List<TableTickerEntry>,
+): List<TableTickerEntry> {
+    val weightedEntries = buildList {
+        if (transferredEntry != null) {
+            repeat(transferredEntry.tickerWeight()) { add(transferredEntry) }
+        }
+        attentionEntries
+            .distinctBy { it.tickerIdentity() }
+            .forEach { entry ->
+                repeat(entry.tickerWeight()) { add(entry) }
+            }
+        reservationEntries
+            .filter { it.fullTickerMessage().isNotBlank() }
+            .distinctBy { it.fullTickerMessage() }
+            .forEach { add(it) }
+    }
+    return scheduleTickerEntries(weightedEntries)
+}
+
+private fun scheduleTickerEntries(entries: List<TableTickerEntry>): List<TableTickerEntry> {
+    if (entries.size <= 1) return entries
+
+    val remaining = entries.toMutableList()
+    val scheduled = mutableListOf<TableTickerEntry>()
+    val hasMultipleKinds = entries.map { it.kind }.toSet().size > 1
+
+    while (remaining.isNotEmpty()) {
+        val last = scheduled.lastOrNull()
+        val candidates = remaining.withIndex()
+            .filter { (_, entry) -> last == null || entry.fullTickerMessage() != last.fullTickerMessage() }
+        if (candidates.isEmpty()) break
+
+        var preferred = candidates.filter { (_, entry) ->
+            last == null || !last.conflictsWithNextTickerEntry(entry, hasMultipleKinds)
+        }
+        if (preferred.isEmpty()) {
+            if (
+                last != null &&
+                hasMultipleKinds &&
+                (last.kind == TableTickerEntryKind.RESERVATION ||
+                    last.kind == TableTickerEntryKind.NEEDS_CLEANING) &&
+                candidates.all { (_, entry) -> entry.kind == last.kind }
+            ) {
+                break
+            }
+            preferred = candidates
+        }
+
+        val selected = preferred.maxWithOrNull(
+            compareBy<IndexedValue<TableTickerEntry>> { it.value.tickerSchedulePriority() }
+                .thenBy { -it.index },
+        ) ?: break
+        scheduled += selected.value
+        remaining.removeAt(selected.index)
+    }
+
+    return scheduled.withStableTickerCycleBoundary(hasMultipleKinds)
+}
+
+private fun List<TableTickerEntry>.withStableTickerCycleBoundary(
+    hasMultipleKinds: Boolean,
+): List<TableTickerEntry> {
+    if (size <= 1) return this
+    if (!last().conflictsWithNextTickerEntry(first(), hasMultipleKinds)) return this
+
+    for (startIndex in 1 until size) {
+        val rotated = drop(startIndex) + take(startIndex)
+        val hasInternalConflict = rotated.zipWithNext()
+            .any { (previous, next) -> previous.conflictsWithNextTickerEntry(next, hasMultipleKinds) }
+        if (!hasInternalConflict && !rotated.last().conflictsWithNextTickerEntry(rotated.first(), hasMultipleKinds)) {
+            return rotated
+        }
+    }
+
+    var trimmed = this
+    while (
+        trimmed.size > 1 &&
+        trimmed.last().conflictsWithNextTickerEntry(trimmed.first(), hasMultipleKinds)
+    ) {
+        trimmed = trimmed.dropLast(1)
+    }
+    return trimmed
+}
+
+private fun TableTickerEntry.conflictsWithNextTickerEntry(
+    next: TableTickerEntry,
+    hasMultipleKinds: Boolean,
+): Boolean {
+    if (fullTickerMessage() == next.fullTickerMessage()) return true
+    return hasMultipleKinds && kind == next.kind
+}
+
+private fun TableTickerEntry.tickerWeight(): Int {
+    return when (kind) {
+        TableTickerEntryKind.SERVE,
+        TableTickerEntryKind.CHECK,
+        -> 4
+        TableTickerEntryKind.TRANSFERRED -> 2
+        TableTickerEntryKind.NEEDS_CLEANING,
+        TableTickerEntryKind.RESERVATION,
+        -> 1
+    }
+}
+
+private fun TableTickerEntry.tickerSchedulePriority(): Int {
+    return when (kind) {
+        TableTickerEntryKind.SERVE,
+        TableTickerEntryKind.CHECK,
+        -> 5
+        TableTickerEntryKind.TRANSFERRED -> 4
+        TableTickerEntryKind.RESERVATION -> 3
+        TableTickerEntryKind.NEEDS_CLEANING -> 1
+    }
+}
+
+private fun TableTickerEntry.tickerIdentity(): String {
+    return "${kind.name}:${fullTickerMessage()}"
+}
 
 private fun TableTickerEntry.fullTickerMessage(): String {
     val tableText = tableLabel.orEmpty()

@@ -532,27 +532,19 @@ private fun buildReservationTickerMessages(
     }
 
     val warmup = Duration.between(appSessionStartedAt, Instant.now()).toMinutes() in 0 until 10
-    val countEntry = "Tänään varauksia: ${todaysReservations.size}"
-    repeat(if (warmup) 2 else 1) { weighted += countEntry }
 
     val reservationEntries = todaysReservations
         .filter { (_, start) -> start >= now.minusHours(3) }
         .take(5)
         .map { (reservation, start) ->
             val tableLabel = tableLabelsByBackendId[reservation.tableId] ?: "T${reservation.tableId}"
-            val base = "${start.format(ShellNowFormatter)} $tableLabel • ${reservation.persons} hlö"
-            val customer = reservation.customerName.trim().takeIf { it.isNotBlank() }
+            val text = "Varaus • $tableLabel ${start.format(ShellNowFormatter)} • ${reservation.persons} hlö"
             val minutesUntil = Duration.between(now, start).toMinutes()
             val overdue = minutesUntil < 0
-            val text = when {
-                overdue -> "OVERDUE: $base"
-                customer != null -> "Seuraava varaus $base • $customer"
-                else -> "Seuraava varaus $base"
-            }
             val frequency = when {
-                overdue -> 4
-                minutesUntil <= 15 -> 4
-                minutesUntil <= 60 -> 3
+                overdue -> 2
+                minutesUntil <= 15 -> 2
+                minutesUntil <= 60 -> 2
                 warmup -> 2
                 else -> 1
             }
