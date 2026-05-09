@@ -85,7 +85,6 @@ import com.airos.pos.core.model.ServiceSpotType
 import com.airos.pos.core.model.StaffFloorPlanViewportPreference
 import com.airos.pos.core.model.StaffTableMapViewPreference
 import com.airos.pos.core.ui.KeyValueRow
-import com.airos.pos.core.ui.PosPane
 import com.airos.pos.core.ui.StatusBanner
 import com.airos.pos.device.camera.CameraPreviewService
 import com.airos.pos.domain.OpenSaleRepository
@@ -664,6 +663,7 @@ fun TableMapScreen(
     onViewModeChange: (StaffTableMapViewPreference) -> Unit,
     onFloorPlanViewportChange: (StaffFloorPlanViewportPreference) -> Unit,
     onOpenTableSale: (tableId: String, tableLabel: String, saleId: String?, source: TableSaleOpenSource) -> Unit,
+    onReserveTable: (tableId: String, tableLabel: String) -> Unit = { _, _ -> },
     onStartTransferMode: (String) -> Unit,
     onStartTransferModeForSale: (tableId: String, saleId: String) -> Unit,
     onToggleTransferSale: (String) -> Unit,
@@ -1078,64 +1078,80 @@ LaunchedEffect(
             }
         }
 
-        PosPane(
-            title = selectedTable?.label ?: "Table details",
-            supportingText = "",
+        Surface(
             modifier = Modifier
                 .weight(0.67f)
                 .fillMaxHeight(),
+            shape = RoundedCornerShape(28.dp),
+            color = TableMapVisualTokens.ShellColor,
+            border = androidx.compose.foundation.BorderStroke(1.dp, TableMapVisualTokens.BorderColor),
+            contentColor = TableMapVisualTokens.TextPrimary,
         ) {
-            if (selectedTable == null) {
-                if (hasRealFloorMap) {
-                    Text("Select a table to continue.")
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = selectedTable?.label ?: "Table details",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = TableMapVisualTokens.TextPrimary,
+                )
+                if (selectedTable == null) {
+                    if (hasRealFloorMap) {
+                        Text("Select a table to continue.")
+                    } else {
+                        HonestFloorMapUnavailableState(
+                            title = "Tables unavailable offline",
+                            message = "No real floor map is cached on this device yet.",
+                        )
+                    }
                 } else {
-                    HonestFloorMapUnavailableState(
-                        title = "Tables unavailable offline",
-                        message = "No real floor map is cached on this device yet.",
+                    val selectedOpenSales = state.openSalesBySpotId[selectedTable.id].orEmpty()
+                    val selectedOpenSaleIds = selectedOpenSales.mapTo(linkedSetOf()) { it.saleId }
+                    TableDetailsContent(
+                        table = selectedTable,
+                        previewState = state.cameraPreviewState,
+                        previewTarget = selectedPreviewTarget,
+                        isLivePreviewDialogVisible = state.isLivePreviewDialogVisible,
+                        cameraPreviewService = cameraPreviewService,
+                        canOpenLivePreview = !selectedTable.cameraId.isNullOrBlank() && !state.edgeBaseUrl.isNullOrBlank(),
+                        openCheckSummary = state.openChecksBySpotId[selectedTable.id],
+                        openSales = selectedOpenSales,
+                        transferHistory = state.openSaleTransferEvents.filter { it.saleId in selectedOpenSaleIds },
+                        transferState = transferState,
+                        placeSelectionMode = placeSelectionMode,
+                        onOpenSale = { saleId -> onOpenTableSale(selectedTable.id, selectedTable.label, saleId, TableSaleOpenSource.BILL_ROW) },
+                        onOpenNewSale = { onOpenTableSale(selectedTable.id, selectedTable.label, null, TableSaleOpenSource.NEW_SALE_BUTTON) },
+                        onReserveTable = { onReserveTable(selectedTable.id, selectedTable.label) },
+                        onStartTransfer = { onStartTransferMode(selectedTable.id) },
+                        onStartTransferForSale = { saleId -> onStartTransferModeForSale(selectedTable.id, saleId) },
+                        onToggleTransferSale = onToggleTransferSale,
+                        onBeginTransferTargetSelection = onBeginTransferTargetSelection,
+                        onCancelTransferMode = onCancelTransferMode,
+                        onOpenLivePreview = onOpenLivePreview,
+                        onAcknowledgeTableAction = onAcknowledgeTableAction?.let { callback ->
+                            { actionKind -> callback(selectedTable.id, actionKind) }
+                        },
+                        onBillDragStartInRoot = { saleCount, positionInRoot ->
+                            billDrag = BillDragUiState(
+                                active = true,
+                                positionInRoot = positionInRoot,
+                                saleCount = saleCount,
+                                sourceSpotId = selectedTable.id,
+                                hoveredTableId = null,
+                            )
+                        },
+                        onBillDragMoveInRoot = { positionInRoot ->
+                            if (billDrag.active) {
+                                billDrag = billDrag.copy(positionInRoot = positionInRoot)
+                            }
+                        },
+                        onBillDragEnd = { endBillDragAndMaybeTransfer() },
                     )
                 }
-            } else {
-                val selectedOpenSales = state.openSalesBySpotId[selectedTable.id].orEmpty()
-                val selectedOpenSaleIds = selectedOpenSales.mapTo(linkedSetOf()) { it.saleId }
-                TableDetailsContent(
-                    table = selectedTable,
-                    previewState = state.cameraPreviewState,
-                    previewTarget = selectedPreviewTarget,
-                    isLivePreviewDialogVisible = state.isLivePreviewDialogVisible,
-                    cameraPreviewService = cameraPreviewService,
-                    canOpenLivePreview = !selectedTable.cameraId.isNullOrBlank() && !state.edgeBaseUrl.isNullOrBlank(),
-                    openCheckSummary = state.openChecksBySpotId[selectedTable.id],
-                    openSales = selectedOpenSales,
-                    transferHistory = state.openSaleTransferEvents.filter { it.saleId in selectedOpenSaleIds },
-                    transferState = transferState,
-                    placeSelectionMode = placeSelectionMode,
-                    onOpenSale = { saleId -> onOpenTableSale(selectedTable.id, selectedTable.label, saleId, TableSaleOpenSource.BILL_ROW) },
-                    onOpenNewSale = { onOpenTableSale(selectedTable.id, selectedTable.label, null, TableSaleOpenSource.NEW_SALE_BUTTON) },
-                    onStartTransfer = { onStartTransferMode(selectedTable.id) },
-                    onStartTransferForSale = { saleId -> onStartTransferModeForSale(selectedTable.id, saleId) },
-                    onToggleTransferSale = onToggleTransferSale,
-                    onBeginTransferTargetSelection = onBeginTransferTargetSelection,
-                    onCancelTransferMode = onCancelTransferMode,
-                    onOpenLivePreview = onOpenLivePreview,
-                    onAcknowledgeTableAction = onAcknowledgeTableAction?.let { callback ->
-                        { actionKind -> callback(selectedTable.id, actionKind) }
-                    },
-                    onBillDragStartInRoot = { saleCount, positionInRoot ->
-                        billDrag = BillDragUiState(
-                            active = true,
-                            positionInRoot = positionInRoot,
-                            saleCount = saleCount,
-                            sourceSpotId = selectedTable.id,
-                            hoveredTableId = null,
-                        )
-                    },
-                    onBillDragMoveInRoot = { positionInRoot ->
-                        if (billDrag.active) {
-                            billDrag = billDrag.copy(positionInRoot = positionInRoot)
-                        }
-                    },
-                    onBillDragEnd = { endBillDragAndMaybeTransfer() },
-                )
             }
         }
     }
@@ -1269,6 +1285,7 @@ private fun TableDetailsContent(
     placeSelectionMode: Boolean = false,
     onOpenSale: (String) -> Unit,
     onOpenNewSale: () -> Unit,
+    onReserveTable: () -> Unit,
     onStartTransfer: () -> Unit,
     onStartTransferForSale: (String) -> Unit,
     onToggleTransferSale: (String) -> Unit,
@@ -1282,6 +1299,7 @@ private fun TableDetailsContent(
 ) {
     val renderedOpenBillCount = openSales.size
     val openBillCount = openCheckSummary?.count ?: renderedOpenBillCount
+    val openSalesTotalLabel = formatOpenTotal(openSales.sumOf { it.openSaleTotalCents() })
     val maxOpenBills = table.maxOpenBills
     val hasReachedOpenBillLimit = when {
         maxOpenBills != null -> renderedOpenBillCount >= maxOpenBills
@@ -1394,8 +1412,8 @@ private fun TableDetailsContent(
                     modifier = Modifier.weight(1f),
                 )
                 TableDetailsMetaChip(
-                    label = "Camera",
-                    value = table.cameraLabel ?: "Not assigned",
+                    label = "Avoimet laskut yhteensä",
+                    value = openSalesTotalLabel,
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -1505,7 +1523,9 @@ private fun TableDetailsContent(
                     when {
                         openSales.isEmpty() && transferForThisTable == null -> {
                             Column(
-                                modifier = Modifier.align(Alignment.Center),
+                                modifier = Modifier
+                                    .align(Alignment.Center)
+                                    .fillMaxWidth(),
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.spacedBy(10.dp),
                             ) {
@@ -1514,11 +1534,12 @@ private fun TableDetailsContent(
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
-                                if (!hasReachedOpenBillLimit) {
-                                    Button(onClick = onOpenNewSale) {
-                                        Text(if (placeSelectionMode) "Valitse pöytä" else "Avaa uusi lasku")
-                                    }
-                                }
+                                TableDetailsActionRow(
+                                    placeSelectionMode = placeSelectionMode,
+                                    canOpenNewSale = !hasReachedOpenBillLimit,
+                                    onOpenNewSale = onOpenNewSale,
+                                    onReserveTable = onReserveTable,
+                                )
                             }
                         }
 
@@ -1569,13 +1590,13 @@ private fun TableDetailsContent(
                                         onDragEnd = onBillDragEnd,
                                     )
                                 }
-                                if (transferForThisTable == null && !hasReachedOpenBillLimit) {
-                                    Button(
-                                        onClick = onOpenNewSale,
-                                        modifier = Modifier.fillMaxWidth(),
-                                    ) {
-                                        Text(if (placeSelectionMode) "Valitse pöytä" else "Avaa uusi lasku")
-                                    }
+                                if (transferForThisTable == null) {
+                                    TableDetailsActionRow(
+                                        placeSelectionMode = placeSelectionMode,
+                                        canOpenNewSale = !hasReachedOpenBillLimit,
+                                        onOpenNewSale = onOpenNewSale,
+                                        onReserveTable = onReserveTable,
+                                    )
                                 }
                             }
                         }
@@ -1662,7 +1683,12 @@ private fun TableDetailsContent(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .aspectRatio(MINI_PREVIEW_SHELL_ASPECT_RATIO),
+                        .aspectRatio(MINI_PREVIEW_SHELL_ASPECT_RATIO)
+                        .clip(RoundedCornerShape(18.dp))
+                        .clickable(
+                            enabled = canOpenLivePreview,
+                            onClick = onOpenLivePreview,
+                        ),
                     contentAlignment = Alignment.Center,
                 ) {
                     val activeMiniTarget = previewTarget
@@ -1723,14 +1749,39 @@ private fun TableDetailsContent(
                         },
                     )
                 }
+            }
+        }
+    }
+}
 
-                Button(
-                    onClick = onOpenLivePreview,
-                    enabled = canOpenLivePreview,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Open live view")
-                }
+@Composable
+private fun TableDetailsActionRow(
+    placeSelectionMode: Boolean,
+    canOpenNewSale: Boolean,
+    onOpenNewSale: () -> Unit,
+    onReserveTable: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (!canOpenNewSale && placeSelectionMode) return
+
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (canOpenNewSale) {
+            Button(
+                onClick = onOpenNewSale,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(if (placeSelectionMode) "Valitse pöytä" else "Avaa uusi lasku")
+            }
+        }
+        if (!placeSelectionMode) {
+            OutlinedButton(
+                onClick = onReserveTable,
+                modifier = Modifier.weight(if (canOpenNewSale) 0.62f else 1f),
+            ) {
+                Text("VARAA")
             }
         }
     }

@@ -1395,6 +1395,17 @@ private fun SignedInApp(
                             }
 
                         },
+                        onReserveTable = { tableId, tableLabel ->
+                            navController.navigate(Routes.Reservations)
+                            navController.currentBackStackEntry?.savedStateHandle?.set(
+                                ReservationPlaceResultTableIdKey,
+                                tableId,
+                            )
+                            navController.currentBackStackEntry?.savedStateHandle?.set(
+                                ReservationPlaceResultTableLabelKey,
+                                tableLabel,
+                            )
+                        },
                         onStartTransferMode = viewModel::startTransferMode,
                         onStartTransferModeForSale = viewModel::startTransferModeForSale,
                         onToggleTransferSale = viewModel::toggleTransferSale,
