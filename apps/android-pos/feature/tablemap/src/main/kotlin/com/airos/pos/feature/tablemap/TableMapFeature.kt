@@ -189,6 +189,7 @@ private enum class TableTickerEntryKind {
     CHECK,
     NEEDS_CLEANING,
     TRANSFERRED,
+    RESERVATION,
 }
 
 data class TableLivePreviewTarget(
@@ -656,6 +657,7 @@ fun TableMapScreen(
     currentStaffId: String?,
     preferRichFloorPlanStyle: Boolean = false,
     placeSelectionMode: Boolean = false,
+    reservationTickerMessages: List<String> = emptyList(),
     cameraPreviewService: CameraPreviewService,
     onSelectTable: (String) -> Unit,
     onSelectPlace: ((tableId: String, tableLabel: String) -> Unit)? = null,
@@ -757,7 +759,23 @@ fun TableMapScreen(
     }
     val showTransferredMessage = transferredMessage != null &&
         transferredMessageAppearances < TRANSFERRED_MESSAGE_MAX_APPEARANCES
-    val tickerEntries = remember(attentionTickerEntries, showTransferredMessage, transferredMessage) {
+    val reservationTickerEntries = remember(reservationTickerMessages) {
+        reservationTickerMessages
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .map { message ->
+                TableTickerEntry(
+                    kind = TableTickerEntryKind.RESERVATION,
+                    message = message,
+                )
+            }
+    }
+    val tickerEntries = remember(
+        attentionTickerEntries,
+        reservationTickerEntries,
+        showTransferredMessage,
+        transferredMessage,
+    ) {
         buildList {
             if (showTransferredMessage) {
                 add(
@@ -767,7 +785,17 @@ fun TableMapScreen(
                     ),
                 )
             }
-            addAll(attentionTickerEntries)
+            attentionTickerEntries.forEach { entry ->
+                val repeatCount = when (entry.kind) {
+                    TableTickerEntryKind.SERVE,
+                    TableTickerEntryKind.CHECK,
+                    -> 4
+                    TableTickerEntryKind.NEEDS_CLEANING -> 2
+                    else -> 1
+                }
+                repeat(repeatCount) { add(entry) }
+            }
+            addAll(reservationTickerEntries)
         }
     }
     val desiredPreviewTarget = selectedTable?.previewTarget()
@@ -1187,8 +1215,12 @@ if (billDrag.active) {
 
 if (state.isLivePreviewDialogVisible) {
         state.livePreviewTarget?.let { target ->
+        val previewTable = allTables.firstOrNull { it.id == target.tableId }
+        val previewOpenSales = state.openSalesBySpotId[target.tableId].orEmpty()
         TableLivePreviewDialog(
             target = target,
+            table = previewTable,
+            openSales = previewOpenSales,
             previewState = state.cameraPreviewState,
             cameraPreviewService = cameraPreviewService,
             onRetry = onRetryLivePreview,
@@ -2248,6 +2280,7 @@ private fun TableTickerEntry.fullTickerMessage(): String {
         TableTickerEntryKind.CHECK -> "CHECK $tableText"
         TableTickerEntryKind.NEEDS_CLEANING -> "NEEDS CLEANING $tableText"
         TableTickerEntryKind.TRANSFERRED -> message?.toTransferredTickerMessage() ?: "BILL TRANSFERRED"
+        TableTickerEntryKind.RESERVATION -> message.orEmpty()
     }.trim()
 }
 
@@ -2265,6 +2298,7 @@ private fun TableTickerEntry.tickerColor(): Color {
         TableTickerEntryKind.CHECK -> TableCheckAttentionColor
         TableTickerEntryKind.NEEDS_CLEANING -> TableMapVisualTokens.DirtyColor
         TableTickerEntryKind.TRANSFERRED -> TableMapVisualTokens.AccentText.copy(alpha = 0.82f)
+        TableTickerEntryKind.RESERVATION -> TableMapVisualTokens.AccentText.copy(alpha = 0.86f)
     }
 }
 
@@ -2482,6 +2516,8 @@ fun mergedHintFor(table: RestaurantTable): String? {
 @Composable
 private fun TableLivePreviewDialog(
     target: TableLivePreviewTarget,
+    table: RestaurantTable?,
+    openSales: List<PersistedOpenSale>,
     previewState: CameraPreviewState,
     cameraPreviewService: CameraPreviewService,
     onRetry: () -> Unit,
@@ -2537,24 +2573,51 @@ private fun TableLivePreviewDialog(
                     modifier = Modifier.width(248.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            text = target.tableLabel,
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Text(
-                            text = target.cameraLabel,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                    // Header: table label + compact close button
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Text(
+                                text = target.tableLabel,
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Text(
+                                text = target.cameraLabel,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(999.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clickable(onClick = onDismiss),
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier.fillMaxSize(),
+                            ) {
+                                Text(
+                                    text = "✕",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
                     }
+
+                    // Camera connection status pill
                     PreviewStatusPill(displayConnectionState)
 
-                    KeyValueRow("Table", target.tableLabel)
-                    KeyValueRow("Resolved camera id", target.cameraId)
-                    KeyValueRow("State", displayConnectionState.name)
-
+                    // Error banner
                     if (!errorMessage.isNullOrBlank() && previewState.connectionState == CameraConnectionState.ERROR) {
                         StatusBanner(
                             text = errorMessage,
@@ -2562,17 +2625,99 @@ private fun TableLivePreviewDialog(
                         )
                     }
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                    ) {
-                        if (previewState.connectionState == CameraConnectionState.ERROR) {
-                            TextButton(onClick = onRetry) {
-                                Text("Retry")
+                    // Table operational summary
+                    if (table != null) {
+                        val openBillCount = openSales.size
+                        val displayStatus = resolveTableDisplayStatus(
+                            physicalStatus = table.status,
+                            openBillCount = openBillCount,
+                            attentionFlag = table.attentionFlag,
+                        )
+
+                        // Table facts
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            if (table.areaName.isNotBlank()) {
+                                KeyValueRow("Area", table.areaName)
+                            }
+                            KeyValueRow("Seats", "${table.seats}")
+                            if (table.guestCount > 0) {
+                                KeyValueRow("Guests", "${table.guestCount}")
+                            }
+                            KeyValueRow("Status", displayStatus.label)
+                        }
+
+                        // Open bills
+                        if (openBillCount > 0) {
+                            val totalCents = openSales.sumOf { it.openSaleTotalCents() }
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                KeyValueRow("Open bills", "$openBillCount")
+                                KeyValueRow("Total", formatOpenTotal(totalCents))
+                                openSales.forEach { sale ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(start = 8.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = sale.openSaleLabel(),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                        Text(
+                                            text = formatOpenTotal(sale.openSaleTotalCents()),
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                        )
+                                    }
+                                }
                             }
                         }
-                        TextButton(onClick = onDismiss) {
-                            Text("Close")
+
+                        // Attention / operational flags
+                        val activeFlags = buildList<Pair<String, Color>> {
+                            if (displayStatus.hasCheckAttention) add("CHECK" to TableCheckAttentionColor)
+                            if (displayStatus.hasServiceAttention) add("SERVE" to TableServiceAttentionColor)
+                            if (displayStatus.kind == TableDisplayStatusKind.DIRTY) add("NEEDS CLEANING" to TableMapVisualTokens.DirtyColor)
+                        }
+                        if (activeFlags.isNotEmpty()) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                activeFlags.forEach { (label, color) ->
+                                    Surface(
+                                        color = color.copy(alpha = 0.14f),
+                                        shape = RoundedCornerShape(999.dp),
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                            color = color,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Camera id — compact technical footnote
+                    Text(
+                        text = "cam: ${target.cameraId}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+                    )
+
+                    // Retry only on error
+                    if (previewState.connectionState == CameraConnectionState.ERROR) {
+                        OutlinedButton(
+                            onClick = onRetry,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Retry")
                         }
                     }
                 }

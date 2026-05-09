@@ -108,12 +108,19 @@ import com.airos.pos.feature.tablemap.TableTransferStage
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import androidx.compose.ui.window.Dialog
 import com.airos.pos.core.ui.NumericPinPad
 import kotlinx.coroutines.withContext
+import java.time.Duration
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.OffsetDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 private val AppShellBackground = Color(0xFF060C12)
 private val AppShellRailColor = Color(0xFF09121A)
@@ -126,6 +133,7 @@ private val AppShellTextPrimary = Color(0xFFFBFEFF)
 private val AppShellTextSecondary = Color(0xFFE1EBF2)
 private val AppShellTextMuted = Color(0xFFB0C0CD)
 private val AppShellAccentText = Color(0xFF85F5E0)
+private val ShellNowFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 private const val CustomerDisplayLogTag = "SunmiCustomerDisplay"
 private const val NfcLogTag = "AIROS_NFC"
 private const val SunmiUiResultLogTag = "AIROS_SUNMI_UI_RESULT"
@@ -316,6 +324,7 @@ fun AirosPosApp(
     appContainer: AppContainer,
 ) {
     val session by appContainer.authRepository.activeSession.collectAsState()
+    val shellNow = rememberCurrentMinute()
 
     // Auto clock-in: when a new sign-in happens (session transitions null → non-null),
     // clock the newly signed-in staff in without requiring a separate action.
@@ -384,21 +393,29 @@ fun AirosPosApp(
             }
         }
 
-        AuthScreen(
-            state = authState,
-            onStaffSelected = authViewModel::selectStaff,
-            onDigit = authViewModel::appendPin,
-            onBackspace = authViewModel::removePinDigit,
-            onClearPin = authViewModel::clearPin,
-            onSubmitPin = authViewModel::submitPin,
-            onShowManagerOverride = authViewModel::showManagerOverrideDialog,
-            onManagerSelected = authViewModel::selectManager,
-            onManagerDigit = authViewModel::appendManagerPin,
-            onManagerBackspace = authViewModel::removeManagerPinDigit,
-            onClearManagerPin = authViewModel::clearManagerPin,
-            onConfirmManagerOverride = authViewModel::confirmManagerOverride,
-            onDismissManagerOverride = authViewModel::dismissManagerOverrideDialog,
-        )
+        Box(modifier = Modifier.fillMaxSize()) {
+            AuthScreen(
+                state = authState,
+                onStaffSelected = authViewModel::selectStaff,
+                onDigit = authViewModel::appendPin,
+                onBackspace = authViewModel::removePinDigit,
+                onClearPin = authViewModel::clearPin,
+                onSubmitPin = authViewModel::submitPin,
+                onShowManagerOverride = authViewModel::showManagerOverrideDialog,
+                onManagerSelected = authViewModel::selectManager,
+                onManagerDigit = authViewModel::appendManagerPin,
+                onManagerBackspace = authViewModel::removeManagerPinDigit,
+                onClearManagerPin = authViewModel::clearManagerPin,
+                onConfirmManagerOverride = authViewModel::confirmManagerOverride,
+                onDismissManagerOverride = authViewModel::dismissManagerOverrideDialog,
+            )
+            ShellNowStamp(
+                now = shellNow,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 10.dp, end = 12.dp),
+            )
+        }
         return
     }
 
@@ -430,6 +447,7 @@ fun AirosPosApp(
             appContainer = appContainer,
             currentStaffId = currentStaffId,
             currentStaffName = session!!.displayName,
+            now = shellNow,
         )
         Column(modifier = Modifier.fillMaxWidth()) {
             MenuSyncBanner(syncState = syncState)
@@ -493,11 +511,122 @@ private fun AttendanceSyncBanner(message: String?) {
     }
 }
 
+private fun buildReservationTickerMessages(
+    now: LocalDateTime,
+    appSessionStartedAt: Instant,
+    reservations: List<BackendReservation>,
+    tableLabelsByBackendId: Map<Int, String>,
+): List<String> {
+    val weighted = mutableListOf<String>()
+    val today = now.toLocalDate()
+    val todaysReservations = reservations
+        .mapNotNull { reservation ->
+            val start = parseShellReservationDateTime(reservation.startTime) ?: return@mapNotNull null
+            if (start.toLocalDate() != today) return@mapNotNull null
+            reservation to start
+        }
+        .sortedBy { it.second }
+
+    if (todaysReservations.isEmpty()) {
+        return weighted
+    }
+
+    val warmup = Duration.between(appSessionStartedAt, Instant.now()).toMinutes() in 0 until 10
+    val countEntry = "Tänään varauksia: ${todaysReservations.size}"
+    repeat(if (warmup) 2 else 1) { weighted += countEntry }
+
+    val reservationEntries = todaysReservations
+        .filter { (_, start) -> start >= now.minusHours(3) }
+        .take(5)
+        .map { (reservation, start) ->
+            val tableLabel = tableLabelsByBackendId[reservation.tableId] ?: "T${reservation.tableId}"
+            val base = "${start.format(ShellNowFormatter)} $tableLabel • ${reservation.persons} hlö"
+            val customer = reservation.customerName.trim().takeIf { it.isNotBlank() }
+            val minutesUntil = Duration.between(now, start).toMinutes()
+            val overdue = minutesUntil < 0
+            val text = when {
+                overdue -> "OVERDUE: $base"
+                customer != null -> "Seuraava varaus $base • $customer"
+                else -> "Seuraava varaus $base"
+            }
+            val frequency = when {
+                overdue -> 4
+                minutesUntil <= 15 -> 4
+                minutesUntil <= 60 -> 3
+                warmup -> 2
+                else -> 1
+            }
+            text to frequency
+        }
+
+    reservationEntries.forEach { (message, frequency) ->
+        repeat(frequency) { weighted += message }
+    }
+
+    return weighted
+}
+
+private fun parseShellReservationDateTime(raw: String): LocalDateTime? {
+    val value = raw.trim()
+    if (value.isBlank()) return null
+    return runCatching { OffsetDateTime.parse(value).toLocalDateTime() }.getOrNull()
+        ?: runCatching { LocalDateTime.parse(value) }.getOrNull()
+        ?: runCatching { Instant.parse(value).atZone(ZoneId.systemDefault()).toLocalDateTime() }.getOrNull()
+}
+
+private fun formatFinnishNowStamp(now: LocalDateTime): String {
+    val day = when (now.dayOfWeek.value) {
+        1 -> "Ma"
+        2 -> "Ti"
+        3 -> "Ke"
+        4 -> "To"
+        5 -> "Pe"
+        6 -> "La"
+        else -> "Su"
+    }
+    return "$day ${now.dayOfMonth}.${now.monthValue}. ${now.format(ShellNowFormatter)}"
+}
+
+@Composable
+private fun rememberCurrentMinute(): LocalDateTime {
+    var now by remember { mutableStateOf(LocalDateTime.now()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            now = LocalDateTime.now()
+            val millisIntoMinute = System.currentTimeMillis() % 60_000L
+            delay((60_000L - millisIntoMinute).coerceAtLeast(1_000L))
+        }
+    }
+    return now
+}
+
+@Composable
+private fun ShellNowStamp(
+    now: LocalDateTime,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(999.dp),
+        color = AppShellPanelColor.copy(alpha = 0.92f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, AppShellBorderColor),
+    ) {
+        Text(
+            text = formatFinnishNowStamp(now),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+            style = MaterialTheme.typography.labelLarge,
+            color = AppShellTextPrimary,
+            maxLines = 1,
+        )
+    }
+}
+
 @Composable
 private fun SignedInApp(
     appContainer: AppContainer,
     currentStaffId: String,
     currentStaffName: String,
+    now: LocalDateTime,
 ) {
     val navController = rememberNavController()
     val scope = rememberCoroutineScope()
@@ -561,6 +690,45 @@ private fun SignedInApp(
         }
     }
 
+    val sellerSessionStartedAt = remember(currentStaffId) { Instant.now() }
+    var todayReservations by remember { mutableStateOf<List<BackendReservation>>(emptyList()) }
+    var tableLabelsByBackendId by remember { mutableStateOf<Map<Int, String>>(emptyMap()) }
+
+    LaunchedEffect(appContainer.tableRepository) {
+        appContainer.tableRepository.observeFloorMap().collect { floorMap ->
+            tableLabelsByBackendId = floorMap.tables
+                .mapNotNull { table -> table.backendTableId?.let { it to table.label } }
+                .toMap()
+        }
+    }
+
+    LaunchedEffect(appContainer.reservationsRepository, currentStaffId) {
+        while (true) {
+            when (val result = appContainer.reservationsRepository.listReservations()) {
+                is PosResult.Success -> todayReservations = result.value
+                is PosResult.Failure -> Log.d(
+                    "AIROS",
+                    "[AirosPosApp] reservation ticker fetch failed: ${result.message}",
+                )
+            }
+            delay(60_000L)
+        }
+    }
+
+    val reservationTickerMessages = remember(
+        now,
+        todayReservations,
+        tableLabelsByBackendId,
+        sellerSessionStartedAt,
+    ) {
+        buildReservationTickerMessages(
+            now = now,
+            appSessionStartedAt = sellerSessionStartedAt,
+            reservations = todayReservations,
+            tableLabelsByBackendId = tableLabelsByBackendId,
+        )
+    }
+
     Row(
         modifier = Modifier
             .fillMaxSize()
@@ -589,15 +757,18 @@ private fun SignedInApp(
         Scaffold(
             containerColor = AppShellBackground,
         ) { paddingValues ->
-            NavHost(
-                navController = navController,
-                startDestination = Routes.TableMap,
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(AppShellBackground)
                     .padding(horizontal = 8.dp, vertical = 8.dp),
             ) {
-                composable(Routes.Shift) {
+                NavHost(
+                    navController = navController,
+                    startDestination = Routes.TableMap,
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    composable(Routes.Shift) {
                     val viewModel: ShiftViewModel = viewModel(
                         factory = ShiftViewModel.factory(
                             shiftRepository = appContainer.shiftRepository,
@@ -709,9 +880,9 @@ private fun SignedInApp(
                         },
                     )
 
-                }
+                    }
 
-                composable(Routes.Diagnostics) {
+                    composable(Routes.Diagnostics) {
                     val context = LocalContext.current
                     var customerDisplayProbeStatus by rememberSaveable { mutableStateOf<String?>(null) }
                     var isCustomerDisplayProbeFailure by rememberSaveable { mutableStateOf(false) }
@@ -1187,6 +1358,7 @@ private fun SignedInApp(
                         currentStaffId = currentStaffId,
                         preferRichFloorPlanStyle = useRichFloorPlanStyle,
                         placeSelectionMode = menuPlacePicker || reservationPlacePicker,
+                        reservationTickerMessages = reservationTickerMessages,
                         cameraPreviewService = appContainer.cameraPreviewService,
                         onSelectTable = viewModel::selectTable,
                         onSelectPlace = { tableId, tableLabel ->
@@ -1815,6 +1987,13 @@ private fun SignedInApp(
                         onSubmitRefund = viewModel::submitRefund,
                     )
                 }
+                }
+                ShellNowStamp(
+                    now = now,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 4.dp, end = 8.dp),
+                )
             }
         }
     }
