@@ -37,6 +37,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -1393,6 +1394,7 @@ private fun TableDetailsContent(
                 TableDetailsMetaChip(
                     label = "Status",
                     value = if (displayStatus.hasAnyAttention) statusTick.label else displayStatus.label,
+                    valueColor = displayStatus.detailPaneStatusColor(),
                     modifier = Modifier.weight(1f),
                 )
                 TableDetailsMetaChip(
@@ -1412,7 +1414,7 @@ private fun TableDetailsContent(
                     modifier = Modifier.weight(1f),
                 )
                 TableDetailsMetaChip(
-                    label = "Avoimet laskut yhteensä",
+                    label = "Avoimet laskut yht.",
                     value = openSalesTotalLabel,
                     modifier = Modifier.weight(1f),
                 )
@@ -1849,7 +1851,9 @@ private fun TableDetailsMetaChip(
     label: String,
     value: String,
     modifier: Modifier = Modifier,
+    valueColor: Color? = null,
 ) {
+    val resolvedValueColor = valueColor ?: MaterialTheme.colorScheme.onSurface
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(16.dp),
@@ -1867,14 +1871,27 @@ private fun TableDetailsMetaChip(
                 text = label,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Text(
                 text = value,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = resolvedValueColor,
             )
         }
+    }
+}
+
+@Composable
+private fun TableDisplayStatus.detailPaneStatusColor(): Color {
+    val attentionTint = attentionVisualTint()
+    return when {
+        attentionTint != null -> attentionTint
+        kind == TableDisplayStatusKind.OCCUPIED ||
+            kind == TableDisplayStatusKind.OPEN_BILL -> TableMapVisualTokens.OccupiedColor
+        else -> MaterialTheme.colorScheme.onSurface
     }
 }
 
@@ -2813,7 +2830,6 @@ private fun TableLivePreviewDialog(
                             val totalCents = openSales.sumOf { it.openSaleTotalCents() }
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 KeyValueRow("Open bills", "$openBillCount")
-                                KeyValueRow("Total", formatOpenTotal(totalCents))
                                 openSales.forEach { sale ->
                                     Row(
                                         modifier = Modifier
@@ -2834,6 +2850,11 @@ private fun TableLivePreviewDialog(
                                         )
                                     }
                                 }
+                                HorizontalDivider(
+                                    modifier = Modifier.padding(top = 2.dp),
+                                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.26f),
+                                )
+                                KeyValueRow("TOTAL", formatOpenTotal(totalCents))
                             }
                         }
 
