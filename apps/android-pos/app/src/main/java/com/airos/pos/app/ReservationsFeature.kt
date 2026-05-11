@@ -1,28 +1,42 @@
 package com.airos.pos.app
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -38,13 +52,19 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -72,11 +92,13 @@ import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
+import java.time.format.TextStyle
 import java.util.Locale
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.PI
@@ -103,13 +125,80 @@ private enum class AirosClockHand {
     MINUTE,
 }
 
+private enum class ReservationsViewTab {
+    INBOX,
+    TIMELINE,
+}
+
+private enum class ReservationQueueFilter(
+    val label: String,
+) {
+    ALL("Kaikki"),
+    UPCOMING("Tulevat"),
+    ATTENTION("Huomio"),
+    UNASSIGNED("Ei pöytää"),
+}
+
+private enum class ReservationSortMode(
+    val label: String,
+) {
+    TIME("Aika"),
+    DAY("Päivä"),
+    TABLE("Pöytä"),
+    NAME("Nimi"),
+    STATUS("Tila"),
+}
+
+private enum class ReservationWizardStep {
+    DATE_TIME,
+    PARTY,
+    GUEST,
+    TABLE,
+}
+
+private enum class ReservationStatus(
+    val tag: String,
+    val label: String,
+) {
+    BOOKED("BOOKED", "Booked"),
+    ARRIVED("ARRIVED", "Arrived"),
+    SEATED("SEATED", "Seated"),
+    CANCELLED("CANCELLED", "Cancelled"),
+    NOSHOW("NOSHOW", "No-show"),
+}
+
+private enum class ReservationTimeWindow(
+    val label: String,
+    val start: LocalTime?,
+    val end: LocalTime?,
+) {
+    ALL("Kaikki ajat", null, null),
+    LUNCH("Lounas", LocalTime.of(11, 0), LocalTime.of(15, 0)),
+    AFTERNOON("Iltapaiva", LocalTime.of(15, 0), LocalTime.of(18, 0)),
+    EVENING("Ilta", LocalTime.of(18, 0), LocalTime.of(23, 0)),
+}
+
 // Local product/demo step until Dashboard owner settings define reservation time precision.
 private const val RESERVATION_TIME_STEP_MINUTES = 3L
+private const val RESERVATION_PULSE_START_HOUR = 12
+private const val RESERVATION_PULSE_END_HOUR = 23
+private const val RESERVATION_PULSE_SLOT_MINUTES = 30L
+private const val RESERVATION_PULSE_PAST_DAYS = 7
+private const val RESERVATION_PULSE_FUTURE_DAYS = 28
+private val ReservationPulseSlotStarts: List<LocalTime> = generateSequence(
+    LocalTime.of(RESERVATION_PULSE_START_HOUR, 0),
+) { it.plusMinutes(RESERVATION_PULSE_SLOT_MINUTES) }
+    .takeWhile { it.isBefore(LocalTime.of(RESERVATION_PULSE_END_HOUR, 0)) }
+    .toList()
+private val ReservationPulseHourMarkers = setOf(12, 14, 16, 18, 20, 22)
 
 private data class ReservationFormState(
     val editingReservationId: Int? = null,
     val customerName: String = "",
     val customerPhone: String = "",
+    val customerEmail: String = "",
+    val allergies: String = "",
+    val status: ReservationStatus = ReservationStatus.BOOKED,
     val persons: String = "2",
     val selectedTableId: Int? = null,
     val selectedTableLabel: String? = null,
@@ -123,8 +212,19 @@ private data class ReservationsUiState(
     val selectedDate: LocalDate = LocalDate.now(),
     val dateInput: String = LocalDate.now().format(DateInputFormatter),
     val reservations: List<BackendReservation> = emptyList(),
+    val pulseReservations: List<BackendReservation> = emptyList(),
     val tables: List<ReservationTableOption> = emptyList(),
     val form: ReservationFormState = ReservationFormState(),
+    val searchQuery: String = "",
+    val tableFilterId: Int? = null,
+    val unassignedOnly: Boolean = false,
+    val queueFilter: ReservationQueueFilter = ReservationQueueFilter.ALL,
+    val sortMode: ReservationSortMode = ReservationSortMode.TIME,
+    val timeWindowFilter: ReservationTimeWindow = ReservationTimeWindow.ALL,
+    val wizardOpen: Boolean = false,
+    val wizardStep: ReservationWizardStep = ReservationWizardStep.DATE_TIME,
+    val slotWorkbenchSelection: ReservationPulseSlotSelection? = null,
+    val pendingAssignReservationId: Int? = null,
     val isLoading: Boolean = false,
     val isSaving: Boolean = false,
     val message: String? = null,
@@ -171,6 +271,7 @@ private class ReservationsViewModel(
                     mutableState.update { state ->
                         state.copy(
                             reservations = reservationsForDay(state.selectedDate),
+                            pulseReservations = reservationsForPulseWindow(state.selectedDate),
                             isLoading = false,
                             error = null,
                         )
@@ -207,6 +308,7 @@ private class ReservationsViewModel(
                 selectedDate = date,
                 dateInput = date.format(DateInputFormatter),
                 reservations = reservationsForDay(date),
+                pulseReservations = reservationsForPulseWindow(date),
                 message = null,
                 error = null,
             )
@@ -226,9 +328,120 @@ private class ReservationsViewModel(
         selectDate(parsed)
     }
 
+    fun updateSearchQuery(value: String) {
+        mutableState.update { it.copy(searchQuery = value.take(120)) }
+    }
+
+    fun updateTableFilter(tableId: Int?) {
+        mutableState.update { it.copy(tableFilterId = tableId, unassignedOnly = false, queueFilter = ReservationQueueFilter.ALL) }
+    }
+
+    fun updateUnassignedFilter(enabled: Boolean) {
+        mutableState.update {
+            it.copy(
+                unassignedOnly = enabled,
+                tableFilterId = null,
+                queueFilter = if (enabled) ReservationQueueFilter.UNASSIGNED else ReservationQueueFilter.ALL,
+            )
+        }
+    }
+
+    fun updateQueueFilter(filter: ReservationQueueFilter) {
+        mutableState.update {
+            it.copy(
+                queueFilter = filter,
+                unassignedOnly = filter == ReservationQueueFilter.UNASSIGNED,
+                tableFilterId = null,
+            )
+        }
+    }
+
+    fun updateSortMode(mode: ReservationSortMode) {
+        mutableState.update { it.copy(sortMode = mode) }
+    }
+
+    fun updateTimeWindowFilter(window: ReservationTimeWindow) {
+        mutableState.update { it.copy(timeWindowFilter = window) }
+    }
+
+    fun openNewReservation() {
+        mutableState.update {
+            it.copy(
+                form = ReservationFormState(),
+                wizardOpen = true,
+                wizardStep = ReservationWizardStep.DATE_TIME,
+                slotWorkbenchSelection = null,
+                pendingAssignReservationId = null,
+                message = null,
+                error = null,
+            )
+        }
+    }
+
+    fun openSlotWorkbench(selection: ReservationPulseSlotSelection) {
+        val start = selection.start.withSecond(0).withNano(0)
+        val duration = 120L
+        mutableState.update {
+            it.copy(
+                selectedDate = selection.date,
+                dateInput = selection.date.format(DateInputFormatter),
+                reservations = reservationsForDay(selection.date),
+                pulseReservations = reservationsForPulseWindow(selection.date),
+                form = ReservationFormState(
+                    startTime = start.format(TimeFormatter),
+                    durationMinutes = duration.toString(),
+                    endTime = start.plusMinutes(duration).format(TimeFormatter),
+                ),
+                wizardOpen = false,
+                wizardStep = ReservationWizardStep.DATE_TIME,
+                slotWorkbenchSelection = selection,
+                pendingAssignReservationId = null,
+                message = null,
+                error = null,
+            )
+        }
+    }
+
+    fun closeWizard() {
+        mutableState.update {
+            it.copy(
+                form = ReservationFormState(),
+                wizardOpen = false,
+                wizardStep = ReservationWizardStep.DATE_TIME,
+                slotWorkbenchSelection = null,
+                pendingAssignReservationId = null,
+                message = null,
+                error = null,
+            )
+        }
+    }
+
+    fun closeSlotWorkbench() {
+        mutableState.update {
+            it.copy(
+                form = ReservationFormState(),
+                slotWorkbenchSelection = null,
+                pendingAssignReservationId = null,
+                message = null,
+                error = null,
+            )
+        }
+    }
+
+    fun setWizardStep(step: ReservationWizardStep) {
+        mutableState.update { it.copy(wizardStep = step, message = null, error = null) }
+    }
+
     fun updateCustomerName(value: String) = updateForm { it.copy(customerName = value) }
     fun updateCustomerPhone(value: String) = updateForm { it.copy(customerPhone = value) }
+    fun updateCustomerEmail(value: String) = updateForm { it.copy(customerEmail = value.take(160)) }
+    fun updateAllergies(value: String) = updateForm { it.copy(allergies = value.take(300)) }
+    fun updateStatus(status: ReservationStatus) = updateForm { it.copy(status = status) }
     fun updatePersons(value: String) = updateForm { it.copy(persons = value.filter(Char::isDigit).take(3)) }
+    fun adjustPersons(delta: Int) = updateForm { form ->
+        val current = form.persons.toIntOrNull() ?: 2
+        form.copy(persons = (current + delta).coerceIn(1, 99).toString())
+    }
     fun updateStartTime(value: String) = updateForm { form ->
         val nextStartTime = value.take(5)
         val duration = form.durationMinutes.toIntOrNull()
@@ -267,6 +480,22 @@ private class ReservationsViewModel(
     }
 
     fun updateNotes(value: String) = updateForm { it.copy(notes = value.take(500)) }
+    fun clearSelectedTable() = updateForm { it.copy(selectedTableId = null, selectedTableLabel = null) }
+
+    fun beginFormTablePicker() {
+        mutableState.update { it.copy(pendingAssignReservationId = null, message = null, error = null) }
+    }
+
+    fun beginAssignTable(reservation: BackendReservation) {
+        mutableState.update {
+            it.copy(
+                pendingAssignReservationId = reservation.id,
+                message = null,
+                error = null,
+            )
+        }
+    }
+
     fun selectTableFromPicker(serviceSpotId: String, fallbackLabel: String?) {
         val state = uiState.value
         val option = state.tables.firstOrNull { it.serviceSpotId == serviceSpotId }
@@ -289,6 +518,14 @@ private class ReservationsViewModel(
             }
             return
         }
+        val pendingAssignReservationId = state.pendingAssignReservationId
+        if (pendingAssignReservationId != null) {
+            assignTableFromPicker(
+                reservationId = pendingAssignReservationId,
+                backendTableId = backendTableId,
+            )
+            return
+        }
         val availability = option.availability(state)
         if (!availability.isSelectable) {
             mutableState.update { it.copy(error = availability.reason, message = null) }
@@ -308,37 +545,74 @@ private class ReservationsViewModel(
 
     fun editReservation(reservation: BackendReservation) {
         val parsedStart = parseReservationDateTime(reservation.startTime)
-        val parsedEnd = parseReservationDateTime(reservation.endTime)
+        val targetDate = parsedStart?.toLocalDate()
+        val selection = reservationPulseSelectionForReservation(reservation)
         mutableState.update { state ->
+            val nextDate = targetDate ?: state.selectedDate
             state.copy(
-                selectedDate = parsedStart?.toLocalDate() ?: state.selectedDate,
-                reservations = reservationsForDay(parsedStart?.toLocalDate() ?: state.selectedDate),
-                form = ReservationFormState(
-                    editingReservationId = reservation.id,
-                    customerName = reservation.customerName,
-                    customerPhone = reservation.customerPhone.orEmpty(),
-                    persons = reservation.persons.toString(),
-                    selectedTableId = reservation.tableId,
-                    selectedTableLabel = state.tables.firstOrNull { it.backendTableId == reservation.tableId }?.label
-                        ?: "Table ${reservation.tableId}",
-                    startTime = parsedStart?.toLocalTime()?.format(TimeFormatter) ?: state.form.startTime,
-                    durationMinutes = durationMinutesBetween(
-                        parsedStart?.toLocalTime()?.format(TimeFormatter).orEmpty(),
-                        parsedEnd?.toLocalTime()?.format(TimeFormatter).orEmpty(),
-                    )?.toString() ?: state.form.durationMinutes,
-                    endTime = parsedEnd?.toLocalTime()?.format(TimeFormatter) ?: state.form.endTime,
-                    notes = reservation.notes.orEmpty(),
-                ),
+                selectedDate = nextDate,
+                reservations = reservationsForDay(nextDate),
+                pulseReservations = reservationsForPulseWindow(nextDate),
+                form = reservationFormState(reservation, state),
+                wizardOpen = false,
+                wizardStep = ReservationWizardStep.DATE_TIME,
+                slotWorkbenchSelection = selection,
+                pendingAssignReservationId = null,
                 message = null,
                 error = null,
             )
         }
     }
 
+    fun loadReservationIntoSlotWorkbench(reservation: BackendReservation) {
+        mutableState.update { state ->
+            state.copy(
+                form = reservationFormState(reservation, state),
+                wizardOpen = false,
+                pendingAssignReservationId = null,
+                message = null,
+                error = null,
+            )
+        }
+    }
+
+    private fun reservationFormState(
+        reservation: BackendReservation,
+        state: ReservationsUiState,
+    ): ReservationFormState {
+        val parsedStart = parseReservationDateTime(reservation.startTime)
+        val parsedEnd = parseReservationDateTime(reservation.endTime)
+        val noteParts = splitReservationNotes(reservation.notes.orEmpty())
+        return ReservationFormState(
+            editingReservationId = reservation.id,
+            customerName = reservation.customerName,
+            customerPhone = reservation.customerPhone.orEmpty(),
+            customerEmail = noteParts.email,
+            allergies = noteParts.allergies,
+            status = noteParts.status,
+            persons = reservation.persons.toString(),
+            selectedTableId = reservation.tableId,
+            selectedTableLabel = reservation.tableId?.let { tableId ->
+                state.tables.firstOrNull { it.backendTableId == tableId }?.label ?: "Table $tableId"
+            },
+            startTime = parsedStart?.toLocalTime()?.format(TimeFormatter) ?: state.form.startTime,
+            durationMinutes = durationMinutesBetween(
+                parsedStart?.toLocalTime()?.format(TimeFormatter).orEmpty(),
+                parsedEnd?.toLocalTime()?.format(TimeFormatter).orEmpty(),
+            )?.toString() ?: state.form.durationMinutes,
+            endTime = parsedEnd?.toLocalTime()?.format(TimeFormatter) ?: state.form.endTime,
+            notes = noteParts.notes,
+        )
+    }
+
     fun clearForm() {
         mutableState.update { state ->
             state.copy(
                 form = ReservationFormState(),
+                wizardOpen = false,
+                wizardStep = ReservationWizardStep.DATE_TIME,
+                slotWorkbenchSelection = null,
+                pendingAssignReservationId = null,
                 message = null,
                 error = null,
             )
@@ -349,7 +623,7 @@ private class ReservationsViewModel(
         val state = uiState.value
         val selectedOption = state.tables.firstOrNull { it.backendTableId == state.form.selectedTableId }
         val selectedAvailability = selectedOption?.availability(state)
-        if (selectedAvailability?.isSelectable != true) {
+        if (state.form.selectedTableId != null && selectedAvailability?.isSelectable != true) {
             mutableState.update {
                 it.copy(
                     error = selectedAvailability?.reason ?: "Select an available table.",
@@ -386,11 +660,84 @@ private class ReservationsViewModel(
         }
     }
 
-    fun deleteReservation(reservation: BackendReservation) {
+    private fun assignTableFromPicker(reservationId: Int, backendTableId: Int) {
+        val reservation = allReservations.firstOrNull { it.id == reservationId }
+            ?: uiState.value.reservations.firstOrNull { it.id == reservationId }
+        if (reservation == null) {
+            mutableState.update {
+                it.copy(
+                    pendingAssignReservationId = null,
+                    error = "Reservation was not found.",
+                    message = null,
+                )
+            }
+            return
+        }
+        val parsedStart = parseReservationDateTime(reservation.startTime)
+        val parsedEnd = parseReservationDateTime(reservation.endTime)
+        if (parsedStart == null || parsedEnd == null) {
+            mutableState.update {
+                it.copy(
+                    pendingAssignReservationId = null,
+                    error = "Reservation time could not be parsed.",
+                    message = null,
+                )
+            }
+            return
+        }
+        val payload = BackendReservationWrite(
+            tableId = backendTableId,
+            customerName = reservation.customerName,
+            customerPhone = reservation.customerPhone,
+            customerProfileId = reservation.customerProfileId,
+            startTime = parsedStart.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME),
+            endTime = parsedEnd.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME),
+            persons = reservation.persons,
+            notes = reservation.notes,
+        )
+        viewModelScope.launch {
+            mutableState.update {
+                it.copy(
+                    pendingAssignReservationId = null,
+                    isSaving = true,
+                    error = null,
+                    message = null,
+                )
+            }
+            when (val result = reservationsRepository.updateReservation(reservation.id, payload)) {
+                is PosResult.Success -> refreshAfterMutation(message = "Table assigned.")
+                is PosResult.Failure -> mutableState.update { it.copy(isSaving = false, error = result.message) }
+            }
+        }
+    }
+
+    fun updateReservationStatus(reservation: BackendReservation, status: ReservationStatus) {
+        val parsedStart = parseReservationDateTime(reservation.startTime)
+        val parsedEnd = parseReservationDateTime(reservation.endTime)
+        if (parsedStart == null || parsedEnd == null) {
+            mutableState.update { it.copy(error = "Reservation time could not be parsed.", message = null) }
+            return
+        }
+        val parts = splitReservationNotes(reservation.notes.orEmpty())
+        val payload = BackendReservationWrite(
+            tableId = reservation.tableId,
+            customerName = reservation.customerName,
+            customerPhone = reservation.customerPhone,
+            customerProfileId = reservation.customerProfileId,
+            startTime = parsedStart.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME),
+            endTime = parsedEnd.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME),
+            persons = reservation.persons,
+            notes = buildReservationNotes(
+                status = status,
+                email = parts.email,
+                allergies = parts.allergies,
+                notes = parts.notes,
+            ),
+        )
         viewModelScope.launch {
             mutableState.update { it.copy(isSaving = true, error = null, message = null) }
-            when (val result = reservationsRepository.deleteReservation(reservation.id)) {
-                is PosResult.Success -> refreshAfterMutation(message = "Reservation deleted.")
+            when (val result = reservationsRepository.updateReservation(reservation.id, payload)) {
+                is PosResult.Success -> refreshAfterMutation(message = "Reservation status updated.")
                 is PosResult.Failure -> mutableState.update { it.copy(isSaving = false, error = result.message) }
             }
         }
@@ -403,7 +750,12 @@ private class ReservationsViewModel(
                 mutableState.update { state ->
                     state.copy(
                         reservations = reservationsForDay(state.selectedDate),
+                        pulseReservations = reservationsForPulseWindow(state.selectedDate),
                         form = ReservationFormState(),
+                        wizardOpen = false,
+                        wizardStep = ReservationWizardStep.DATE_TIME,
+                        slotWorkbenchSelection = null,
+                        pendingAssignReservationId = null,
                         isSaving = false,
                         isLoading = false,
                         message = message,
@@ -422,6 +774,19 @@ private class ReservationsViewModel(
     private fun reservationsForDay(date: LocalDate): List<BackendReservation> {
         return allReservations
             .filter { parseReservationDateTime(it.startTime)?.toLocalDate() == date }
+            .sortedBy { parseReservationDateTime(it.startTime) ?: LocalDateTime.MIN }
+    }
+
+    private fun reservationsForPulseWindow(date: LocalDate): List<BackendReservation> {
+        val windowStartDate = reservationPulseWindowStart(date)
+        val windowStart = windowStartDate.atStartOfDay()
+        val windowEnd = windowStart.plusDays((RESERVATION_PULSE_PAST_DAYS + RESERVATION_PULSE_FUTURE_DAYS + 1).toLong())
+        return allReservations
+            .filter { reservation ->
+                val start = parseReservationDateTime(reservation.startTime)
+                val end = parseReservationDateTime(reservation.endTime)
+                start != null && end != null && start.isBefore(windowEnd) && end.isAfter(windowStart)
+            }
             .sortedBy { parseReservationDateTime(it.startTime) ?: LocalDateTime.MIN }
     }
 
@@ -473,17 +838,41 @@ fun ReservationsRoute(
         onDateInputChange = viewModel::updateDateInput,
         onApplyDateInput = viewModel::applyDateInput,
         onRefresh = viewModel::refresh,
+        onSearchQueryChange = viewModel::updateSearchQuery,
+        onTableFilterChange = viewModel::updateTableFilter,
+        onUnassignedFilterChange = viewModel::updateUnassignedFilter,
+        onQueueFilterChange = viewModel::updateQueueFilter,
+        onSortModeChange = viewModel::updateSortMode,
+        onTimeWindowFilterChange = viewModel::updateTimeWindowFilter,
+        onOpenNewReservation = viewModel::openNewReservation,
+        onOpenSlotWorkbench = viewModel::openSlotWorkbench,
+        onCloseWizard = viewModel::closeWizard,
+        onCloseSlotWorkbench = viewModel::closeSlotWorkbench,
+        onWizardStepChange = viewModel::setWizardStep,
         onCustomerNameChange = viewModel::updateCustomerName,
         onCustomerPhoneChange = viewModel::updateCustomerPhone,
+        onCustomerEmailChange = viewModel::updateCustomerEmail,
+        onAllergiesChange = viewModel::updateAllergies,
+        onStatusChange = viewModel::updateStatus,
         onPersonsChange = viewModel::updatePersons,
-        onOpenTablePicker = onOpenTablePicker,
+        onAdjustPersons = viewModel::adjustPersons,
+        onOpenTablePicker = {
+            viewModel.beginFormTablePicker()
+            onOpenTablePicker()
+        },
+        onClearSelectedTable = viewModel::clearSelectedTable,
         onStartTimeChange = viewModel::updateStartTime,
         onDurationMinutesChange = viewModel::updateDurationMinutes,
         onEndTimeChange = viewModel::updateEndTime,
         onNotesChange = viewModel::updateNotes,
         onSubmit = viewModel::submit,
         onEdit = viewModel::editReservation,
-        onDelete = viewModel::deleteReservation,
+        onLoadReservationIntoSlotWorkbench = viewModel::loadReservationIntoSlotWorkbench,
+        onStatusUpdate = viewModel::updateReservationStatus,
+        onAssignTable = { reservation ->
+            viewModel.beginAssignTable(reservation)
+            onOpenTablePicker()
+        },
         onClearForm = viewModel::clearForm,
     )
 }
@@ -502,20 +891,50 @@ private fun ReservationsScreen(
     onDateInputChange: (String) -> Unit,
     onApplyDateInput: () -> Unit,
     onRefresh: () -> Unit,
+    onSearchQueryChange: (String) -> Unit,
+    onTableFilterChange: (Int?) -> Unit,
+    onUnassignedFilterChange: (Boolean) -> Unit,
+    onQueueFilterChange: (ReservationQueueFilter) -> Unit,
+    onSortModeChange: (ReservationSortMode) -> Unit,
+    onTimeWindowFilterChange: (ReservationTimeWindow) -> Unit,
+    onOpenNewReservation: () -> Unit,
+    onOpenSlotWorkbench: (ReservationPulseSlotSelection) -> Unit,
+    onCloseWizard: () -> Unit,
+    onCloseSlotWorkbench: () -> Unit,
+    onWizardStepChange: (ReservationWizardStep) -> Unit,
     onCustomerNameChange: (String) -> Unit,
     onCustomerPhoneChange: (String) -> Unit,
+    onCustomerEmailChange: (String) -> Unit,
+    onAllergiesChange: (String) -> Unit,
+    onStatusChange: (ReservationStatus) -> Unit,
     onPersonsChange: (String) -> Unit,
+    onAdjustPersons: (Int) -> Unit,
     onOpenTablePicker: () -> Unit,
+    onClearSelectedTable: () -> Unit,
     onStartTimeChange: (String) -> Unit,
     onDurationMinutesChange: (String) -> Unit,
     onEndTimeChange: (String) -> Unit,
     onNotesChange: (String) -> Unit,
     onSubmit: () -> Unit,
     onEdit: (BackendReservation) -> Unit,
-    onDelete: (BackendReservation) -> Unit,
+    onLoadReservationIntoSlotWorkbench: (BackendReservation) -> Unit,
+    onStatusUpdate: (BackendReservation, ReservationStatus) -> Unit,
+    onAssignTable: (BackendReservation) -> Unit,
     onClearForm: () -> Unit,
 ) {
     var showDatePicker by remember { mutableStateOf(false) }
+    val visibleReservations = remember(
+        state.reservations,
+        state.tables,
+        state.searchQuery,
+        state.tableFilterId,
+        state.unassignedOnly,
+        state.queueFilter,
+        state.sortMode,
+        state.timeWindowFilter,
+    ) {
+        filteredReservations(state)
+    }
 
     if (showDatePicker) {
         val datePickerState = rememberDatePickerState(
@@ -544,99 +963,1440 @@ private fun ReservationsScreen(
         }
     }
 
+    state.slotWorkbenchSelection?.let { selection ->
+        ReservationSlotWorkbenchDialog(
+            state = state,
+            selection = selection,
+            reservations = reservationsForPulseSelection(state, selection),
+            onDismiss = onCloseSlotWorkbench,
+            onCustomerNameChange = onCustomerNameChange,
+            onCustomerPhoneChange = onCustomerPhoneChange,
+            onCustomerEmailChange = onCustomerEmailChange,
+            onAllergiesChange = onAllergiesChange,
+            onAdjustPersons = onAdjustPersons,
+            onOpenTablePicker = onOpenTablePicker,
+            onClearSelectedTable = onClearSelectedTable,
+            onDurationMinutesChange = onDurationMinutesChange,
+            onNotesChange = onNotesChange,
+            onSubmit = onSubmit,
+            onSelectReservation = onLoadReservationIntoSlotWorkbench,
+        )
+    }
+
+    if (state.wizardOpen) {
+        ReservationWizardDialog(
+            state = state,
+            selectTableLabel = selectTableLabel,
+            noTableSelectedLabel = noTableSelectedLabel,
+            onDismiss = onCloseWizard,
+            onStepChange = onWizardStepChange,
+            onCalendarClick = { showDatePicker = true },
+            onCustomerNameChange = onCustomerNameChange,
+            onCustomerPhoneChange = onCustomerPhoneChange,
+            onCustomerEmailChange = onCustomerEmailChange,
+            onAllergiesChange = onAllergiesChange,
+            onStatusChange = onStatusChange,
+            onPersonsChange = onPersonsChange,
+            onAdjustPersons = onAdjustPersons,
+            onOpenTablePicker = onOpenTablePicker,
+            onClearSelectedTable = onClearSelectedTable,
+            onStartTimeChange = onStartTimeChange,
+            onDurationMinutesChange = onDurationMinutesChange,
+            onEndTimeChange = onEndTimeChange,
+            onNotesChange = onNotesChange,
+            onSubmit = onSubmit,
+            onCloseEdit = onCloseWizard,
+        )
+    }
+
+    var searchExpanded by remember { mutableStateOf(state.searchQuery.isNotBlank()) }
+    var transientMessage by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(state.searchQuery) {
+        if (state.searchQuery.isNotBlank()) {
+            searchExpanded = true
+        }
+    }
+    LaunchedEffect(state.message) {
+        state.message?.let { message ->
+            transientMessage = message
+            delay(2400L)
+            if (transientMessage == message) {
+                transientMessage = null
+            }
+        }
+    }
+
     PosPane(
         title = title,
         modifier = Modifier.fillMaxSize(),
     ) {
-        state.message?.let { StatusBanner(text = it, tint = MaterialTheme.colorScheme.primary) }
-        state.error?.let { StatusBanner(text = it, tint = MaterialTheme.colorScheme.error) }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OutlinedButton(onClick = onPreviousDay) { Text("Previous") }
-            Surface(
-                modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(18.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant,
-            ) {
-                Text(
-                    text = formatSelectedDate(state.selectedDate),
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-            Button(onClick = { showDatePicker = true }) { Text("Kalenteri") }
-            OutlinedButton(onClick = onToday) { Text("Today") }
-            OutlinedButton(onClick = onNextDay) { Text("Next") }
-            OutlinedButton(onClick = onRefresh, enabled = !state.isLoading) { Text("Refresh") }
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OutlinedTextField(
-                value = state.dateInput,
-                onValueChange = onDateInputChange,
-                label = { Text("Date YYYY-MM-DD") },
-                singleLine = true,
-                modifier = Modifier.weight(1f),
-            )
-            Button(onClick = onApplyDateInput) { Text("Open date") }
-        }
-
-        Row(
-            modifier = Modifier.fillMaxSize(),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
+        Box(modifier = Modifier.fillMaxSize()) {
             Column(
-                modifier = Modifier
-                    .weight(1.15f)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(
-                    text = if (state.isLoading) "Loading reservations..." else "${state.reservations.size} reservations",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
+                state.error?.let { StatusBanner(text = it, tint = MaterialTheme.colorScheme.error) }
+
+                ReservationPulsePanel(
+                    state = state,
+                    selectedSlot = state.slotWorkbenchSelection,
+                    onSelectDate = onCalendarDateSelected,
+                    onCalendarClick = { showDatePicker = true },
+                    onSlotClick = onOpenSlotWorkbench,
                 )
-                if (!state.isLoading && state.reservations.isEmpty()) {
-                    EmptyReservationList()
-                }
-                state.reservations.forEach { reservation ->
-                    ReservationRow(
-                        reservation = reservation,
-                        tableLabel = state.tables.firstOrNull { it.backendTableId == reservation.tableId }?.label
-                            ?: "Table ${reservation.tableId}",
-                        onEdit = { onEdit(reservation) },
-                        onDelete = { onDelete(reservation) },
-                        enabled = !state.isSaving,
+
+                val inboxSections = remember(visibleReservations) { buildReservationWorkQueue(visibleReservations) }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    ReservationFilterRail(
+                        state = state,
+                        onQueueFilterChange = onQueueFilterChange,
+                    )
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = if (state.isLoading) {
+                                    "Ladataan varauksia..."
+                                } else {
+                                    "Työjono ${inboxSections.activeCount} / ${state.reservations.size}"
+                                },
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (searchExpanded) {
+                                OutlinedTextField(
+                                    value = state.searchQuery,
+                                    onValueChange = onSearchQueryChange,
+                                    label = { Text("Haku") },
+                                    singleLine = true,
+                                    modifier = Modifier.width(230.dp),
+                                )
+                                TextButton(
+                                    onClick = {
+                                        onSearchQueryChange("")
+                                        searchExpanded = false
+                                    },
+                                ) {
+                                    Text("Sulje haku")
+                                }
+                            } else {
+                                OutlinedButton(onClick = { searchExpanded = true }) {
+                                    Icon(imageVector = Icons.Filled.Search, contentDescription = "Haku")
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Haku")
+                                }
+                            }
+                            Button(onClick = onOpenNewReservation) { Text("+ Uusi") }
+                        }
+                        ReservationInbox(
+                            state = state,
+                            reservations = visibleReservations,
+                            onEdit = onEdit,
+                            onLoadReservationIntoSlotWorkbench = onLoadReservationIntoSlotWorkbench,
+                            onStatusUpdate = onStatusUpdate,
+                            onAssignTable = onAssignTable,
+                        )
+                    }
+                    ReservationSortRail(
+                        selected = state.sortMode,
+                        onSelect = onSortModeChange,
                     )
                 }
-                Spacer(modifier = Modifier.height(16.dp))
             }
 
-            ReservationForm(
-                state = state,
-                modifier = Modifier.weight(1f),
-                selectTableLabel = selectTableLabel,
-                noTableSelectedLabel = noTableSelectedLabel,
-                onCustomerNameChange = onCustomerNameChange,
-                onCustomerPhoneChange = onCustomerPhoneChange,
-                onPersonsChange = onPersonsChange,
-                onOpenTablePicker = onOpenTablePicker,
-                onStartTimeChange = onStartTimeChange,
-                onDurationMinutesChange = onDurationMinutesChange,
-                onEndTimeChange = onEndTimeChange,
-                onNotesChange = onNotesChange,
-                onSubmit = onSubmit,
-                onClearForm = onClearForm,
+            transientMessage?.let { message ->
+                ReservationTransientToast(
+                    text = message,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 6.dp),
+                )
+            }
+        }
+    }
+
+}
+
+@Composable
+private fun ReservationTransientToast(
+    text: String,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(999.dp),
+        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.52f)),
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            maxLines = 1,
+        )
+    }
+}
+
+private fun formatPulseCompactDate(date: LocalDate): String {
+    val locale = Locale("fi", "FI")
+    val weekday = date.dayOfWeek.getDisplayName(TextStyle.SHORT, locale)
+        .replaceFirstChar { it.titlecase(locale) }
+    return "$weekday ${date.dayOfMonth}.${date.monthValue}."
+}
+
+@Composable
+private fun ReservationWeekStrip(
+    selectedDate: LocalDate,
+    onSelectDate: (LocalDate) -> Unit,
+    onPreviousWeek: () -> Unit,
+    onNextWeek: () -> Unit,
+    onCalendarClick: () -> Unit,
+) {
+    val weekStart = selectedDate.minusDays((selectedDate.dayOfWeek.value - 1).toLong())
+    val locale = Locale.getDefault()
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        OutlinedButton(onClick = onPreviousWeek) { Text("<") }
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            repeat(7) { index ->
+                val date = weekStart.plusDays(index.toLong())
+                val selected = date == selectedDate
+                Surface(
+                    modifier = Modifier
+                        .width(92.dp)
+                        .clickable { onSelectDate(date) },
+                    shape = RoundedCornerShape(18.dp),
+                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(3.dp),
+                    ) {
+                        Text(
+                            text = date.dayOfWeek.getDisplayName(TextStyle.SHORT, locale).take(2)
+                                .replaceFirstChar { it.uppercase(locale) },
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            text = "${date.dayOfMonth}.${date.monthValue}.",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+            }
+        }
+        Button(onClick = onCalendarClick) {
+            Icon(imageVector = Icons.Filled.DateRange, contentDescription = "Kalenteri")
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Kalenteri")
+        }
+        OutlinedButton(onClick = onNextWeek) { Text(">") }
+    }
+}
+
+@Composable
+private fun ReservationPulsePanel(
+    state: ReservationsUiState,
+    selectedSlot: ReservationPulseSlotSelection?,
+    onSelectDate: (LocalDate) -> Unit,
+    onCalendarClick: () -> Unit,
+    onSlotClick: (ReservationPulseSlotSelection) -> Unit,
+) {
+    var now by remember { mutableStateOf(LocalDateTime.now()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(60_000L)
+            now = LocalDateTime.now()
+        }
+    }
+    val rows = remember(state.selectedDate, state.pulseReservations) {
+        buildLocalReservationPulseRows(
+            selectedDate = state.selectedDate,
+            reservations = state.pulseReservations,
+        )
+    }
+    val selectedIndex = rows.indexOfFirst { it.date == state.selectedDate }
+        .takeIf { it >= 0 }
+        ?: RESERVATION_PULSE_PAST_DAYS
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = selectedIndex)
+    val stripScrollState = rememberScrollState()
+    val todayIndex = rows.indexOfFirst { it.date == now.toLocalDate() }
+    val slotWidth = 38.dp
+    val stripWidth = (ReservationPulseSlotStarts.size * 40).dp
+    LaunchedEffect(state.selectedDate, rows.size) {
+        rows.indexOfFirst { it.date == state.selectedDate }
+            .takeIf { it >= 0 }
+            ?.let { index ->
+                listState.animateScrollToItem(index)
+            }
+    }
+    var todayBarrierLocked by remember { mutableStateOf(false) }
+    LaunchedEffect(todayBarrierLocked) {
+        if (todayBarrierLocked) {
+            delay(220L)
+            todayBarrierLocked = false
+        }
+    }
+    LaunchedEffect(listState, todayIndex) {
+        if (todayIndex < 0) return@LaunchedEffect
+        var wasScrolling = false
+        var gestureStartedFutureSide = false
+        snapshotFlow {
+            Triple(
+                listState.isScrollInProgress,
+                listState.firstVisibleItemIndex,
+                listState.layoutInfo.visibleItemsInfo.map { it.index },
             )
+        }.collectLatest { (isScrollInProgress, firstVisibleItemIndex, visibleIndices) ->
+            val firstVisible = visibleIndices.minOrNull() ?: firstVisibleItemIndex
+
+            if (isScrollInProgress && !wasScrolling) {
+                gestureStartedFutureSide = firstVisible > todayIndex
+            }
+
+            if (
+                isScrollInProgress &&
+                gestureStartedFutureSide &&
+                !todayBarrierLocked &&
+                (todayIndex in visibleIndices || firstVisible <= todayIndex)
+            ) {
+                todayBarrierLocked = true
+                listState.scrollToItem(todayIndex)
+                gestureStartedFutureSide = false
+            }
+
+            if (!isScrollInProgress && wasScrolling) {
+                gestureStartedFutureSide = false
+            }
+
+            wasScrolling = isScrollInProgress
+        }
+    }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        color = Color(0xFF0B1719),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.28f)),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedButton(
+                    onClick = onCalendarClick,
+                    modifier = Modifier
+                        .width(96.dp)
+                        .height(38.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.DateRange,
+                        contentDescription = "Kalenteri",
+                        modifier = Modifier.size(15.dp),
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = formatPulseCompactDate(state.selectedDate),
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 1,
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .horizontalScroll(stripScrollState),
+                ) {
+                    Row(
+                        modifier = Modifier.width(stripWidth),
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        ReservationPulseSlotStarts.forEach { slot ->
+                            Box(
+                                modifier = Modifier.width(slotWidth),
+                                contentAlignment = Alignment.CenterStart,
+                            ) {
+                                if (slot.minute == 0 && slot.hour in ReservationPulseHourMarkers) {
+                                    Text(
+                                        text = slot.hour.toString(),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            LazyColumn(
+                state = listState,
+                userScrollEnabled = !todayBarrierLocked,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(258.dp),
+                verticalArrangement = Arrangement.spacedBy(7.dp),
+            ) {
+                items(rows, key = { it.date }) { row ->
+                    ReservationPulseDayRow(
+                        row = row,
+                        selected = row.date == state.selectedDate,
+                        selectedSlot = selectedSlot,
+                        stripWidth = stripWidth,
+                        slotWidth = slotWidth,
+                        stripScrollState = stripScrollState,
+                        now = now,
+                        onSelectDate = onSelectDate,
+                        onSlotClick = onSlotClick,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReservationPulseDayRow(
+    row: ReservationPulseRow,
+    selected: Boolean,
+    selectedSlot: ReservationPulseSlotSelection?,
+    stripWidth: androidx.compose.ui.unit.Dp,
+    slotWidth: androidx.compose.ui.unit.Dp,
+    stripScrollState: androidx.compose.foundation.ScrollState,
+    now: LocalDateTime,
+    onSelectDate: (LocalDate) -> Unit,
+    onSlotClick: (ReservationPulseSlotSelection) -> Unit,
+) {
+    val locale = Locale.getDefault()
+    val dayIsPast = row.date.isBefore(now.toLocalDate())
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Surface(
+            modifier = Modifier
+                .width(96.dp)
+                .height(38.dp)
+                .clickable { onSelectDate(row.date) },
+            shape = RoundedCornerShape(999.dp),
+            color = when {
+                selected -> Color(0xFF143D35)
+                dayIsPast -> Color(0xFF151A1C)
+                else -> Color(0xFF102123)
+            },
+            border = when {
+                selected -> BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.82f))
+                dayIsPast -> BorderStroke(1.dp, Color.White.copy(alpha = 0.06f))
+                else -> BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
+            },
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = row.date.dayOfWeek.getDisplayName(TextStyle.SHORT, locale).take(2)
+                        .replaceFirstChar { it.uppercase(locale) },
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = when {
+                        selected -> MaterialTheme.colorScheme.primary
+                        dayIsPast -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f)
+                        else -> MaterialTheme.colorScheme.onSurface
+                    },
+                    maxLines = 1,
+                )
+                Text(
+                    text = "${row.date.dayOfMonth}.${row.date.monthValue}.",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (dayIsPast && !selected) {
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f)
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    maxLines = 1,
+                )
+            }
+        }
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .horizontalScroll(stripScrollState),
+        ) {
+            Row(
+                modifier = Modifier.width(stripWidth),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                row.slots.forEach { slot ->
+                    val slotSelected = selectedSlot?.date == row.date && selectedSlot.start == slot.start
+                    val slotIsPast = LocalDateTime.of(row.date, slot.end).isBefore(now) ||
+                        LocalDateTime.of(row.date, slot.end).isEqual(now)
+                    Surface(
+                        modifier = Modifier
+                            .width(slotWidth)
+                            .height(34.dp)
+                            .clickable {
+                                onSlotClick(
+                                    ReservationPulseSlotSelection(
+                                        date = row.date,
+                                        start = slot.start,
+                                        end = slot.end,
+                                    ),
+                                )
+                            },
+                        shape = RoundedCornerShape(9.dp),
+                        color = reservationPulseSlotDisplayColor(
+                            score = slot.guestLoad,
+                            maxScore = row.maxGuestLoad,
+                            isPast = slotIsPast,
+                        ),
+                        border = if (slotSelected) {
+                            BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+                        } else {
+                            BorderStroke(
+                                1.dp,
+                                if (slotIsPast) Color.White.copy(alpha = 0.03f) else Color.White.copy(alpha = 0.05f),
+                            )
+                        },
+                    ) {
+                        if (slot.reservationCount > 0) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text(
+                                    text = slot.reservationCount.toString(),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (slotIsPast) {
+                                        Color.White.copy(alpha = 0.46f)
+                                    } else {
+                                        Color.White.copy(alpha = 0.86f)
+                                    },
+                                    maxLines = 1,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun reservationPulseSlotDisplayColor(
+    score: Int,
+    maxScore: Int,
+    isPast: Boolean,
+): Color {
+    if (isPast) {
+        return if (score <= 0) Color(0xFF14191B) else Color(0xFF293033)
+    }
+    return when {
+        score <= 0 -> Color(0xFF142526)
+        maxScore <= 4 -> Color(0xFF2B6B58)
+        score < (maxScore * 0.45f).roundToInt().coerceAtLeast(1) -> Color(0xFF2E7664)
+        score < (maxScore * 0.75f).roundToInt().coerceAtLeast(1) -> Color(0xFFC79B42)
+        else -> Color(0xFFE05B5A)
+    }
+}
+
+@Composable
+private fun ReservationSlotWorkbenchDialog(
+    state: ReservationsUiState,
+    selection: ReservationPulseSlotSelection,
+    reservations: List<BackendReservation>,
+    onDismiss: () -> Unit,
+    onCustomerNameChange: (String) -> Unit,
+    onCustomerPhoneChange: (String) -> Unit,
+    onCustomerEmailChange: (String) -> Unit,
+    onAllergiesChange: (String) -> Unit,
+    onAdjustPersons: (Int) -> Unit,
+    onOpenTablePicker: () -> Unit,
+    onClearSelectedTable: () -> Unit,
+    onDurationMinutesChange: (String) -> Unit,
+    onNotesChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+    onSelectReservation: (BackendReservation) -> Unit,
+) {
+    val form = state.form
+    val editing = form.editingReservationId != null
+    val headerDate = if (editing) state.selectedDate else selection.date
+    val headerTime = if (editing) form.startTime else selection.start.format(TimeFormatter)
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            dismissOnClickOutside = false,
+        ),
+    ) {
+        Surface(
+            modifier = Modifier
+                .width(if (reservations.isNotEmpty()) 1040.dp else 820.dp)
+                .heightIn(max = 640.dp),
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surface,
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (editing) "Muokkaa varausta" else "Uusi varaus",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            text = "${formatSelectedDateFinnish(headerDate)} • klo $headerTime alkaen",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    TextButton(onClick = onDismiss) { Text("Sulje") }
+                }
+
+                state.error?.let { StatusBanner(text = it, tint = MaterialTheme.colorScheme.error) }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.Top,
+                        ) {
+                            ReservationSlotWorkbenchPartyCard(
+                                persons = form.persons,
+                                onAdjustPersons = onAdjustPersons,
+                                modifier = Modifier.weight(0.8f),
+                            )
+                            ReservationSlotWorkbenchDurationCard(
+                                durationMinutes = form.durationMinutes,
+                                onDurationMinutesChange = onDurationMinutesChange,
+                                modifier = Modifier.weight(1.2f),
+                            )
+                        }
+
+                        ReservationSlotWorkbenchGuestSection(
+                            form = form,
+                            onCustomerNameChange = onCustomerNameChange,
+                            onCustomerPhoneChange = onCustomerPhoneChange,
+                            onCustomerEmailChange = onCustomerEmailChange,
+                            onAllergiesChange = onAllergiesChange,
+                            onNotesChange = onNotesChange,
+                        )
+
+                        ReservationSlotWorkbenchTableSection(
+                            state = state,
+                            onOpenTablePicker = onOpenTablePicker,
+                            onClearSelectedTable = onClearSelectedTable,
+                        )
+                    }
+
+                    if (reservations.isNotEmpty()) {
+                        ReservationSlotWorkbenchExistingReservations(
+                            selection = selection,
+                            reservations = reservations,
+                            state = state,
+                            onSelectReservation = onSelectReservation,
+                            modifier = Modifier.width(300.dp).heightIn(max = 430.dp),
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    OutlinedButton(onClick = onDismiss, enabled = !state.isSaving) {
+                        Text("Peruuta")
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Button(onClick = onSubmit, enabled = !state.isSaving) {
+                        Text(if (editing) "Tallenna muutokset" else "Tallenna varaus")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReservationSlotWorkbenchExistingReservations(
+    selection: ReservationPulseSlotSelection,
+    reservations: List<BackendReservation>,
+    state: ReservationsUiState,
+    onSelectReservation: (BackendReservation) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val totalGuests = reservations.sumOf { it.persons.coerceAtLeast(1) }
+    val unassignedCount = reservations.count { reservationIsUnassigned(it) }
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(18.dp),
+        color = Color(0xFF101F22),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)),
+    ) {
+        Column(
+            modifier = Modifier
+                .padding(horizontal = 14.dp, vertical = 12.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "Tässä slotissa ${selection.start.format(TimeFormatter)}-${selection.end.format(TimeFormatter)}",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                text = "${reservations.size} varausta • $totalGuests hlö • $unassignedCount ilman pöytää",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            reservations.forEach { reservation ->
+                ReservationSlotWorkbenchReservationRow(
+                    reservation = reservation,
+                    tableLabel = reservationTableLabel(reservation, state.tables),
+                    selected = reservation.id == state.form.editingReservationId,
+                    onClick = { onSelectReservation(reservation) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReservationSlotWorkbenchReservationRow(
+    reservation: BackendReservation,
+    tableLabel: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val status = remember(reservation.notes) { splitReservationNotes(reservation.notes.orEmpty()).status }
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)
+        },
+        border = if (selected) {
+            BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.72f))
+        } else {
+            null
+        },
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = formatReservationInterval(reservation),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                )
+                Text(
+                    text = tableLabel,
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (reservationIsUnassigned(reservation)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                ReservationStatusChip(status)
+            }
+            Text(
+                text = "${reservation.persons} hlö • ${reservation.customerName}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReservationSlotWorkbenchPartyCard(
+    persons: String,
+    onAdjustPersons: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "Henkilömäärä",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                OutlinedButton(onClick = { onAdjustPersons(-1) }) { Text("−") }
+                Text(
+                    text = persons.ifBlank { "2" },
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.widthIn(min = 26.dp),
+                    textAlign = TextAlign.Center,
+                )
+                OutlinedButton(onClick = { onAdjustPersons(1) }) { Text("+") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReservationSlotWorkbenchDurationCard(
+    durationMinutes: String,
+    onDurationMinutesChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val quickDurationOptions = listOf(
+        60 to "1 h",
+        90 to "1 h 30",
+        120 to "2 h",
+        150 to "2 h 30",
+    )
+    val selectedDurationMinutes = durationMinutes.toIntOrNull()
+    val longDurationMinutes = selectedDurationMinutes
+        ?.takeIf { it >= 180 }
+        ?: 180
+
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "Kesto",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                quickDurationOptions.forEach { (minutes, label) ->
+                    ReservationChip(
+                        text = label,
+                        selected = durationMinutes == minutes.toString(),
+                        onClick = { onDurationMinutesChange(minutes.toString()) },
+                    )
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            val nextMinutes = (longDurationMinutes - 30).coerceAtLeast(180)
+                            onDurationMinutesChange(nextMinutes.toString())
+                        },
+                        enabled = longDurationMinutes > 180,
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                    ) {
+                        Text("−")
+                    }
+                    ReservationChip(
+                        text = formatReservationDuration(longDurationMinutes),
+                        selected = selectedDurationMinutes != null && selectedDurationMinutes >= 180,
+                        onClick = { onDurationMinutesChange(longDurationMinutes.toString()) },
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            val nextMinutes = longDurationMinutes + 30
+                            onDurationMinutesChange(nextMinutes.toString())
+                        },
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                    ) {
+                        Text("+")
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun formatReservationDuration(minutes: Int): String {
+    val hours = minutes / 60
+    val remainder = minutes % 60
+    return if (remainder == 0) {
+        "$hours h"
+    } else {
+        "$hours h ${remainder.toString().padStart(2, '0')}"
+    }
+}
+
+@Composable
+private fun ReservationSlotWorkbenchGuestSection(
+    form: ReservationFormState,
+    onCustomerNameChange: (String) -> Unit,
+    onCustomerPhoneChange: (String) -> Unit,
+    onCustomerEmailChange: (String) -> Unit,
+    onAllergiesChange: (String) -> Unit,
+    onNotesChange: (String) -> Unit,
+) {
+    var moreOpen by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "Asiakastiedot",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                OutlinedTextField(
+                    value = form.customerName,
+                    onValueChange = onCustomerNameChange,
+                    label = { Text("Nimi *") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedTextField(
+                    value = form.customerPhone,
+                    onValueChange = onCustomerPhoneChange,
+                    label = { Text("Puhelin (vapaaehtoinen)") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = {
+                        moreOpen = !moreOpen
+                        focusManager.clearFocus()
+                        keyboard?.hide()
+                    },
+                ) {
+                    Text(if (moreOpen) "Piilota lisätiedot" else "Lisätiedot")
+                }
+            }
+            if (moreOpen) {
+                OutlinedTextField(
+                    value = form.customerEmail,
+                    onValueChange = onCustomerEmailChange,
+                    label = { Text("Sähköposti (vapaaehtoinen)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = form.allergies,
+                    onValueChange = onAllergiesChange,
+                    label = { Text("Allergiat (vapaaehtoinen)") },
+                    minLines = 2,
+                    maxLines = 3,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = form.notes,
+                    onValueChange = onNotesChange,
+                    label = { Text("Muistiinpanot (vapaaehtoinen)") },
+                    minLines = 2,
+                    maxLines = 4,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReservationSlotWorkbenchTableSection(
+    state: ReservationsUiState,
+    onOpenTablePicker: () -> Unit,
+    onClearSelectedTable: () -> Unit,
+) {
+    val form = state.form
+    val noTableSelected = form.selectedTableId == null
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Pöytä",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = form.selectedTableLabel ?: "Ei pöytää",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = if (noTableSelected) {
+                        "Voidaan tallentaa ilman pöytää ja kohdistaa myöhemmin."
+                    } else {
+                        "Pöydän voi vaihtaa vielä ennen tallennusta."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onOpenTablePicker) { Text("Valitse pöytä") }
+                if (noTableSelected) {
+                    Button(onClick = onClearSelectedTable) { Text("Ei pöytää") }
+                } else {
+                    OutlinedButton(onClick = onClearSelectedTable) { Text("Ei pöytää") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReservationFilterBar(
+    state: ReservationsUiState,
+    onQueueFilterChange: (ReservationQueueFilter) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ReservationChip(
+            text = ReservationQueueFilter.ALL.label,
+            selected = state.queueFilter == ReservationQueueFilter.ALL,
+            onClick = { onQueueFilterChange(ReservationQueueFilter.ALL) },
+        )
+        ReservationChip(
+            text = ReservationQueueFilter.UPCOMING.label,
+            selected = state.queueFilter == ReservationQueueFilter.UPCOMING,
+            onClick = { onQueueFilterChange(ReservationQueueFilter.UPCOMING) },
+        )
+        ReservationChip(
+            text = ReservationQueueFilter.ATTENTION.label,
+            selected = state.queueFilter == ReservationQueueFilter.ATTENTION,
+            onClick = { onQueueFilterChange(ReservationQueueFilter.ATTENTION) },
+        )
+        ReservationChip(
+            text = ReservationQueueFilter.UNASSIGNED.label,
+            selected = state.queueFilter == ReservationQueueFilter.UNASSIGNED,
+            onClick = { onQueueFilterChange(ReservationQueueFilter.UNASSIGNED) },
+        )
+    }
+}
+
+
+@Composable
+private fun ReservationFilterRail(
+    state: ReservationsUiState,
+    onQueueFilterChange: (ReservationQueueFilter) -> Unit,
+) {
+    Column(
+        modifier = Modifier.width(112.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        ReservationQueueFilter.values().forEach { filter ->
+            ReservationChip(
+                text = filter.label,
+                selected = state.queueFilter == filter,
+                onClick = { onQueueFilterChange(filter) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReservationTabRow(
+    selectedTab: ReservationsViewTab,
+    onSelect: (ReservationsViewTab) -> Unit,
+) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        ReservationChip(
+            text = "Inbox",
+            selected = selectedTab == ReservationsViewTab.INBOX,
+            onClick = { onSelect(ReservationsViewTab.INBOX) },
+        )
+        ReservationChip(
+            text = "Timeline",
+            selected = selectedTab == ReservationsViewTab.TIMELINE,
+            onClick = { onSelect(ReservationsViewTab.TIMELINE) },
+        )
+    }
+}
+
+@Composable
+private fun ReservationChip(
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.clickable(onClick = onClick),
+        shape = RoundedCornerShape(999.dp),
+        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun ReservationInbox(
+    state: ReservationsUiState,
+    reservations: List<BackendReservation>,
+    onEdit: (BackendReservation) -> Unit,
+    onLoadReservationIntoSlotWorkbench: (BackendReservation) -> Unit,
+    onStatusUpdate: (BackendReservation, ReservationStatus) -> Unit,
+    onAssignTable: (BackendReservation) -> Unit,
+) {
+    var selectedReservation by remember { mutableStateOf<BackendReservation?>(null) }
+    var pastExpanded by remember(state.selectedDate, state.searchQuery, state.queueFilter) {
+        mutableStateOf(false)
+    }
+    val sections = remember(reservations) { buildReservationWorkQueue(reservations) }
+    selectedReservation?.let { reservation ->
+        val tableLabel = reservationTableLabel(reservation, state.tables)
+        ReservationActionSheet(
+            reservation = reservation,
+            tableLabel = tableLabel,
+            onDismiss = { selectedReservation = null },
+            onEdit = {
+                selectedReservation = null
+                onEdit(reservation)
+            },
+            onStatusUpdate = { status ->
+                selectedReservation = null
+                onStatusUpdate(reservation, status)
+            },
+            onAssignTable = {
+                selectedReservation = null
+                onAssignTable(reservation)
+            },
+        )
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (!state.isLoading && reservations.isEmpty()) {
+            EmptyReservationList()
+        }
+        val activeReservations = sections.attention + sections.unassigned + sections.upcoming
+        activeReservations.forEach { reservation ->
+            ReservationCompactRow(
+                reservation = reservation,
+                tableLabel = reservationTableLabel(reservation, state.tables),
+                onClick = { selectedReservation = reservation },
+                enabled = !state.isSaving,
+            )
+        }
+        PastReservationsSection(
+            reservations = sections.past,
+            state = state,
+            expanded = pastExpanded,
+            enabled = !state.isSaving,
+            onToggle = { pastExpanded = !pastExpanded },
+            onSelect = { selectedReservation = it },
+        )
+        if (!state.isLoading && reservations.isNotEmpty() && sections.activeCount == 0 && sections.past.isEmpty()) {
+            EmptyReservationList()
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+    }
+}
+
+@Composable
+private fun ReservationSortBar(
+    selected: ReservationSortMode,
+    onSelect: (ReservationSortMode) -> Unit,
+) {
+    Row(
+        modifier = Modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ReservationSortMode.values().forEach { mode ->
+            ReservationChip(
+                text = mode.label,
+                selected = selected == mode,
+                onClick = { onSelect(mode) },
+            )
+        }
+    }
+}
+
+
+@Composable
+private fun ReservationSortRail(
+    selected: ReservationSortMode,
+    onSelect: (ReservationSortMode) -> Unit,
+) {
+    Column(
+        modifier = Modifier.width(88.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        ReservationSortMode.values().forEach { mode ->
+            ReservationChip(
+                text = mode.label,
+                selected = selected == mode,
+                onClick = { onSelect(mode) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReservationWorkQueueSection(
+    title: String,
+    reservations: List<BackendReservation>,
+    state: ReservationsUiState,
+    enabled: Boolean,
+    onSelect: (BackendReservation) -> Unit,
+) {
+    if (reservations.isEmpty()) return
+    Text(
+        text = "$title (${reservations.size})",
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    reservations.forEach { reservation ->
+        ReservationCompactRow(
+            reservation = reservation,
+            tableLabel = reservationTableLabel(reservation, state.tables),
+            onClick = { onSelect(reservation) },
+            enabled = enabled,
+        )
+    }
+}
+
+@Composable
+private fun PastReservationsSection(
+    reservations: List<BackendReservation>,
+    state: ReservationsUiState,
+    expanded: Boolean,
+    enabled: Boolean,
+    onToggle: () -> Unit,
+    onSelect: (BackendReservation) -> Unit,
+) {
+    if (reservations.isEmpty()) return
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle),
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Menneet (${reservations.size})",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = if (expanded) "Piilota" else "Näytä",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+    if (expanded) {
+        reservations.forEach { reservation ->
+            ReservationCompactRow(
+                reservation = reservation,
+                tableLabel = reservationTableLabel(reservation, state.tables),
+                onClick = { onSelect(reservation) },
+                enabled = enabled,
+                compactMuted = true,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReservationTimeline(
+    state: ReservationsUiState,
+    reservations: List<BackendReservation>,
+    onSlotClick: (LocalTime) -> Unit,
+) {
+    val slots = (11..22).map { LocalTime.of(it, 0) }
+    val bands = listOf(
+        "Kaikki" to { _: BackendReservation -> true },
+        "1-2 hlö" to { reservation: BackendReservation -> reservation.persons <= 2 },
+        "3-4 hlö" to { reservation: BackendReservation -> reservation.persons in 3..4 },
+        "5+ hlö" to { reservation: BackendReservation -> reservation.persons >= 5 },
+    )
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            text = "Timeline ${formatSelectedDate(state.selectedDate)}",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Spacer(modifier = Modifier.height(38.dp))
+                bands.forEach { (label, _) ->
+                    Box(
+                        modifier = Modifier
+                            .width(86.dp)
+                            .height(58.dp),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+            }
+            slots.forEach { slot ->
+                Column(
+                    modifier = Modifier.width(86.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        text = slot.format(TimeFormatter),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    bands.forEach { (_, accepts) ->
+                        val count = reservations.count { reservation ->
+                            accepts(reservation) && reservationStartsInSlot(reservation, slot)
+                        }
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(58.dp)
+                                .clickable { onSlotClick(slot) },
+                            shape = RoundedCornerShape(14.dp),
+                            color = timelineHeatColor(count),
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text(
+                                    text = if (count == 0) "+" else count.toString(),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (count >= 3) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -657,15 +2417,209 @@ private fun EmptyReservationList() {
 }
 
 @Composable
+private fun ReservationCompactRow(
+    reservation: BackendReservation,
+    tableLabel: String,
+    onClick: () -> Unit,
+    enabled: Boolean,
+    compactMuted: Boolean = false,
+) {
+    val noteParts = remember(reservation.notes) { splitReservationNotes(reservation.notes.orEmpty()) }
+    val status = noteParts.status
+    val unassigned = reservationIsUnassigned(reservation)
+    val urgent = reservationNeedsAttention(reservation, LocalDateTime.now())
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 46.dp)
+            .clickable(enabled = enabled, onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+        color = if (compactMuted) {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant
+        },
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = formatReservationTime(reservation.startTime),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+            )
+            Text(
+                text = tableLabel,
+                modifier = Modifier.widthIn(min = 56.dp, max = 92.dp),
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = if (unassigned) FontWeight.Bold else FontWeight.SemiBold,
+                color = if (unassigned) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = "${reservation.persons} hlö",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+            Text(
+                text = reservation.customerName,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            ReservationStatusChip(status)
+            if (urgent) {
+                Surface(
+                    shape = RoundedCornerShape(999.dp),
+                    color = MaterialTheme.colorScheme.error,
+                ) {
+                    Text(
+                        text = "!",
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onError,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReservationActionSheet(
+    reservation: BackendReservation,
+    tableLabel: String,
+    onDismiss: () -> Unit,
+    onEdit: () -> Unit,
+    onStatusUpdate: (ReservationStatus) -> Unit,
+    onAssignTable: () -> Unit,
+) {
+    val noteParts = remember(reservation.notes) { splitReservationNotes(reservation.notes.orEmpty()) }
+    val status = noteParts.status
+    val unassigned = reservationIsUnassigned(reservation)
+    val started = (parseReservationDateTime(reservation.startTime) ?: LocalDateTime.MAX) <= LocalDateTime.now()
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier.widthIn(max = 460.dp),
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surface,
+        ) {
+            Column(
+                modifier = Modifier.padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "${formatReservationTime(reservation.startTime)} • ${reservation.customerName}",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = "$tableLabel • ${reservation.persons} hlö",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    ReservationStatusChip(status)
+                }
+                noteParts.allergies.takeIf { it.isNotBlank() }?.let {
+                    Text(
+                        text = "Allergiat: $it",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                noteParts.notes.takeIf { it.isNotBlank() }?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Button(
+                    onClick = { onStatusUpdate(ReservationStatus.ARRIVED) },
+                    enabled = status != ReservationStatus.ARRIVED && status != ReservationStatus.SEATED,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Saapunut") }
+                Button(
+                    onClick = { onStatusUpdate(ReservationStatus.SEATED) },
+                    enabled = !unassigned && status != ReservationStatus.SEATED,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Istuta") }
+                if (unassigned) {
+                    Button(
+                        onClick = onAssignTable,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Assign table") }
+                } else {
+                    OutlinedButton(
+                        onClick = onAssignTable,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Vaihda pöytä") }
+                }
+                OutlinedButton(
+                    onClick = onEdit,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Muokkaa") }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = { onStatusUpdate(ReservationStatus.CANCELLED) },
+                        enabled = status != ReservationStatus.CANCELLED,
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Peru varaus") }
+                    OutlinedButton(
+                        onClick = { onStatusUpdate(ReservationStatus.NOSHOW) },
+                        enabled = started && status != ReservationStatus.NOSHOW,
+                        modifier = Modifier.weight(1f),
+                    ) { Text("No-show") }
+                }
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.align(Alignment.End),
+                ) { Text("Sulje") }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ReservationRow(
     reservation: BackendReservation,
     tableLabel: String,
     onEdit: () -> Unit,
-    onDelete: () -> Unit,
+    onStatusUpdate: (BackendReservation, ReservationStatus) -> Unit,
+    onAssignTable: (BackendReservation) -> Unit,
     enabled: Boolean,
 ) {
+    val noteParts = remember(reservation.notes) { splitReservationNotes(reservation.notes.orEmpty()) }
+    val status = noteParts.status
+    val unassigned = reservationIsUnassigned(reservation)
+    val urgentUnassigned = unassigned && isReservationStartingSoon(reservation)
+    var menuOpen by remember { mutableStateOf(false) }
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onEdit),
         shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.surfaceVariant,
     ) {
@@ -679,13 +2633,33 @@ private fun ReservationRow(
                 verticalAlignment = Alignment.Top,
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = reservation.customerName,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (urgentUnassigned) {
+                            Surface(
+                                shape = RoundedCornerShape(999.dp),
+                                color = MaterialTheme.colorScheme.error,
+                            ) {
+                                Text(
+                                    text = "!",
+                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp),
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onError,
+                                )
+                            }
+                        }
+                        Text(
+                            text = reservation.customerName,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        ReservationStatusChip(status)
+                    }
                     Text(
                         text = "${formatReservationTime(reservation.startTime)}-${formatReservationTime(reservation.endTime)} | $tableLabel | ${reservation.persons} persons",
                         style = MaterialTheme.typography.bodyMedium,
@@ -698,7 +2672,23 @@ private fun ReservationRow(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    reservation.notes?.let {
+                    noteParts.email.takeIf { it.isNotBlank() }?.let {
+                        Text(
+                            text = it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    noteParts.allergies.takeIf { it.isNotBlank() }?.let {
+                        Text(
+                            text = "Allergies: $it",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    noteParts.notes.takeIf { it.isNotBlank() }?.let {
                         Text(
                             text = it,
                             style = MaterialTheme.typography.bodySmall,
@@ -709,10 +2699,76 @@ private fun ReservationRow(
                 }
                 Column(horizontalAlignment = Alignment.End) {
                     TextButton(onClick = onEdit, enabled = enabled) { Text("Edit") }
-                    TextButton(onClick = onDelete, enabled = enabled) { Text("Delete") }
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(
+                            onClick = { onStatusUpdate(reservation, ReservationStatus.ARRIVED) },
+                            enabled = enabled && status != ReservationStatus.ARRIVED,
+                        ) { Text("Saapunut") }
+                        TextButton(
+                            onClick = { onStatusUpdate(reservation, ReservationStatus.SEATED) },
+                            enabled = enabled && status != ReservationStatus.SEATED,
+                        ) { Text("Istuta") }
+                    }
+                    Box {
+                        TextButton(onClick = { menuOpen = true }, enabled = enabled) { Text("Lisää") }
+                        DropdownMenu(
+                            expanded = menuOpen,
+                            onDismissRequest = { menuOpen = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Assign table") },
+                                onClick = {
+                                    menuOpen = false
+                                    onAssignTable(reservation)
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Peru varaus") },
+                                onClick = {
+                                    menuOpen = false
+                                    onStatusUpdate(reservation, ReservationStatus.CANCELLED)
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("No-show") },
+                                onClick = {
+                                    menuOpen = false
+                                    onStatusUpdate(reservation, ReservationStatus.NOSHOW)
+                                },
+                            )
+                        }
+                    }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ReservationStatusChip(status: ReservationStatus) {
+    val color = when (status) {
+        ReservationStatus.BOOKED -> MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+        ReservationStatus.ARRIVED -> MaterialTheme.colorScheme.tertiary.copy(alpha = 0.24f)
+        ReservationStatus.SEATED -> MaterialTheme.colorScheme.primary
+        ReservationStatus.CANCELLED -> MaterialTheme.colorScheme.surface
+        ReservationStatus.NOSHOW -> MaterialTheme.colorScheme.error.copy(alpha = 0.20f)
+    }
+    val textColor = when (status) {
+        ReservationStatus.SEATED -> MaterialTheme.colorScheme.onPrimary
+        ReservationStatus.NOSHOW -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+    Surface(
+        shape = RoundedCornerShape(999.dp),
+        color = color,
+    ) {
+        Text(
+            text = status.label,
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = textColor,
+        )
     }
 }
 
@@ -1144,6 +3200,448 @@ private fun CompactTimeKeypad(
 }
 
 @Composable
+private fun ReservationWizardDialog(
+    state: ReservationsUiState,
+    selectTableLabel: String,
+    noTableSelectedLabel: String,
+    onDismiss: () -> Unit,
+    onStepChange: (ReservationWizardStep) -> Unit,
+    onCalendarClick: () -> Unit,
+    onCustomerNameChange: (String) -> Unit,
+    onCustomerPhoneChange: (String) -> Unit,
+    onCustomerEmailChange: (String) -> Unit,
+    onAllergiesChange: (String) -> Unit,
+    onStatusChange: (ReservationStatus) -> Unit,
+    onPersonsChange: (String) -> Unit,
+    onAdjustPersons: (Int) -> Unit,
+    onOpenTablePicker: () -> Unit,
+    onClearSelectedTable: () -> Unit,
+    onStartTimeChange: (String) -> Unit,
+    onDurationMinutesChange: (String) -> Unit,
+    onEndTimeChange: (String) -> Unit,
+    onNotesChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+    onCloseEdit: () -> Unit,
+) {
+    val form = state.form
+    val editing = form.editingReservationId != null
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            modifier = Modifier
+                .widthIn(max = 760.dp)
+                .heightIn(max = 680.dp),
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surface,
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(horizontal = 18.dp, vertical = 16.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column {
+                        Text(
+                            text = if (editing) "Edit reservation" else "New reservation",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            text = formatSelectedDate(state.selectedDate),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    TextButton(onClick = onDismiss) { Text("Sulje") }
+                }
+
+                ReservationWizardSteps(
+                    current = state.wizardStep,
+                    onStepChange = onStepChange,
+                )
+
+                when (state.wizardStep) {
+                    ReservationWizardStep.DATE_TIME -> ReservationWizardDateTimeStep(
+                        state = state,
+                        onCalendarClick = onCalendarClick,
+                        onStartTimeChange = onStartTimeChange,
+                        onDurationMinutesChange = onDurationMinutesChange,
+                        onEndTimeChange = onEndTimeChange,
+                    )
+                    ReservationWizardStep.PARTY -> ReservationWizardPartyStep(
+                        persons = form.persons,
+                        onPersonsChange = onPersonsChange,
+                        onAdjustPersons = onAdjustPersons,
+                    )
+                    ReservationWizardStep.GUEST -> ReservationWizardGuestStep(
+                        form = form,
+                        onCustomerNameChange = onCustomerNameChange,
+                        onCustomerPhoneChange = onCustomerPhoneChange,
+                        onCustomerEmailChange = onCustomerEmailChange,
+                        onAllergiesChange = onAllergiesChange,
+                        onStatusChange = onStatusChange,
+                        onNotesChange = onNotesChange,
+                    )
+                    ReservationWizardStep.TABLE -> ReservationWizardTableStep(
+                        state = state,
+                        selectTableLabel = selectTableLabel,
+                        noTableSelectedLabel = noTableSelectedLabel,
+                        onOpenTablePicker = onOpenTablePicker,
+                        onClearSelectedTable = onClearSelectedTable,
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (editing) {
+                            OutlinedButton(onClick = onCloseEdit, enabled = !state.isSaving) {
+                                Text("Sulje")
+                            }
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                val previous = previousWizardStep(state.wizardStep)
+                                if (previous == null) onDismiss() else onStepChange(previous)
+                            },
+                            enabled = !state.isSaving,
+                        ) {
+                            Text(if (state.wizardStep == ReservationWizardStep.DATE_TIME) "Cancel" else "Back")
+                        }
+                        if (state.wizardStep == ReservationWizardStep.TABLE) {
+                            Button(
+                                onClick = onSubmit,
+                                enabled = !state.isSaving,
+                            ) {
+                                Text(if (editing) "Save" else "Save")
+                            }
+                        } else {
+                            Button(
+                                onClick = { onStepChange(nextWizardStep(state.wizardStep)) },
+                                enabled = !state.isSaving,
+                            ) {
+                                Text("Next")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReservationWizardSteps(
+    current: ReservationWizardStep,
+    onStepChange: (ReservationWizardStep) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        listOf(
+            ReservationWizardStep.DATE_TIME to "1 Date",
+            ReservationWizardStep.PARTY to "2 Party",
+            ReservationWizardStep.GUEST to "3 Guest",
+            ReservationWizardStep.TABLE to "4 Table",
+        ).forEach { (step, label) ->
+            ReservationChip(
+                text = label,
+                selected = current == step,
+                onClick = { onStepChange(step) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReservationWizardDateTimeStep(
+    state: ReservationsUiState,
+    onCalendarClick: () -> Unit,
+    onStartTimeChange: (String) -> Unit,
+    onDurationMinutesChange: (String) -> Unit,
+    onEndTimeChange: (String) -> Unit,
+) {
+    val form = state.form
+    var timePickerField by remember { mutableStateOf<ReservationTimeField?>(null) }
+    timePickerField?.let { field ->
+        AirosReservationTimePickerDialog(
+            title = if (field == ReservationTimeField.START) "Aloitusaika" else "Päättymisaika",
+            initialTime = when (field) {
+                ReservationTimeField.START -> parseFormTime(form.startTime) ?: LocalTime.of(18, 0)
+                ReservationTimeField.END -> parseFormTime(form.endTime) ?: LocalTime.of(20, 0)
+            },
+            onDismiss = { timePickerField = null },
+            onConfirm = { selectedTime ->
+                val value = selectedTime.format(TimeFormatter)
+                if (field == ReservationTimeField.START) {
+                    onStartTimeChange(value)
+                } else {
+                    onEndTimeChange(value)
+                }
+                timePickerField = null
+            },
+        )
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+        ) {
+            Row(
+                modifier = Modifier.padding(14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column {
+                    Text("Date", style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        text = formatSelectedDate(state.selectedDate),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                Button(onClick = onCalendarClick) {
+                    Icon(imageVector = Icons.Filled.DateRange, contentDescription = "Kalenteri")
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Kalenteri")
+                }
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            ReservationTimeSelector(
+                label = "Aloitusaika",
+                value = form.startTime,
+                onClick = { timePickerField = ReservationTimeField.START },
+                modifier = Modifier.weight(1f),
+            )
+            ReservationTimeSelector(
+                label = "Päättymisaika",
+                value = form.endTime,
+                onClick = { timePickerField = ReservationTimeField.END },
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            listOf("60", "90", "120").forEach { minutes ->
+                ReservationChip(
+                    text = "$minutes min",
+                    selected = form.durationMinutes == minutes,
+                    onClick = { onDurationMinutesChange(minutes) },
+                )
+            }
+            OutlinedTextField(
+                value = form.durationMinutes,
+                onValueChange = onDurationMinutesChange,
+                label = { Text("Custom min") },
+                singleLine = true,
+                modifier = Modifier.width(150.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReservationWizardPartyStep(
+    persons: String,
+    onPersonsChange: (String) -> Unit,
+    onAdjustPersons: (Int) -> Unit,
+    title: String = "Party size",
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            listOf("2", "3", "4").forEach { size ->
+                ReservationChip(
+                    text = "$size hlö",
+                    selected = persons == size,
+                    onClick = { onPersonsChange(size) },
+                )
+            }
+            OutlinedButton(onClick = { onAdjustPersons(-1) }) { Text("-") }
+            Surface(
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+            ) {
+                Text(
+                    text = persons.ifBlank { "0" },
+                    modifier = Modifier.padding(horizontal = 22.dp, vertical = 12.dp),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            OutlinedButton(onClick = { onAdjustPersons(1) }) { Text("+") }
+        }
+    }
+}
+
+@Composable
+private fun ReservationWizardGuestStep(
+    form: ReservationFormState,
+    onCustomerNameChange: (String) -> Unit,
+    onCustomerPhoneChange: (String) -> Unit,
+    onCustomerEmailChange: (String) -> Unit,
+    onAllergiesChange: (String) -> Unit,
+    onStatusChange: (ReservationStatus) -> Unit,
+    onNotesChange: (String) -> Unit,
+) {
+    var moreOpen by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        OutlinedTextField(
+            value = form.customerName,
+            onValueChange = onCustomerNameChange,
+            label = { Text("Name *") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = form.customerPhone,
+            onValueChange = onCustomerPhoneChange,
+            label = { Text("Phone optional") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            ReservationStatus.values().forEach { status ->
+                ReservationChip(
+                    text = status.label,
+                    selected = form.status == status,
+                    onClick = { onStatusChange(status) },
+                )
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { moreOpen = !moreOpen }) {
+                Text(if (moreOpen) "Piilota lisätiedot" else "Lisätiedot")
+            }
+            TextButton(
+                onClick = {
+                    focusManager.clearFocus()
+                    keyboard?.hide()
+                },
+            ) {
+                Text("Valmis")
+            }
+        }
+        if (moreOpen) {
+            OutlinedTextField(
+                value = form.customerEmail,
+                onValueChange = onCustomerEmailChange,
+                label = { Text("Email optional") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = form.allergies,
+                onValueChange = onAllergiesChange,
+                label = { Text("Allergies optional") },
+                minLines = 2,
+                maxLines = 3,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = form.notes,
+                onValueChange = onNotesChange,
+                label = { Text("Notes optional") },
+                minLines = 2,
+                maxLines = 4,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReservationWizardTableStep(
+    state: ReservationsUiState,
+    selectTableLabel: String,
+    noTableSelectedLabel: String,
+    onOpenTablePicker: () -> Unit,
+    onClearSelectedTable: () -> Unit,
+) {
+    val form = state.form
+    val selectedAvailability = state.tables
+        .firstOrNull { it.backendTableId == form.selectedTableId }
+        ?.availability(state)
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(
+            text = "Suggested table: (none for now)",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+        ) {
+            Row(
+                modifier = Modifier.padding(14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(selectTableLabel, style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        text = form.selectedTableLabel ?: "Pöytä: Ei valittu",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (form.selectedTableId != null && selectedAvailability?.isSelectable == false) {
+                        Text(
+                            text = selectedAvailability.reason.orEmpty(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onOpenTablePicker) { Text("Valitse pöytä") }
+                    OutlinedButton(
+                        onClick = onClearSelectedTable,
+                        enabled = form.selectedTableId != null,
+                    ) {
+                        Text("Poista pöytä")
+                    }
+                }
+            }
+        }
+        if (form.selectedTableId == null) {
+            StatusBanner(
+                text = "Ei pöytää: varaus tallennetaan ilman pöytää ja voidaan kohdistaa myöhemmin.",
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+}
+
+@Composable
 private fun ReservationForm(
     state: ReservationsUiState,
     modifier: Modifier,
@@ -1201,6 +3699,7 @@ private fun ReservationForm(
             onValueChange = onCustomerNameChange,
             label = { Text("Customer name") },
             singleLine = true,
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
             modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
@@ -1311,6 +3810,333 @@ private fun ReservationForm(
     }
 }
 
+private fun previousWizardStep(step: ReservationWizardStep): ReservationWizardStep? {
+    return when (step) {
+        ReservationWizardStep.DATE_TIME -> null
+        ReservationWizardStep.PARTY -> ReservationWizardStep.DATE_TIME
+        ReservationWizardStep.GUEST -> ReservationWizardStep.PARTY
+        ReservationWizardStep.TABLE -> ReservationWizardStep.GUEST
+    }
+}
+
+private fun nextWizardStep(step: ReservationWizardStep): ReservationWizardStep {
+    return when (step) {
+        ReservationWizardStep.DATE_TIME -> ReservationWizardStep.PARTY
+        ReservationWizardStep.PARTY -> ReservationWizardStep.GUEST
+        ReservationWizardStep.GUEST -> ReservationWizardStep.TABLE
+        ReservationWizardStep.TABLE -> ReservationWizardStep.TABLE
+    }
+}
+
+private data class ReservationWorkQueueSections(
+    val attention: List<BackendReservation>,
+    val unassigned: List<BackendReservation>,
+    val upcoming: List<BackendReservation>,
+    val past: List<BackendReservation>,
+) {
+    val activeCount: Int = attention.size + unassigned.size + upcoming.size
+}
+
+private data class ReservationPulseRow(
+    val date: LocalDate,
+    val slots: List<ReservationPulseSlot>,
+) {
+    val maxGuestLoad: Int = slots.maxOfOrNull { it.guestLoad } ?: 0
+}
+
+private data class ReservationPulseSlot(
+    val start: LocalTime,
+    val end: LocalTime,
+    val reservationCount: Int,
+    val guestLoad: Int,
+)
+
+private data class ReservationPulseSlotSelection(
+    val date: LocalDate,
+    val start: LocalTime,
+    val end: LocalTime,
+)
+
+private fun buildLocalReservationPulseRows(
+    selectedDate: LocalDate,
+    reservations: List<BackendReservation>,
+): List<ReservationPulseRow> {
+    val activeReservations = reservations.filter { reservation ->
+        val status = splitReservationNotes(reservation.notes.orEmpty()).status
+        status != ReservationStatus.CANCELLED && status != ReservationStatus.NOSHOW
+    }
+    return reservationPulseWindowDates(selectedDate).map { date ->
+        val slotReservationsByStart = ReservationPulseSlotStarts.associateWith { mutableListOf<BackendReservation>() }
+        activeReservations.forEach { reservation ->
+            pulseCoveredSlotStarts(reservation, date).forEach { slotStart ->
+                slotReservationsByStart.getValue(slotStart).add(reservation)
+            }
+        }
+        ReservationPulseRow(
+            date = date,
+            slots = ReservationPulseSlotStarts.map { slotStart ->
+                val slotReservations = slotReservationsByStart.getValue(slotStart)
+                ReservationPulseSlot(
+                    start = slotStart,
+                    end = slotStart.plusMinutes(RESERVATION_PULSE_SLOT_MINUTES),
+                    reservationCount = slotReservations.size,
+                    guestLoad = slotReservations.sumOf { it.persons.coerceAtLeast(1) },
+                )
+            },
+        )
+    }
+}
+
+private fun pulseCoveredSlotStarts(
+    reservation: BackendReservation,
+    date: LocalDate,
+): List<LocalTime> {
+    return ReservationPulseSlotStarts.filter { slotStart ->
+        reservationOverlapsPulseSlot(
+            reservation = reservation,
+            date = date,
+            slotStartTime = slotStart,
+            slotEndTime = slotStart.plusMinutes(RESERVATION_PULSE_SLOT_MINUTES),
+        )
+    }
+}
+
+private fun reservationOverlapsPulseSlot(
+    reservation: BackendReservation,
+    date: LocalDate,
+    slotStartTime: LocalTime,
+    slotEndTime: LocalTime,
+): Boolean {
+    val start = parseReservationDateTime(reservation.startTime) ?: return false
+    val end = parseReservationDateTime(reservation.endTime) ?: return false
+    val slotStart = LocalDateTime.of(date, slotStartTime)
+    val slotEnd = LocalDateTime.of(date, slotEndTime)
+    return start.isBefore(slotEnd) && end.isAfter(slotStart)
+}
+
+private fun reservationPulseWindowStart(selectedDate: LocalDate): LocalDate {
+    val today = LocalDate.now()
+    val defaultStart = today.minusDays(RESERVATION_PULSE_PAST_DAYS.toLong())
+    val defaultEnd = today.plusDays(RESERVATION_PULSE_FUTURE_DAYS.toLong())
+    return if (selectedDate.isBefore(defaultStart) || selectedDate.isAfter(defaultEnd)) {
+        selectedDate.minusDays(RESERVATION_PULSE_PAST_DAYS.toLong())
+    } else {
+        defaultStart
+    }
+}
+
+private fun reservationPulseWindowDates(selectedDate: LocalDate): List<LocalDate> {
+    val start = reservationPulseWindowStart(selectedDate)
+    return (0..(RESERVATION_PULSE_PAST_DAYS + RESERVATION_PULSE_FUTURE_DAYS)).map { offset ->
+        start.plusDays(offset.toLong())
+    }
+}
+
+private fun reservationPulseSelectionForReservation(
+    reservation: BackendReservation,
+): ReservationPulseSlotSelection? {
+    val start = parseReservationDateTime(reservation.startTime) ?: return null
+    val slotStart = LocalTime.of(
+        start.hour,
+        if (start.minute < 30) 0 else 30,
+    )
+    return ReservationPulseSlotSelection(
+        date = start.toLocalDate(),
+        start = slotStart,
+        end = slotStart.plusMinutes(RESERVATION_PULSE_SLOT_MINUTES),
+    )
+}
+
+private fun reservationsForPulseSelection(
+    state: ReservationsUiState,
+    selection: ReservationPulseSlotSelection,
+): List<BackendReservation> {
+    return state.pulseReservations
+        .filter { reservation ->
+            reservationOverlapsPulseSlot(
+                reservation = reservation,
+                date = selection.date,
+                slotStartTime = selection.start,
+                slotEndTime = selection.end,
+            )
+        }
+        .sortedBy { parseReservationDateTime(it.startTime) ?: LocalDateTime.MAX }
+}
+
+private fun buildReservationWorkQueue(reservations: List<BackendReservation>): ReservationWorkQueueSections {
+    val now = LocalDateTime.now()
+    val sorted = reservations.sortedBy { parseReservationDateTime(it.startTime) ?: LocalDateTime.MAX }
+    val past = sorted.filter { reservationIsPast(it, now) }
+    val active = sorted.filterNot { reservation -> past.any { it.id == reservation.id } }
+    val attention = active.filter { reservationNeedsAttention(it, now) }
+    val attentionIds = attention.map { it.id }.toSet()
+    val unassigned = active.filter { it.id !in attentionIds && reservationIsUnassigned(it) }
+    val unassignedIds = unassigned.map { it.id }.toSet()
+    val upcoming = active.filter { it.id !in attentionIds && it.id !in unassignedIds }
+    return ReservationWorkQueueSections(
+        attention = attention,
+        unassigned = unassigned,
+        upcoming = upcoming,
+        past = past,
+    )
+}
+
+private fun filteredReservations(state: ReservationsUiState): List<BackendReservation> {
+    val tableLabels = state.tables
+        .mapNotNull { option -> option.backendTableId?.let { it to option.label } }
+        .toMap()
+    val query = state.searchQuery.trim().lowercase()
+    val now = LocalDateTime.now()
+    val filtered = state.reservations.filter { reservation ->
+        val tableLabel = reservation.tableId?.let { tableLabels[it] } ?: tableLabelForReservation(reservation)
+        val parts = splitReservationNotes(reservation.notes.orEmpty())
+        val startTime = formatReservationTime(reservation.startTime)
+        val endTime = formatReservationTime(reservation.endTime)
+        val matchesQuery = query.isBlank() || listOf(
+            reservation.customerName,
+            reservation.customerPhone.orEmpty(),
+            parts.email,
+            parts.allergies,
+            parts.notes,
+            parts.status.label,
+            parts.status.tag,
+            tableLabel,
+            startTime,
+            endTime,
+            reservation.persons.toString(),
+        ).any { it.lowercase().contains(query) }
+        val matchesTable = state.tableFilterId == null || reservation.tableId == state.tableFilterId
+        val matchesUnassigned = !state.unassignedOnly || reservationIsUnassigned(reservation)
+        val matchesQueue = when (state.queueFilter) {
+            ReservationQueueFilter.ALL -> true
+            ReservationQueueFilter.UPCOMING -> !reservationIsPast(reservation, now) && !reservationNeedsAttention(reservation, now)
+            ReservationQueueFilter.ATTENTION -> reservationNeedsAttention(reservation, now)
+            ReservationQueueFilter.UNASSIGNED -> reservationIsUnassigned(reservation)
+        }
+        matchesQuery && matchesTable && matchesUnassigned && matchesQueue
+    }
+    return sortReservations(filtered, state.sortMode, tableLabels)
+}
+
+private fun sortReservations(
+    reservations: List<BackendReservation>,
+    mode: ReservationSortMode,
+    tableLabels: Map<Int, String>,
+): List<BackendReservation> {
+    return when (mode) {
+        ReservationSortMode.TIME -> reservations.sortedBy { parseReservationDateTime(it.startTime) ?: LocalDateTime.MAX }
+        ReservationSortMode.DAY -> reservations.sortedWith(
+            compareBy<BackendReservation> { parseReservationDateTime(it.startTime)?.toLocalDate() ?: LocalDate.MAX }
+                .thenBy { parseReservationDateTime(it.startTime)?.toLocalTime() ?: LocalTime.MAX },
+        )
+        ReservationSortMode.TABLE -> reservations.sortedWith(
+            compareBy<BackendReservation> {
+                it.tableId?.let { tableId -> tableLabels[tableId] } ?: tableLabelForReservation(it)
+            }.thenBy { parseReservationDateTime(it.startTime) ?: LocalDateTime.MAX },
+        )
+        ReservationSortMode.NAME -> reservations.sortedWith(
+            compareBy<BackendReservation> { it.customerName.lowercase() }
+                .thenBy { parseReservationDateTime(it.startTime) ?: LocalDateTime.MAX },
+        )
+        ReservationSortMode.STATUS -> reservations.sortedWith(
+            compareBy<BackendReservation> { splitReservationNotes(it.notes.orEmpty()).status.ordinal }
+                .thenBy { parseReservationDateTime(it.startTime) ?: LocalDateTime.MAX },
+        )
+    }
+}
+
+private fun reservationMatchesTimeWindow(
+    reservation: BackendReservation,
+    window: ReservationTimeWindow,
+): Boolean {
+    if (window == ReservationTimeWindow.ALL) return true
+    val start = parseReservationDateTime(reservation.startTime)?.toLocalTime() ?: return false
+    val windowStart = window.start ?: return true
+    val windowEnd = window.end ?: return true
+    return !start.isBefore(windowStart) && start.isBefore(windowEnd)
+}
+
+private fun reservationStartsInSlot(
+    reservation: BackendReservation,
+    slot: LocalTime,
+): Boolean {
+    val start = parseReservationDateTime(reservation.startTime)?.toLocalTime() ?: return false
+    val slotEnd = slot.plusHours(1)
+    return !start.isBefore(slot) && start.isBefore(slotEnd)
+}
+
+private fun tableLabelForReservation(reservation: BackendReservation): String {
+    return if (reservationIsUnassigned(reservation)) {
+        "Ei pöytää"
+    } else {
+        reservation.tableId?.let { "Table $it" } ?: "Ei pöytää"
+    }
+}
+
+private fun reservationTableLabel(
+    reservation: BackendReservation,
+    tables: List<ReservationTableOption>,
+): String {
+    return reservation.tableId?.let { tableId ->
+        tables.firstOrNull { it.backendTableId == tableId }?.label
+    } ?: tableLabelForReservation(reservation)
+}
+
+private fun reservationIsUnassigned(reservation: BackendReservation): Boolean {
+    val tableId = reservation.tableId
+    if (tableId == null || tableId <= 0) return true
+    val raw = reservation.notes.orEmpty()
+    return raw.lineSequence().any { line ->
+        line.trim().equals("TABLE: UNASSIGNED", ignoreCase = true)
+    }
+}
+
+private fun reservationIsTerminal(status: ReservationStatus): Boolean {
+    return status == ReservationStatus.SEATED ||
+        status == ReservationStatus.CANCELLED ||
+        status == ReservationStatus.NOSHOW
+}
+
+private fun reservationIsPast(
+    reservation: BackendReservation,
+    now: LocalDateTime,
+): Boolean {
+    val status = splitReservationNotes(reservation.notes.orEmpty()).status
+    val end = parseReservationDateTime(reservation.endTime)
+    return reservationIsTerminal(status) || (end != null && end.isBefore(now))
+}
+
+private fun reservationNeedsAttention(
+    reservation: BackendReservation,
+    now: LocalDateTime,
+): Boolean {
+    if (reservationIsPast(reservation, now)) return false
+    val status = splitReservationNotes(reservation.notes.orEmpty()).status
+    if (reservationIsTerminal(status)) return false
+    val start = parseReservationDateTime(reservation.startTime) ?: return false
+    val startsSoon = !start.isBefore(now) && !start.isAfter(now.plusMinutes(60))
+    val startedButNotSeated = start.isBefore(now) && status != ReservationStatus.SEATED
+    return startedButNotSeated || (reservationIsUnassigned(reservation) && startsSoon)
+}
+
+private fun isReservationStartingSoon(reservation: BackendReservation): Boolean {
+    val start = parseReservationDateTime(reservation.startTime) ?: return false
+    val now = LocalDateTime.now()
+    val status = splitReservationNotes(reservation.notes.orEmpty()).status
+    if (status == ReservationStatus.CANCELLED || status == ReservationStatus.NOSHOW || status == ReservationStatus.SEATED) {
+        return false
+    }
+    return !start.isBefore(now) && !start.isAfter(now.plusMinutes(60))
+}
+
+@Composable
+private fun timelineHeatColor(count: Int) = when {
+    count <= 0 -> MaterialTheme.colorScheme.surfaceVariant
+    count == 1 -> MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)
+    count == 2 -> MaterialTheme.colorScheme.primary.copy(alpha = 0.48f)
+    else -> MaterialTheme.colorScheme.primary
+}
+
 private fun RestaurantTable.toReservationTableOption(): ReservationTableOption {
     return ReservationTableOption(
         serviceSpotId = id,
@@ -1324,6 +4150,13 @@ private fun RestaurantTable.toReservationTableOption(): ReservationTableOption {
 private data class ReservationTableAvailability(
     val isSelectable: Boolean,
     val reason: String? = null,
+)
+
+private data class ReservationNoteParts(
+    val status: ReservationStatus = ReservationStatus.BOOKED,
+    val email: String = "",
+    val allergies: String = "",
+    val notes: String = "",
 )
 
 private fun ReservationTableOption.availability(state: ReservationsUiState): ReservationTableAvailability {
@@ -1378,9 +4211,10 @@ private fun ReservationFormState.proposedInterval(date: LocalDate): Pair<LocalDa
 }
 
 private fun ReservationFormState.toPayload(date: LocalDate): PosResult<BackendReservationWrite> {
-    val tableId = selectedTableId ?: return PosResult.Failure("Select a table.")
+    val tableId = selectedTableId
     val name = customerName.trim()
     if (name.isBlank()) return PosResult.Failure("Customer name is required.")
+    val phone = customerPhone.trim()
     val personsInt = persons.toIntOrNull()?.takeIf { it > 0 } ?: return PosResult.Failure("Persons must be greater than zero.")
     val start = parseFormTime(startTime) ?: return PosResult.Failure("Start time must use HH:mm.")
     val end = parseFormTime(endTime) ?: return PosResult.Failure("End time must use HH:mm.")
@@ -1390,13 +4224,82 @@ private fun ReservationFormState.toPayload(date: LocalDate): PosResult<BackendRe
         BackendReservationWrite(
             tableId = tableId,
             customerName = name,
-            customerPhone = customerPhone.trim().ifBlank { null },
+            customerPhone = phone.ifBlank { null },
             startTime = LocalDateTime.of(date, start).format(DateTimeFormatter.ISO_LOCAL_DATE_TIME),
             endTime = LocalDateTime.of(date, end).format(DateTimeFormatter.ISO_LOCAL_DATE_TIME),
             persons = personsInt,
-            notes = notes.trim().ifBlank { null },
+            notes = buildReservationNotes(
+                status = status,
+                email = customerEmail,
+                allergies = allergies,
+                notes = notes,
+            ),
         ),
     )
+}
+
+private fun buildReservationNotes(
+    status: ReservationStatus,
+    email: String,
+    allergies: String,
+    notes: String,
+): String? {
+    val lines = mutableListOf<String>()
+    lines.add("STATUS: ${status.tag}")
+    email.trim().takeIf { it.isNotBlank() }?.let { lines.add("EMAIL: $it") }
+    allergies.trim().takeIf { it.isNotBlank() }?.let { lines.add("ALLERGIES: $it") }
+    notes.trim().takeIf { it.isNotBlank() }?.let {
+        lines.add("NOTES:")
+        lines.add(it)
+    }
+    return lines.joinToString("\n").take(500).ifBlank { null }
+}
+
+private fun splitReservationNotes(raw: String): ReservationNoteParts {
+    val statusPrefix = "STATUS:"
+    val emailPrefix = "EMAIL:"
+    val allergiesPrefix = "ALLERGIES:"
+    val notesPrefix = "NOTES:"
+    var status = ReservationStatus.BOOKED
+    var email = ""
+    var allergies = ""
+    val notes = mutableListOf<String>()
+    var inNotes = false
+    raw.lineSequence().forEach { line ->
+        val trimmed = line.trim()
+        when {
+            trimmed.startsWith(statusPrefix, ignoreCase = true) -> {
+                status = parseReservationStatus(trimmed.substringAfter(":", "").trim())
+                inNotes = false
+            }
+            trimmed.startsWith(emailPrefix, ignoreCase = true) -> {
+                email = trimmed.substringAfter(":", "").trim()
+                inNotes = false
+            }
+            trimmed.startsWith(allergiesPrefix, ignoreCase = true) -> {
+                allergies = trimmed.substringAfter(":", "").trim()
+                inNotes = false
+            }
+            trimmed.startsWith(notesPrefix, ignoreCase = true) -> {
+                val inline = trimmed.substringAfter(":", "").trim()
+                if (inline.isNotBlank()) notes.add(inline)
+                inNotes = true
+            }
+            inNotes -> notes.add(line)
+            trimmed.isNotBlank() -> notes.add(line)
+        }
+    }
+    return ReservationNoteParts(
+        status = status,
+        email = email,
+        allergies = allergies,
+        notes = notes.joinToString("\n").trim(),
+    )
+}
+
+private fun parseReservationStatus(raw: String): ReservationStatus {
+    return ReservationStatus.values().firstOrNull { it.tag.equals(raw.trim(), ignoreCase = true) }
+        ?: ReservationStatus.BOOKED
 }
 
 private const val FullCircleRadians: Double = PI * 2.0
@@ -1460,6 +4363,22 @@ private fun parseReservationDateTime(raw: String): LocalDateTime? {
 
 private fun formatReservationTime(raw: String): String {
     return parseReservationDateTime(raw)?.toLocalTime()?.format(TimeFormatter) ?: raw
+}
+
+private fun formatReservationInterval(reservation: BackendReservation): String {
+    val start = parseReservationDateTime(reservation.startTime)?.toLocalTime()
+    val end = parseReservationDateTime(reservation.endTime)?.toLocalTime()
+    return if (start != null && end != null) {
+        "${start.format(TimeFormatter)}–${end.format(TimeFormatter)}"
+    } else {
+        formatReservationTime(reservation.startTime)
+    }
+}
+
+private fun formatSelectedDateFinnish(date: LocalDate): String {
+    val locale = Locale("fi", "FI")
+    val raw = date.format(DateTimeFormatter.ofPattern("EEE d.M.yyyy", locale))
+    return raw.take(1).uppercase(locale) + raw.drop(1)
 }
 
 private fun formatSelectedDate(date: LocalDate): String {

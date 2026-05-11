@@ -579,6 +579,11 @@ private class BackendTableTruthClient(
                 val backrestMode = (obj.optStringOrNull("backrestMode")
                     ?: obj.optStringOrNull("backrest_mode"))
                     ?.takeIf { it in setOf("none", "backrest") }
+                val barStoolStyle = parseBarStoolStyle(
+                    obj.optStringOrNull("barStoolStyle") ?: obj.optStringOrNull("bar_stool_style"),
+                )
+                val serviceSpotKindFromObject = obj.optStringOrNull("serviceSpotKind")
+                    ?: obj.optStringOrNull("service_spot_kind")
                 val armrestMode = (obj.optStringOrNull("armrestMode")
                     ?: obj.optStringOrNull("armrest_mode"))
                     ?.takeIf { it in setOf("both", "none", "left-only", "right-only") }
@@ -639,6 +644,8 @@ private class BackendTableTruthClient(
                         tableMaterial = tableMaterial,
                         backrestDirection = backrestDirection,
                         backrestMode = backrestMode,
+                        barStoolStyle = barStoolStyle,
+                        serviceSpotKindFromObject = serviceSpotKindFromObject,
                         statusChipAnchor = statusChipAnchor,
                         seatMarkerAnchor = seatMarkerAnchor,
                     )
@@ -784,6 +791,10 @@ private data class BackendFloorPlanTableObject(
     val tableMaterial: String?,
     val backrestDirection: String?,
     val backrestMode: String?,
+    /** Canonical bar-stool appearance identity from JSON, if authored. */
+    val barStoolStyle: String?,
+    /** serviceSpotKind value as it appeared on this floor-plan object (if any). */
+    val serviceSpotKindFromObject: String?,
     val statusChipAnchor: FloorPlanMarkerAnchor?,
     val seatMarkerAnchor: FloorPlanMarkerAnchor?,
 )
@@ -927,7 +938,7 @@ private fun buildAuthoritativeBackendFloorMap(
             reviewTo = backendTruth?.reviewTo ?: currentTable?.reviewTo,
             truthSource = if (backendTruth != null) TableTruthSource.BACKEND else currentTable?.truthSource ?: TableTruthSource.LOCAL,
             spotType = resolveServiceSpotType(
-                backendKind = backendTruth?.serviceSpotKind,
+                backendKind = backendTruth?.serviceSpotKind ?: tableObject.serviceSpotKindFromObject,
                 fallback = currentTable?.spotType,
             ),
             maxOpenBills = backendTruth?.maxOpenBills ?: currentTable?.maxOpenBills,
@@ -943,6 +954,11 @@ private fun buildAuthoritativeBackendFloorMap(
             tableMaterial = tableObject.tableMaterial,
             backrestDirection = tableObject.backrestDirection,
             backrestMode = tableObject.backrestMode,
+            barStoolStyle = resolveBarStoolStyleForTable(
+                kindFromBackend = backendTruth?.serviceSpotKind ?: tableObject.serviceSpotKindFromObject,
+                explicitStyle = tableObject.barStoolStyle,
+                legacyShape = tableObject.shape,
+            ),
             statusChipAnchor = tableObject.statusChipAnchor,
             seatMarkerAnchor = tableObject.seatMarkerAnchor,
         )
@@ -994,6 +1010,39 @@ private fun resolveServiceSpotType(
         "bar_stool" -> ServiceSpotType.BAR_SEAT
         "table" -> ServiceSpotType.TABLE
         else -> fallback ?: ServiceSpotType.TABLE
+    }
+}
+
+/**
+ * Bar-stool appearance identity at the data boundary.
+ *
+ * Authoritative source is the floor-plan object's `barStoolStyle` field. For
+ * stale offline payloads written before the appearance contract, this falls
+ * back to deriving from legacy `shape`. Returns null for non-bar-stool spots.
+ *
+ * The renderer must NOT branch on `floorPlanShape` to decide bar-stool look;
+ * call this once at the boundary so RestaurantTable carries authoritative
+ * appearance truth onward.
+ */
+private fun resolveBarStoolStyleForTable(
+    kindFromBackend: String?,
+    explicitStyle: String?,
+    legacyShape: String?,
+): String? {
+    val isBarStool = kindFromBackend?.trim()?.lowercase() == "bar_stool"
+    if (!isBarStool) return null
+    parseBarStoolStyle(explicitStyle)?.let { return it }
+    return when (legacyShape?.trim()?.lowercase()) {
+        "round", "circle", "ellipse" -> "ROUND"
+        else -> "SQUARE"
+    }
+}
+
+private fun parseBarStoolStyle(raw: String?): String? {
+    return when (raw?.trim()?.uppercase()) {
+        "ROUND" -> "ROUND"
+        "SQUARE" -> "SQUARE"
+        else -> null
     }
 }
 
