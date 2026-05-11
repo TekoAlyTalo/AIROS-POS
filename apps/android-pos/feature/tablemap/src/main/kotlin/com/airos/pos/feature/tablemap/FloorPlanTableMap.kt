@@ -95,6 +95,68 @@ import kotlin.math.roundToInt
 private fun activeFloorPlanSurfaceTheme(): FloorPlanSurfaceTheme =
     FloorPlanSurfaceThemeHolder.current
 
+private data class FloorPlanLightWoodPlankSurfaceTokens(
+    val baseTop: Color,
+    val baseMiddle: Color,
+    val baseBottom: Color,
+    val grainLight: Color,
+    val grainDark: Color,
+    val seam: Color,
+    val seamHighlight: Color,
+    val edge: Color,
+)
+
+private val FloorPlanSurfaceTheme.lightWoodPlanks: FloorPlanLightWoodPlankSurfaceTokens
+    get() = FloorPlanLightWoodPlankSurfaceTokens(
+        baseTop = floor.baseTop,
+        baseMiddle = floor.baseMiddle,
+        baseBottom = floor.baseBottom,
+        grainLight = floor.grain,
+        grainDark = floor.plankShadow,
+        seam = floor.plankSeam,
+        seamHighlight = floor.plankHighlight,
+        edge = floor.vignette,
+    )
+
+private val FloorPlanSurfaceTheme.greyStoneFloor: FloorPlanFloorSurfaceTokens
+    get() = FloorPlanFloorSurfaceTokens(
+        baseTop = Color(0xFF5B6468),
+        baseMiddle = Color(0xFF3E464A),
+        baseBottom = Color(0xFF1A1F22),
+        plankHighlight = Color(0xFFE6EEF1).copy(alpha = 0.06f),
+        plankSeam = Color(0xFF040607).copy(alpha = 0.26f),
+        plankShadow = Color(0xFF000000).copy(alpha = 0.16f),
+        grain = Color(0xFFB7C2C7).copy(alpha = 0.030f),
+        vignette = Color(0xFF000000).copy(alpha = 0.20f),
+    )
+
+private val FloorPlanSurfaceTheme.darkStoneBarCounter: FloorPlanBarCounterSurfaceTokens
+    get() = barCounter.copy(
+        top = Color(0xFF3B4044),
+        middle = Color(0xFF1F2326),
+        bottom = Color(0xFF0B0D0F),
+        highlight = Color(0xFFDDE7EA).copy(alpha = 0.12f),
+        railLight = Color(0xFFE9F1F4).copy(alpha = 0.18f),
+        railDark = Color(0xFF000000).copy(alpha = 0.55f),
+        edge = Color(0xFF9FB0B7).copy(alpha = 0.50f),
+        grainLight = Color(0xFFE3EEF2).copy(alpha = 0.30f),
+        grainDark = Color(0xFF0B0E10),
+        frontPanelTop = Color(0xFF202427),
+        frontPanelBottom = Color(0xFF070809),
+    )
+
+private val FloorPlanSurfaceTheme.lightWoodTable: FloorPlanTableSurfaceTokens
+    get() = table.copy(
+        top = Color(0xFFB07A47),
+        middle = Color(0xFF7A4D28),
+        bottom = Color(0xFF2A160A),
+        highlight = Color(0xFFFFE2B8).copy(alpha = 0.18f),
+        grainLight = Color(0xFFF0C48E).copy(alpha = 0.55f),
+        grainDark = Color(0xFF1A0A03),
+        edgeDark = Color(0xFF140702),
+        edgeWarm = Color(0xFFD6A061).copy(alpha = 0.55f),
+    )
+
 private val FloorPlanViewportShape = RoundedCornerShape(26.dp)
 private val FloorPlanBackgroundBrush = Brush.linearGradient(
     colors = listOf(
@@ -138,6 +200,22 @@ private val FloorPlanOpaqueWhiteMatteColorFilter = ColorFilter.colorMatrix(
         ),
     ),
 )
+
+private fun floorPlanOpaqueWhiteMatteTintColorFilter(tint: Color): ColorFilter {
+    val red = tint.red
+    val green = tint.green
+    val blue = tint.blue
+    return ColorFilter.colorMatrix(
+        ColorMatrix(
+            floatArrayOf(
+                -red / 3f, -red / 3f, -red / 3f, 0f, red,
+                -green / 3f, -green / 3f, -green / 3f, 0f, green,
+                -blue / 3f, -blue / 3f, -blue / 3f, 0f, blue,
+                -0.333f, -0.333f, -0.333f, 1f, 0f,
+            ),
+        ),
+    )
+}
 private const val FLOOR_PLAN_ZOOM_SENSITIVITY = 1.0f
 private const val FLOOR_PLAN_DEBUG_MARKER = "FLOORPLAN RENDERER WORLD-TO-SCREEN V1"
 private const val FLOOR_PLAN_CAMERA_SYMBOL_PX = 40f
@@ -2303,9 +2381,11 @@ private fun FloorPlanObjectNode(
             )
         }
         "camera" -> {
+            // Dashboard camera coverage uses 0 deg = up, while the drawn camera glyph points right.
+            // Keep the POS icon aligned with the authored coverage direction.
             FloorPlanCameraSymbol(
                 modifier = baseModifier.requiredSize(widthDp, heightDp).graphicsLayer {
-                    rotationZ = placement.effectiveRotationDeg
+                    rotationZ = placement.effectiveRotationDeg - 90f
                     transformOrigin = TransformOrigin(0.5f, 0.5f)
                 },
                 label = floorObject.label,
@@ -2511,22 +2591,30 @@ private fun FloorPlanLeatherSofaAssetSurface(
 
             drawPremiumAsset()
 
-            if (objectColor != null && !premiumAsset.hasOpaqueWhiteMatte) {
+            if (objectColor != null) {
                 drawPremiumAsset(
-                    colorFilter = ColorFilter.tint(objectColor, BlendMode.SrcIn),
-                    alpha = 0.30f,
+                    colorFilter = if (premiumAsset.hasOpaqueWhiteMatte) {
+                        floorPlanOpaqueWhiteMatteTintColorFilter(objectColor)
+                    } else {
+                        ColorFilter.tint(objectColor, BlendMode.SrcIn)
+                    },
+                    alpha = if (premiumAsset.hasOpaqueWhiteMatte) 0.34f else 0.30f,
                 )
             }
 
-            if (cushionColor != null && !premiumAsset.hasOpaqueWhiteMatte) {
+            if (cushionColor != null) {
                 val left = drawOffset.x + drawWidth * 0.18f
                 val top = drawOffset.y + drawHeight * 0.40f
                 val right = drawOffset.x + drawWidth * 0.82f
                 val bottom = drawOffset.y + drawHeight * 0.84f
                 clipRect(left = left, top = top, right = right, bottom = bottom) {
                     drawPremiumAsset(
-                        colorFilter = ColorFilter.tint(cushionColor, BlendMode.SrcIn),
-                        alpha = 0.46f,
+                        colorFilter = if (premiumAsset.hasOpaqueWhiteMatte) {
+                            floorPlanOpaqueWhiteMatteTintColorFilter(cushionColor)
+                        } else {
+                            ColorFilter.tint(cushionColor, BlendMode.SrcIn)
+                        },
+                        alpha = if (premiumAsset.hasOpaqueWhiteMatte) 0.42f else 0.46f,
                     )
                 }
             }
@@ -2650,10 +2738,14 @@ private fun FloorPlanPremiumArmchairAssetSurface(
             }
 
             drawArmchairAsset()
-            if (objectColor != null && !armchairAssetSpec.hasOpaqueWhiteMatte) {
+            if (objectColor != null) {
                 drawArmchairAsset(
-                    colorFilter = ColorFilter.tint(objectColor, BlendMode.SrcIn),
-                    alpha = 0.24f,
+                    colorFilter = if (armchairAssetSpec.hasOpaqueWhiteMatte) {
+                        floorPlanOpaqueWhiteMatteTintColorFilter(objectColor)
+                    } else {
+                        ColorFilter.tint(objectColor, BlendMode.SrcIn)
+                    },
+                    alpha = if (armchairAssetSpec.hasOpaqueWhiteMatte) 0.30f else 0.24f,
                 )
             }
         }
@@ -3212,18 +3304,23 @@ private fun FloorPlanBarCounterObjectSurface(
 ) {
     val normalizedMaterial = normalizedFloorPlanBarDeskMaterial(barDeskMaterial)
     val useDarkWoodAsset = shouldUseFloorPlanDarkWoodBarCounterAsset(normalizedMaterial)
+    val darkWoodSegmentAssetSpec = if (useDarkWoodAsset) {
+        resolveFloorPlanDarkWoodBarCounterSegmentAssetSpec(widthDp.value, heightDp.value, barDeskSegmentType)
+    } else {
+        null
+    }
     val materialAsset = ImageBitmap.imageResource(
-        id = if (useDarkWoodAsset) {
-            resolveFloorPlanDarkWoodBarCounterSegmentDrawableId(widthDp.value, heightDp.value, barDeskSegmentType)
-        } else {
-            resolveFloorPlanBarCounterMaterialDrawableId(normalizedMaterial)
-        },
+        id = darkWoodSegmentAssetSpec?.drawableId
+            ?: resolveFloorPlanBarCounterMaterialDrawableId(normalizedMaterial),
     )
     Box(modifier = modifier.requiredSize(widthDp, heightDp)) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             val stroke = max(1f, 1.dp.toPx())
-            if (useDarkWoodAsset) {
-                drawFloorPlanBarCounterSegmentAsset(asset = materialAsset)
+            if (darkWoodSegmentAssetSpec != null) {
+                drawFloorPlanBarCounterSegmentAsset(
+                    asset = materialAsset,
+                    assetSpec = darkWoodSegmentAssetSpec,
+                )
             } else {
                 drawFloorPlanAssetBarCounterSurface(
                     asset = materialAsset,
@@ -3240,27 +3337,56 @@ private fun shouldUseFloorPlanDarkWoodBarCounterAsset(material: String?): Boolea
     return material == null || material == "DARK_WOOD"
 }
 
-private fun resolveFloorPlanDarkWoodBarCounterSegmentDrawableId(
+private data class FloorPlanBarCounterSegmentAssetSpec(
+    val drawableId: Int,
+    val sourceOffset: IntOffset,
+    val sourceSize: IntSize,
+)
+
+private fun resolveFloorPlanDarkWoodBarCounterSegmentAssetSpec(
     widthDp: Float,
     heightDp: Float,
     segmentType: String? = null,
-): Int {
-    when (segmentType?.trim()?.lowercase()) {
-        "miter_45"   -> return R.drawable.bar_counter_miter_45_dark_wood_topdown_v1
-        "straight"   -> return R.drawable.bar_counter_straight_dark_wood_topdown_v1
-        "vertical"   -> return R.drawable.bar_counter_vertical_end_dark_wood_topdown_v1
-        "square_end" -> return R.drawable.bar_counter_square_end_dark_wood_topdown_v1
-    }
-
-    // fallback: ratio-based for objects without explicit segmentType
-    val width = widthDp.coerceAtLeast(1f)
-    val height = heightDp.coerceAtLeast(1f)
-    val ratio = width / height
-
-    return when {
-        ratio >= 1.25f -> R.drawable.bar_counter_straight_dark_wood_topdown_v1
-        ratio <= 0.80f -> R.drawable.bar_counter_vertical_end_dark_wood_topdown_v1
-        else           -> R.drawable.bar_counter_square_end_dark_wood_topdown_v1
+): FloorPlanBarCounterSegmentAssetSpec {
+    return when (segmentType?.trim()?.lowercase()) {
+        "straight" -> FloorPlanBarCounterSegmentAssetSpec(
+            drawableId = R.drawable.bar_counter_straight_dark_wood_topdown_v1,
+            sourceOffset = IntOffset(11, 13),
+            sourceSize = IntSize(1162, 195),
+        )
+        "vertical" -> FloorPlanBarCounterSegmentAssetSpec(
+            drawableId = R.drawable.bar_counter_vertical_end_dark_wood_topdown_v1,
+            sourceOffset = IntOffset(10, 16),
+            sourceSize = IntSize(233, 436),
+        )
+        "square_end" -> FloorPlanBarCounterSegmentAssetSpec(
+            drawableId = R.drawable.bar_counter_square_end_dark_wood_topdown_v1,
+            sourceOffset = IntOffset(15, 18),
+            sourceSize = IntSize(288, 301),
+        )
+        else -> {
+            // Fallback for older objects that do not yet carry an explicit segment type.
+            val width = widthDp.coerceAtLeast(1f)
+            val height = heightDp.coerceAtLeast(1f)
+            val ratio = width / height
+            when {
+                ratio >= 1.25f -> FloorPlanBarCounterSegmentAssetSpec(
+                    drawableId = R.drawable.bar_counter_straight_dark_wood_topdown_v1,
+                    sourceOffset = IntOffset(11, 13),
+                    sourceSize = IntSize(1162, 195),
+                )
+                ratio <= 0.80f -> FloorPlanBarCounterSegmentAssetSpec(
+                    drawableId = R.drawable.bar_counter_vertical_end_dark_wood_topdown_v1,
+                    sourceOffset = IntOffset(10, 16),
+                    sourceSize = IntSize(233, 436),
+                )
+                else -> FloorPlanBarCounterSegmentAssetSpec(
+                    drawableId = R.drawable.bar_counter_square_end_dark_wood_topdown_v1,
+                    sourceOffset = IntOffset(15, 18),
+                    sourceSize = IntSize(288, 301),
+                )
+            }
+        }
     }
 }
 
@@ -3273,13 +3399,16 @@ private fun resolveFloorPlanBarCounterMaterialDrawableId(material: String?): Int
     }
 }
 
-private fun DrawScope.drawFloorPlanBarCounterSegmentAsset(asset: ImageBitmap) {
+private fun DrawScope.drawFloorPlanBarCounterSegmentAsset(
+    asset: ImageBitmap,
+    assetSpec: FloorPlanBarCounterSegmentAssetSpec,
+) {
     val width = size.width.roundToInt().coerceAtLeast(1)
     val height = size.height.roundToInt().coerceAtLeast(1)
     drawImage(
         image = asset,
-        srcOffset = IntOffset(0, 0),
-        srcSize = IntSize(asset.width, asset.height),
+        srcOffset = assetSpec.sourceOffset,
+        srcSize = assetSpec.sourceSize,
         dstOffset = IntOffset(0, 0),
         dstSize = IntSize(width, height),
         filterQuality = FilterQuality.High,
@@ -3950,10 +4079,26 @@ private fun FloorPlanTableNode(
     val statusChipAnchor = table.resolveStatusChipAnchor()
     val seatMarkerAnchor = table.resolveSeatMarkerAnchor()
     val tableShapeRaw = table.floorPlanShape?.lowercase()
-    val isRound = when (tableShapeRaw) {
-        "round", "circle", "ellipse" -> true
-        "square", "rectangle" -> false
-        else -> !isMerged && abs(rect.width - rect.height) <= 18f
+    val isBarSeatLocal = table.spotType == ServiceSpotType.BAR_SEAT
+    // Bar stools dispatch on the authoritative `barStoolStyle` appearance
+    // identity. The data-boundary adapter has already normalized this from
+    // legacy `floorPlanShape` for stale payloads, so the renderer never
+    // branches on shape/backrest/color to decide what a bar stool *is*.
+    val isRound = if (isBarSeatLocal) {
+        when (table.barStoolStyle?.uppercase()) {
+            "ROUND" -> true
+            "SQUARE" -> false
+            else -> when (tableShapeRaw) {
+                "round", "circle", "ellipse" -> true
+                else -> false
+            }
+        }
+    } else {
+        when (tableShapeRaw) {
+            "round", "circle", "ellipse" -> true
+            "square", "rectangle" -> false
+            else -> !isMerged && abs(rect.width - rect.height) <= 18f
+        }
     }
     val seatMarkers = remember(
         table.id,
@@ -3991,6 +4136,17 @@ private fun FloorPlanTableNode(
         ),
     )
     val isBarSeat = table.spotType == ServiceSpotType.BAR_SEAT
+    val barStoolAsset = if (isBarSeat) {
+        ImageBitmap.imageResource(
+            id = if (isRound) {
+                R.drawable.bar_stool_round_topdown_v1
+            } else {
+                R.drawable.bar_stool_square_topdown_v1
+            },
+        )
+    } else {
+        null
+    }
     val compositeTableAsset = ImageBitmap.imageResource(id = R.drawable.floor_terrace_weathered_planks_120mm_v2)
     val greyStoneTableAsset = ImageBitmap.imageResource(id = R.drawable.floor_premium_stone_light_v1)
     val terraceTransparentTableAsset = ImageBitmap.imageResource(id = R.drawable.table_terrace_transparent)
@@ -4194,11 +4350,10 @@ private fun FloorPlanTableNode(
                 borderWidthPx = borderWidthPx,
                 baseColor = parseFloorPlanObjectColor(table.color),
                 tableMaterial = table.tableMaterial,
+                barStoolAsset = barStoolAsset,
                 compositeTableAsset = compositeTableAsset,
                 greyStoneTableAsset = greyStoneTableAsset,
                 terraceTransparentTableAsset = terraceTransparentTableAsset,
-                backrestDirection = table.backrestDirection,
-                backrestMode = table.backrestMode,
             )
         }
 
@@ -4760,22 +4915,17 @@ private fun DrawScope.drawFloorPlanTableSurface(
     borderWidthPx: Float,
     baseColor: Color?,
     tableMaterial: String?,
+    barStoolAsset: ImageBitmap?,
     compositeTableAsset: ImageBitmap,
     greyStoneTableAsset: ImageBitmap,
     terraceTransparentTableAsset: ImageBitmap,
-    backrestDirection: String?,
-    backrestMode: String?,
 ) {
     if (isBarSeat) {
         drawFloorPlanBarStoolSurface(
-            isRound = isRound,
+            asset = checkNotNull(barStoolAsset) { "Bar stool asset must be available for a bar seat." },
             topLeft = topLeft,
             targetSize = targetSize,
-            borderColor = borderColor,
-            borderWidthPx = borderWidthPx,
             baseColor = baseColor,
-            backrestDirection = backrestDirection,
-            backrestMode = backrestMode,
         )
         return
     }
@@ -5023,12 +5173,6 @@ private fun DrawScope.drawFloorPlanTexturedTableAsset(
 }
 
 
-private enum class FloorPlanFurnitureDetailLevel {
-    SILHOUETTE,
-    STRUCTURE,
-    FULL,
-}
-
 private fun floorPlanSafeFloat(value: Float, fallback: Float = 1f): Float {
     return if (value.isNaN() || value.isInfinite()) fallback else value
 }
@@ -5046,262 +5190,46 @@ private fun floorPlanClamp(value: Float, minValue: Float, maxValue: Float): Floa
     return floorPlanSafeFloat(value, safeMin).coerceIn(safeMin, safeMax)
 }
 
-private fun floorPlanFurnitureDetailLevel(minDim: Float): FloorPlanFurnitureDetailLevel {
-    return when {
-        minDim < 7f -> FloorPlanFurnitureDetailLevel.SILHOUETTE
-        minDim < 18f -> FloorPlanFurnitureDetailLevel.STRUCTURE
-        else -> FloorPlanFurnitureDetailLevel.FULL
-    }
-}
-
 private fun DrawScope.drawFloorPlanBarStoolSurface(
-    isRound: Boolean,
+    asset: ImageBitmap,
     topLeft: Offset,
     targetSize: Size,
-    borderColor: Color,
-    borderWidthPx: Float,
     baseColor: Color?,
-    backrestDirection: String?,
-    backrestMode: String?,
 ) {
     val safeTargetSize = floorPlanSafeSize(targetSize)
-    val width = safeTargetSize.width
-    val height = safeTargetSize.height
-    val minDim = min(width, height)
-    if (minDim < 3f) return
-
-    val detailLevel = floorPlanFurnitureDetailLevel(minDim)
-    val base = baseColor ?: Color(0xFF51483F)
-    val warmHighlight = Color(0xFFFFE3B0)
-    val deepShadow = Color(0xFF120804)
-    val outline = base.mixWith(deepShadow, 0.58f).copy(alpha = 0.86f)
-    val seatTop = base.mixWith(warmHighlight, 0.12f).copy(alpha = 0.98f)
-    val seatMid = base.copy(alpha = 0.98f)
-    val seatBottom = base.mixWith(deepShadow, 0.26f).copy(alpha = 0.99f)
-    val center = Offset(topLeft.x + width / 2f, topLeft.y + height / 2f)
-
-    val seatSide = minDim * if (isRound) 0.70f else 0.66f
-    val seatWidth = if (isRound) seatSide else min(seatSide, width * 0.70f)
-    val seatHeight = if (isRound) seatSide else min(seatSide, height * 0.70f)
-    val seatTopLeft = Offset(center.x - seatWidth / 2f, center.y - seatHeight / 2f)
-    val seatSize = Size(width = seatWidth.coerceAtLeast(1f), height = seatHeight.coerceAtLeast(1f))
-    val stoolStroke = max(0.85f, min(borderWidthPx, minDim * 0.055f))
-
-    drawOval(
-        color = Color(0x55110805),
-        topLeft = Offset(seatTopLeft.x + minDim * 0.05f, seatTopLeft.y + seatSize.height * 0.58f),
-        size = Size(seatSize.width * 0.92f, seatSize.height * 0.34f),
+    val dstOffset = IntOffset(
+        x = topLeft.x.roundToInt(),
+        y = topLeft.y.roundToInt(),
+    )
+    val dstSize = IntSize(
+        width = safeTargetSize.width.roundToInt().coerceAtLeast(1),
+        height = safeTargetSize.height.roundToInt().coerceAtLeast(1),
     )
 
-    if (detailLevel != FloorPlanFurnitureDetailLevel.SILHOUETTE) {
-        val supportColor = deepShadow.copy(alpha = 0.42f)
-        val supportStroke = floorPlanClamp(minDim * 0.026f, 0.75f, 2.1f)
-        val stemStart = Offset(center.x, seatTopLeft.y + seatSize.height * 0.55f)
-        val stemEnd = Offset(center.x, topLeft.y + height * 0.83f)
-        drawLine(
-            color = supportColor,
-            start = stemStart,
-            end = stemEnd,
-            strokeWidth = supportStroke,
-        )
-        if (isRound) {
-            val legStartY = seatTopLeft.y + seatSize.height * 0.60f
-            val legEndY = topLeft.y + height * 0.88f
-            listOf(0.30f, 0.50f, 0.70f).forEach { fraction ->
-                val legEndX = topLeft.x + width * fraction
-                drawLine(
-                    color = supportColor.copy(alpha = 0.34f),
-                    start = Offset(center.x, legStartY),
-                    end = Offset(legEndX, legEndY),
-                    strokeWidth = supportStroke,
-                )
-            }
-            drawOval(
-                color = deepShadow.copy(alpha = 0.22f),
-                topLeft = Offset(center.x - seatSize.width * 0.40f, center.y - seatSize.height * 0.18f),
-                size = Size(seatSize.width * 0.80f, seatSize.height * 0.80f),
-                style = Stroke(width = max(0.75f, supportStroke * 0.8f)),
-            )
-        } else {
-            val footY = topLeft.y + height * 0.82f
-            drawLine(
-                color = supportColor.copy(alpha = 0.42f),
-                start = Offset(center.x - seatSize.width * 0.30f, footY),
-                end = Offset(center.x + seatSize.width * 0.30f, footY),
-                strokeWidth = supportStroke,
-            )
-            drawLine(
-                color = supportColor.copy(alpha = 0.30f),
-                start = Offset(center.x - seatSize.width * 0.20f, topLeft.y + height * 0.72f),
-                end = Offset(center.x + seatSize.width * 0.20f, topLeft.y + height * 0.88f),
-                strokeWidth = max(0.65f, supportStroke * 0.8f),
-            )
-        }
-    }
-
-    if (backrestMode == "backrest" && detailLevel != FloorPlanFurnitureDetailLevel.SILHOUETTE) {
-        drawFloorPlanBarStoolBackrest(
-            topLeft = topLeft,
-            targetSize = safeTargetSize,
-            seatTopLeft = seatTopLeft,
-            seatSize = seatSize,
-            direction = backrestDirection,
-            color = base.mixWith(deepShadow, 0.22f),
-            borderColor = outline,
-            strokeWidth = max(0.75f, stoolStroke * 0.72f),
+    fun drawAsset(
+        alpha: Float = 1f,
+        colorFilter: ColorFilter? = null,
+    ) {
+        drawImage(
+            image = asset,
+            srcOffset = IntOffset(0, 0),
+            srcSize = IntSize(asset.width, asset.height),
+            dstOffset = dstOffset,
+            dstSize = dstSize,
+            alpha = alpha,
+            colorFilter = colorFilter,
+            filterQuality = FilterQuality.Medium,
         )
     }
 
-    val seatBrush = Brush.radialGradient(
-        colors = listOf(seatTop, seatMid, seatBottom),
-        center = Offset(seatTopLeft.x + seatSize.width * 0.38f, seatTopLeft.y + seatSize.height * 0.30f),
-        radius = max(seatSize.width, seatSize.height) * 0.92f,
-    )
+    drawAsset()
 
-    if (isRound) {
-        drawOval(brush = seatBrush, topLeft = seatTopLeft, size = seatSize)
-        drawOval(color = outline, topLeft = seatTopLeft, size = seatSize, style = Stroke(width = stoolStroke))
-    } else {
-        val radiusValue = floorPlanClamp(minDim * 0.055f, 1.5f, 5f)
-        val seatRadius = CornerRadius(radiusValue, radiusValue)
-        drawRoundRect(brush = seatBrush, topLeft = seatTopLeft, size = seatSize, cornerRadius = seatRadius)
-        drawRoundRect(color = outline, topLeft = seatTopLeft, size = seatSize, cornerRadius = seatRadius, style = Stroke(width = stoolStroke))
-    }
-
-    if (detailLevel == FloorPlanFurnitureDetailLevel.FULL) {
-        drawCircle(
-            color = warmHighlight.copy(alpha = 0.18f),
-            radius = minDim * 0.065f,
-            center = Offset(seatTopLeft.x + seatSize.width * 0.36f, seatTopLeft.y + seatSize.height * 0.30f),
-        )
-        val inset = minDim * 0.13f
-        val innerTopLeft = Offset(seatTopLeft.x + inset, seatTopLeft.y + inset)
-        val innerSize = Size(
-            width = (seatSize.width - inset * 2f).coerceAtLeast(1f),
-            height = (seatSize.height - inset * 2f).coerceAtLeast(1f),
-        )
-        if (isRound) {
-            drawOval(
-                color = deepShadow.copy(alpha = 0.12f),
-                topLeft = innerTopLeft,
-                size = innerSize,
-                style = Stroke(width = max(0.65f, stoolStroke * 0.55f)),
-            )
-        } else {
-            val innerRadiusValue = floorPlanClamp(minDim * 0.035f, 1f, 3.5f)
-            val innerRadius = CornerRadius(innerRadiusValue, innerRadiusValue)
-            drawRoundRect(
-                color = deepShadow.copy(alpha = 0.11f),
-                topLeft = innerTopLeft,
-                size = innerSize,
-                cornerRadius = innerRadius,
-                style = Stroke(width = max(0.65f, stoolStroke * 0.50f)),
-            )
-        }
-    }
-}
-
-
-private fun DrawScope.drawFloorPlanBarStoolBackrest(
-    topLeft: Offset,
-    targetSize: Size,
-    seatTopLeft: Offset,
-    seatSize: Size,
-    direction: String?,
-    color: Color,
-    borderColor: Color,
-    strokeWidth: Float,
-) {
-    val minDim = min(targetSize.width, targetSize.height).coerceAtLeast(1f)
-    val thickness = floorPlanClamp(minDim * 0.10f, 2f, 5.5f)
-    val resolvedDirection = when (direction) {
-        "top", "right", "bottom", "left" -> direction
-        else -> "top"
-    }
-    val center = Offset(seatTopLeft.x + seatSize.width / 2f, seatTopLeft.y + seatSize.height / 2f)
-    val rectTopLeft: Offset
-    val rectSize: Size
-    val supportAStart: Offset
-    val supportAEnd: Offset
-    val supportBStart: Offset
-    val supportBEnd: Offset
-    val supportInset = minDim * 0.18f
-
-    when (resolvedDirection) {
-        "bottom" -> {
-            rectSize = Size(seatSize.width * 0.82f, thickness)
-            rectTopLeft = Offset(center.x - rectSize.width / 2f, min(topLeft.y + targetSize.height - thickness, seatTopLeft.y + seatSize.height + minDim * 0.08f))
-            supportAStart = Offset(center.x - supportInset, rectTopLeft.y)
-            supportAEnd = Offset(center.x - supportInset * 0.62f, seatTopLeft.y + seatSize.height * 0.78f)
-            supportBStart = Offset(center.x + supportInset, rectTopLeft.y)
-            supportBEnd = Offset(center.x + supportInset * 0.62f, seatTopLeft.y + seatSize.height * 0.78f)
-        }
-        "left" -> {
-            rectSize = Size(thickness, seatSize.height * 0.82f)
-            rectTopLeft = Offset(max(topLeft.x, seatTopLeft.x - minDim * 0.12f - thickness), center.y - rectSize.height / 2f)
-            supportAStart = Offset(rectTopLeft.x + rectSize.width, center.y - supportInset)
-            supportAEnd = Offset(seatTopLeft.x + seatSize.width * 0.22f, center.y - supportInset * 0.62f)
-            supportBStart = Offset(rectTopLeft.x + rectSize.width, center.y + supportInset)
-            supportBEnd = Offset(seatTopLeft.x + seatSize.width * 0.22f, center.y + supportInset * 0.62f)
-        }
-        "right" -> {
-            rectSize = Size(thickness, seatSize.height * 0.82f)
-            rectTopLeft = Offset(min(topLeft.x + targetSize.width - thickness, seatTopLeft.x + seatSize.width + minDim * 0.12f), center.y - rectSize.height / 2f)
-            supportAStart = Offset(rectTopLeft.x, center.y - supportInset)
-            supportAEnd = Offset(seatTopLeft.x + seatSize.width * 0.78f, center.y - supportInset * 0.62f)
-            supportBStart = Offset(rectTopLeft.x, center.y + supportInset)
-            supportBEnd = Offset(seatTopLeft.x + seatSize.width * 0.78f, center.y + supportInset * 0.62f)
-        }
-        else -> {
-            rectSize = Size(seatSize.width * 0.82f, thickness)
-            rectTopLeft = Offset(center.x - rectSize.width / 2f, max(topLeft.y, seatTopLeft.y - minDim * 0.12f - thickness))
-            supportAStart = Offset(center.x - supportInset, rectTopLeft.y + rectSize.height)
-            supportAEnd = Offset(center.x - supportInset * 0.62f, seatTopLeft.y + seatSize.height * 0.22f)
-            supportBStart = Offset(center.x + supportInset, rectTopLeft.y + rectSize.height)
-            supportBEnd = Offset(center.x + supportInset * 0.62f, seatTopLeft.y + seatSize.height * 0.22f)
-        }
-    }
-
-    drawLine(
-        color = borderColor.copy(alpha = 0.38f),
-        start = supportAStart,
-        end = supportAEnd,
-        strokeWidth = max(0.65f, strokeWidth * 0.68f),
-    )
-    drawLine(
-        color = borderColor.copy(alpha = 0.38f),
-        start = supportBStart,
-        end = supportBEnd,
-        strokeWidth = max(0.65f, strokeWidth * 0.68f),
-    )
-
-    val radius = floorPlanClamp(minDim * 0.045f, 1.5f, 4.5f)
-    val backrestBrush = if (resolvedDirection == "left" || resolvedDirection == "right") {
-        Brush.horizontalGradient(
-            colors = listOf(color.mixWith(Color.White, 0.06f).copy(alpha = 0.94f), color.mixWith(Color.Black, 0.20f).copy(alpha = 0.96f)),
-            startX = rectTopLeft.x,
-            endX = rectTopLeft.x + rectSize.width,
-        )
-    } else {
-        Brush.verticalGradient(
-            colors = listOf(color.mixWith(Color.White, 0.06f).copy(alpha = 0.94f), color.mixWith(Color.Black, 0.20f).copy(alpha = 0.96f)),
-            startY = rectTopLeft.y,
-            endY = rectTopLeft.y + rectSize.height,
+    if (baseColor != null) {
+        drawAsset(
+            alpha = 0.34f,
+            colorFilter = ColorFilter.tint(baseColor, BlendMode.SrcIn),
         )
     }
-    drawRoundRect(
-        brush = backrestBrush,
-        topLeft = rectTopLeft,
-        size = rectSize,
-        cornerRadius = CornerRadius(radius, radius),
-    )
-    drawRoundRect(
-        color = borderColor.copy(alpha = 0.72f),
-        topLeft = rectTopLeft,
-        size = rectSize,
-        cornerRadius = CornerRadius(radius, radius),
-        style = Stroke(width = strokeWidth),
-    )
 }
 
 
