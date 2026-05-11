@@ -9,8 +9,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.delay
 
-private const val CHECK_TICK_LABEL = "CHECK"
-private const val SERVICE_TICK_LABEL = "SERVE"
+private const val CHECK_TICK_LABEL = "TARKISTA"
+private const val SERVICE_TICK_LABEL = "TARJOILE"
 private const val ATTENTION_TICK_INTERVAL_MS = 2_400L
 
 internal val TableCheckAttentionColor = Color(0xFFFF5353)
@@ -66,14 +66,14 @@ internal fun rememberStatusTickPresentation(displayStatus: TableDisplayStatus): 
 
 private fun TableDisplayStatus.primaryTickLabel(): String {
     return when (kind) {
-        TableDisplayStatusKind.AVAILABLE -> "Free"
+        TableDisplayStatusKind.AVAILABLE -> "Vapaa"
         TableDisplayStatusKind.OPEN_BILL,
         TableDisplayStatusKind.OCCUPIED,
-        -> "Occupied"
-        TableDisplayStatusKind.DIRTY -> "Needs Cleaning"
+        -> "Käytössä"
+        TableDisplayStatusKind.DIRTY -> "Siivous"
         TableDisplayStatusKind.RESERVED,
         TableDisplayStatusKind.RESERVED_WITH_OPEN_BILL,
-        -> "Reserved"
+        -> "Varattu"
     }
 }
 

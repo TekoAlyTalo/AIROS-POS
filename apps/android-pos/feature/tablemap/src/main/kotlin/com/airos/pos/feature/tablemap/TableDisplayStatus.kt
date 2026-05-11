@@ -78,22 +78,22 @@ private fun TableStatus.toDisplayStatusKind(): TableDisplayStatusKind {
 
 private fun TableDisplayStatusKind.labelFor(openBillCount: Int): String {
     return when (this) {
-        TableDisplayStatusKind.AVAILABLE -> "Free"
+        TableDisplayStatusKind.AVAILABLE -> "Vapaa"
         TableDisplayStatusKind.OPEN_BILL,
         TableDisplayStatusKind.OCCUPIED,
-        -> "Occupied"
-        TableDisplayStatusKind.DIRTY -> "Needs Cleaning"
+        -> "Käytössä"
+        TableDisplayStatusKind.DIRTY -> "Siivous"
         TableDisplayStatusKind.RESERVED,
         TableDisplayStatusKind.RESERVED_WITH_OPEN_BILL,
-        -> "Reserved"
+        -> "Varattu"
     }
 }
 
 private fun TableStatus.physicalStatusLabel(): String {
     return when (this) {
-        TableStatus.AVAILABLE -> "Free"
-        TableStatus.OCCUPIED -> "Occupied"
-        TableStatus.DIRTY -> "Needs Cleaning"
-        TableStatus.RESERVED -> "Reserved"
+        TableStatus.AVAILABLE -> "Vapaa"
+        TableStatus.OCCUPIED -> "Käytössä"
+        TableStatus.DIRTY -> "Siivous"
+        TableStatus.RESERVED -> "Varattu"
     }
 }

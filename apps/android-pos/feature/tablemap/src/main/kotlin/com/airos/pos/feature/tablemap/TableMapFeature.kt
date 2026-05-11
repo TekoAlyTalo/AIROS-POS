@@ -1,4 +1,4 @@
-﻿package com.airos.pos.feature.tablemap
+package com.airos.pos.feature.tablemap
 
 import android.content.Context
 import android.os.Handler
@@ -130,7 +130,7 @@ private val previewMainHandler: Handler by lazy { Handler(Looper.getMainLooper()
 private const val MINI_PREVIEW_SHELL_ASPECT_RATIO = 16f / 9f
 private const val PREVIEW_FRAME_FRESHNESS_WINDOW_MILLIS = 2_500L
 private const val PREVIEW_FRAME_FRESHNESS_TICK_MILLIS = 500L
-private const val AREA_FILTER_ALL = "All"
+private const val AREA_FILTER_ALL = "Kaikki"
 private const val TOP_TICKER_SCROLL_PX_PER_SECOND = 77f
 private const val TRANSFERRED_MESSAGE_MAX_APPEARANCES = 2
 private const val TOP_TICKER_SEPARATOR = "✦"
@@ -330,7 +330,7 @@ class TableMapViewModel(
             mutableState.update {
                 it.copy(
                     selectedTableId = tableId,
-                    message = "No open bills to transfer from ${table.label}.",
+                    message = "Pöydässä ${table.label} ei ole siirrettäviä avoimia laskuja.",
                     transferState = null,
                 )
             }
@@ -350,7 +350,7 @@ class TableMapViewModel(
             it.copy(
                 selectedTableId = tableId,
                 message = if (initialStage == TableTransferStage.PICKING_TARGET) {
-                    "Select target table for 1 bill from ${table.label}."
+                    "Valitse kohdepöytä yhdelle laskulle pöydästä ${table.label}."
                 } else {
                     null
                 },
@@ -372,7 +372,7 @@ class TableMapViewModel(
             mutableState.update {
                 it.copy(
                     selectedTableId = tableId,
-                    message = "No open bills to transfer from ${table.label}.",
+                    message = "Pöydässä ${table.label} ei ole siirrettäviä avoimia laskuja.",
                     transferState = null,
                 )
             }
@@ -392,8 +392,8 @@ class TableMapViewModel(
             it.copy(
                 selectedTableId = tableId,
                 message = when (initialStage) {
-                    TableTransferStage.PICKING_TARGET -> "Select target table for 1 bill from ${table.label}."
-                    TableTransferStage.SELECTING_BILLS -> "Bill selected from ${table.label}. Tap more bills or start transfer."
+                    TableTransferStage.PICKING_TARGET -> "Valitse kohdepöytä yhdelle laskulle pöydästä ${table.label}."
+                    TableTransferStage.SELECTING_BILLS -> "Lasku valittu pöydästä ${table.label}. Valitse lisää laskuja tai aloita siirto."
                 },
                 transferState = TableTransferState(
                     sourceSpotId = tableId,
@@ -426,11 +426,11 @@ class TableMapViewModel(
         mutableState.update { current ->
             val transfer = current.transferState ?: return@update current
             if (transfer.selectedSaleIds.isEmpty()) {
-                current.copy(message = "Select at least one bill to transfer.")
+                current.copy(message = "Valitse vähintään yksi siirrettävä lasku.")
             } else {
                 current.copy(
                     transferState = transfer.copy(stage = TableTransferStage.PICKING_TARGET),
-                    message = "Select target table for ${transfer.selectedSaleIds.size} bill(s).",
+                    message = "Valitse kohdepöytä ${transfer.selectedSaleIds.size} laskulle.",
                 )
             }
         }
@@ -446,12 +446,12 @@ class TableMapViewModel(
         val targetTable = state.floorMap?.tables?.firstOrNull { it.id == targetSpotId } ?: return
         if (targetSpotId == transfer.sourceSpotId) {
             mutableState.update {
-                it.copy(message = "Cannot transfer selected bills to the same table.")
+                it.copy(message = "Valittuja laskuja ei voi siirtää samaan pöytään.")
             }
             return
         }
         if (transfer.selectedSaleIds.isEmpty()) {
-            mutableState.update { it.copy(message = "Select at least one bill to transfer.") }
+            mutableState.update { it.copy(message = "Valitse vähintään yksi siirrettävä lasku.") }
             return
         }
 
@@ -473,14 +473,14 @@ class TableMapViewModel(
                         busy = false,
                         selectedTableId = targetSpotId,
                         transferState = null,
-                        message = "Transferred ${transfer.selectedSaleIds.size} bill(s) ${transfer.sourceSpotLabel} -> ${targetTable.label}.",
+                        message = "Siirretty ${transfer.selectedSaleIds.size} laskua ${transfer.sourceSpotLabel} → ${targetTable.label}.",
                     )
                 }
             }.onFailure { error ->
                 mutableState.update {
                     it.copy(
                         busy = false,
-                        message = error.message ?: "Bill transfer failed.",
+                        message = error.message ?: "Laskujen siirto epäonnistui.",
                     )
                 }
             }
@@ -514,12 +514,12 @@ class TableMapViewModel(
         val table = current.floorMap?.tables?.firstOrNull { it.id == current.selectedTableId } ?: return
         val cameraId = table.cameraId
         if (cameraId.isNullOrBlank()) {
-            mutableState.update { it.copy(message = "No live camera is assigned to ${table.label}.") }
+            mutableState.update { it.copy(message = "Pöydälle ${table.label} ei ole määritetty live-kameraa.") }
             return
         }
         val edgeBaseUrl = current.edgeBaseUrl
         if (edgeBaseUrl.isNullOrBlank()) {
-            mutableState.update { it.copy(message = "Edge signaling URL is not configured yet.") }
+            mutableState.update { it.copy(message = "Kamerayhteyden osoitetta ei ole vielä määritetty.") }
             return
         }
 
@@ -545,12 +545,12 @@ class TableMapViewModel(
         val target = current.livePreviewTarget ?: return
         val edgeBaseUrl = current.edgeBaseUrl
         if (edgeBaseUrl.isNullOrBlank()) {
-            mutableState.update { it.copy(message = "Edge signaling URL is not configured yet.") }
+            mutableState.update { it.copy(message = "Kamerayhteyden osoitetta ei ole vielä määritetty.") }
             return
         }
 
         mutableState.update {
-            it.copy(message = "Retrying live preview for ${target.cameraLabel}...")
+            it.copy(message = "Yritetään live-esikatselua uudelleen: ${target.cameraLabel}...")
         }
 
         startPreview(target = target, edgeBaseUrl = edgeBaseUrl)
@@ -925,7 +925,9 @@ LaunchedEffect(
                             text = nonTickerMessage,
                             tint = if (
                                 nonTickerMessage.contains("opened", ignoreCase = true) ||
-                                nonTickerMessage.contains("select target", ignoreCase = true)
+                                nonTickerMessage.contains("avattu", ignoreCase = true) ||
+                                nonTickerMessage.contains("select target", ignoreCase = true) ||
+                                nonTickerMessage.contains("kohdepöytä", ignoreCase = true)
                             ) {
                                 MaterialTheme.colorScheme.primary
                             } else {
@@ -951,7 +953,7 @@ LaunchedEffect(
                     verticalAlignment = Alignment.Top,
                 ) {
                     Text(
-                        text = state.floorMap?.name ?: "Table map",
+                        text = state.floorMap?.name ?: "Pöytäkartta",
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.SemiBold,
                         color = TableMapVisualTokens.TextPrimary,
@@ -985,16 +987,16 @@ LaunchedEffect(
                 when {
                     !hasRealFloorMap -> {
                         HonestFloorMapUnavailableState(
-                            title = "Floor map unavailable",
-                            message = "No real floor map is cached on this device. Connect once to load tables.",
+                            title = "Pöytäkarttaa ei saatavilla",
+                            message = "Laitteella ei ole välimuistissa oikeaa pöytäkarttaa. Yhdistä backendiin kerran ladataksesi pöydät.",
                             modifier = Modifier.weight(1.16f, fill = true),
                         )
                     }
 
                     visibleTables.isEmpty() -> {
                         HonestFloorMapUnavailableState(
-                            title = "No tables in this area",
-                            message = "Change the area filter to view available tables.",
+                            title = "Tällä alueella ei ole pöytiä",
+                            message = "Vaihda aluesuodatinta nähdäksesi käytettävissä olevat pöydät.",
                             modifier = Modifier.weight(1f, fill = true),
                         )
                     }
@@ -1071,7 +1073,7 @@ LaunchedEffect(
                                     .align(Alignment.BottomEnd)
                                     .padding(16.dp),
                             ) {
-                                Text("Rotate 90°")
+                                Text("Käännä 90°")
                             }
                         }
                     }
@@ -1095,18 +1097,18 @@ LaunchedEffect(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
-                    text = selectedTable?.label ?: "Table details",
+                    text = selectedTable?.label ?: "Pöydän tiedot",
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                     color = TableMapVisualTokens.TextPrimary,
                 )
                 if (selectedTable == null) {
                     if (hasRealFloorMap) {
-                        Text("Select a table to continue.")
+                        Text("Valitse pöytä jatkaaksesi.")
                     } else {
                         HonestFloorMapUnavailableState(
-                            title = "Tables unavailable offline",
-                            message = "No real floor map is cached on this device yet.",
+                            title = "Pöydät eivät ole käytettävissä offline-tilassa",
+                            message = "Laitteella ei ole vielä välimuistissa oikeaa pöytäkarttaa.",
                         )
                     }
                 } else {
@@ -1392,13 +1394,13 @@ private fun TableDetailsContent(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 TableDetailsMetaChip(
-                    label = "Status",
+                    label = "Tila",
                     value = if (displayStatus.hasAnyAttention) statusTick.label else displayStatus.label,
                     valueColor = displayStatus.detailPaneStatusColor(),
                     modifier = Modifier.weight(1f),
                 )
                 TableDetailsMetaChip(
-                    label = "Area",
+                    label = "Alue",
                     value = table.areaName,
                     modifier = Modifier.weight(1f),
                 )
@@ -1409,8 +1411,8 @@ private fun TableDetailsContent(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 TableDetailsMetaChip(
-                    label = "Table",
-                    value = "${table.guestCount} guests · ${table.seats} seats",
+                    label = "Pöytä",
+                    value = "${table.guestCount} hlöä · ${table.seats} paikkaa",
                     modifier = Modifier.weight(1f),
                 )
                 TableDetailsMetaChip(
@@ -1426,7 +1428,7 @@ private fun TableDetailsContent(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     TableDetailsMetaChip(
-                        label = if (displayStatus.differsFromPhysical || physicalReviewDetail != null) "Physical" else "Merged",
+                        label = if (displayStatus.differsFromPhysical || physicalReviewDetail != null) "Fyysinen" else "Yhdistetty",
                         value = when {
                             physicalReviewDetail != null ->
                                 "${displayStatus.physicalLabel} • $physicalReviewDetail"
@@ -1508,9 +1510,9 @@ private fun TableDetailsContent(
                     )
                     Text(
                         text = if (transferForThisTable?.stage == TableTransferStage.PICKING_TARGET) {
-                            "Valitse kohdepöytä gridistä tai floor planista."
+                            "Valitse kohdepöytä ruudukosta tai pohjakartalta."
                         } else {
-                            "Napauta siirrettävät laskut. Kun valinta on tehty, napauta kohdepöytää gridistä tai floor planista."
+                            "Napauta siirrettävät laskut. Kun valinta on tehty, napauta kohdepöytää ruudukosta tai pohjakartalta."
                         },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1677,7 +1679,7 @@ private fun TableDetailsContent(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Text(
-                    text = table.cameraLabel ?: table.cameraId ?: "No assigned camera",
+                    text = table.cameraLabel ?: table.cameraId ?: "Ei määritettyä kameraa",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1720,11 +1722,11 @@ private fun TableDetailsContent(
                         shellOverlayContent = {
                             if (!canOpenLivePreview || !isPreviewLiveForUser || !isMiniVisibleOwner) {
                                 val overlayText = when {
-                                    !canOpenLivePreview -> "Assign a camera and configure edge URL to enable live preview."
-                                    previewTarget == null -> "Starting live preview..."
-                                    isLivePreviewDialogVisible -> "Live preview is open in the enlarged view."
+                                    !canOpenLivePreview -> "Määritä kamera ja kamerayhteyden osoite live-esikatselua varten."
+                                    previewTarget == null -> "Käynnistetään live-esikatselua..."
+                                    isLivePreviewDialogVisible -> "Live-esikatselu on avattu suurennettuun näkymään."
                                     previewState.errorMessage?.isNotBlank() == true -> previewState.errorMessage ?: previewState.detailMessage
-                                    previewState.isWaitingForFreshFrames(isPreviewLiveForUser) -> "Waiting for fresh video frames..."
+                                    previewState.isWaitingForFreshFrames(isPreviewLiveForUser) -> "Odotetaan tuoreita videoruutuja..."
                                     else -> previewState.detailMessage
                                 }
                                 Text(
@@ -2032,7 +2034,7 @@ private fun OpenSaleSummaryColumn(
             fontWeight = FontWeight.SemiBold,
         )
         Text(
-            text = "${sale.openSaleItemCount()} items",
+            text = "${sale.openSaleItemCount()} riviä",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -2045,9 +2047,9 @@ private fun buildAreaFilterOptions(
     floorAreas: List<FloorMapArea>,
 ): List<String> {
     val areaNames = if (floorAreas.isNotEmpty()) {
-        floorAreas.map { it.label.trim().ifBlank { "Unassigned" } }
+        floorAreas.map { it.label.trim().ifBlank { "Ei aluetta" } }
     } else {
-        tables.map { it.areaName.trim().ifBlank { "Unassigned" } }
+        tables.map { it.areaName.trim().ifBlank { "Ei aluetta" } }
     }
         .distinct()
         .sortedWith(String.CASE_INSENSITIVE_ORDER)
@@ -2071,12 +2073,12 @@ private fun filterTablesForArea(
         return tables
     }
     val selectedArea = floorAreas.firstOrNull {
-        it.label.trim().ifBlank { "Unassigned" }.equals(selectedAreaName, ignoreCase = true)
+        it.label.trim().ifBlank { "Ei aluetta" }.equals(selectedAreaName, ignoreCase = true)
     }
     if (selectedArea != null) {
         return tables.filter { table -> table.centerPointInside(selectedArea) }
     }
-    return tables.filter { it.areaName.trim().ifBlank { "Unassigned" } == selectedAreaName }
+    return tables.filter { it.areaName.trim().ifBlank { "Ei aluetta" } == selectedAreaName }
 }
 
 private fun filterFloorObjectsForArea(
@@ -2089,7 +2091,7 @@ private fun filterFloorObjectsForArea(
         return visibleObjects
     }
     val selectedArea = floorAreas.firstOrNull {
-        it.label.trim().ifBlank { "Unassigned" }.equals(selectedAreaName, ignoreCase = true)
+        it.label.trim().ifBlank { "Ei aluetta" }.equals(selectedAreaName, ignoreCase = true)
     } ?: return visibleObjects
     return visibleObjects.filter { floorObject -> floorObject.centerPointInside(selectedArea) }
 }
@@ -2099,7 +2101,7 @@ private fun visibleFloorAreasForSelection(
     selectedAreaName: String,
 ): List<FloorMapArea> {
     if (selectedAreaName == AREA_FILTER_ALL) return floorAreas
-    return floorAreas.filter { it.label.trim().ifBlank { "Unassigned" }.equals(selectedAreaName, ignoreCase = true) }
+    return floorAreas.filter { it.label.trim().ifBlank { "Ei aluetta" }.equals(selectedAreaName, ignoreCase = true) }
 }
 
 private fun RestaurantTable.centerPointInside(area: FloorMapArea): Boolean {
@@ -2120,7 +2122,10 @@ private fun FloorMapObject.centerPointInside(area: FloorMapArea): Boolean {
 private fun TableDisplayStatus.acknowledgeActionFor(
     statusTickLabel: String,
 ): TableAcknowledgeActionKind? {
-    val showingCheckTick = hasCheckAttention && statusTickLabel.equals("CHECK", ignoreCase = true)
+    val showingCheckTick = hasCheckAttention && (
+        statusTickLabel.equals("CHECK", ignoreCase = true) ||
+            statusTickLabel.equals("TARKISTA", ignoreCase = true)
+        )
     return when {
         showingCheckTick -> TableAcknowledgeActionKind.CHECK
         kind == TableDisplayStatusKind.DIRTY -> TableAcknowledgeActionKind.NEEDS_CLEANING
@@ -2131,8 +2136,8 @@ private fun TableDisplayStatus.acknowledgeActionFor(
 
 private fun TableAcknowledgeActionKind.buttonLabel(): String {
     return when (this) {
-        TableAcknowledgeActionKind.CHECK -> "Acknowledge CHECK"
-        TableAcknowledgeActionKind.NEEDS_CLEANING -> "Mark cleaned"
+        TableAcknowledgeActionKind.CHECK -> "Kuittaa tarkistus"
+        TableAcknowledgeActionKind.NEEDS_CLEANING -> "Merkitse siivotuksi"
     }
 }
 
@@ -2145,7 +2150,7 @@ private fun TableDisplayStatus.tickerKinds(): List<TableTickerEntryKind> {
 }
 
 private fun String.isTransferredTableMapMessage(): Boolean {
-    return contains("transferred", ignoreCase = true)
+    return contains("transferred", ignoreCase = true) || contains("siirretty", ignoreCase = true)
 }
 
 @Composable
@@ -2300,7 +2305,7 @@ private fun TableGridCard(
                         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
                     ) {
                         Text(
-                            text = "${table.seats} seats",
+                            text = "${table.seats} paikkaa",
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Medium,
@@ -2311,7 +2316,7 @@ private fun TableGridCard(
                         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
                     ) {
                         Text(
-                            text = "${table.guestCount} guests",
+                            text = "${table.guestCount} hlöä",
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Medium,
@@ -2455,10 +2460,10 @@ private fun TableTickerEntry.tickerIdentity(): String {
 private fun TableTickerEntry.fullTickerMessage(): String {
     val tableText = tableLabel.orEmpty()
     return when (kind) {
-        TableTickerEntryKind.SERVE -> "SERVE $tableText"
-        TableTickerEntryKind.CHECK -> "CHECK $tableText"
-        TableTickerEntryKind.NEEDS_CLEANING -> "NEEDS CLEANING $tableText"
-        TableTickerEntryKind.TRANSFERRED -> message?.toTransferredTickerMessage() ?: "BILL TRANSFERRED"
+        TableTickerEntryKind.SERVE -> "TARJOILE $tableText"
+        TableTickerEntryKind.CHECK -> "TARKISTA $tableText"
+        TableTickerEntryKind.NEEDS_CLEANING -> "SIIVOUS $tableText"
+        TableTickerEntryKind.TRANSFERRED -> message?.toTransferredTickerMessage() ?: "LASKU SIIRRETTY"
         TableTickerEntryKind.RESERVATION -> message.orEmpty()
     }.trim()
 }
@@ -2466,9 +2471,9 @@ private fun TableTickerEntry.fullTickerMessage(): String {
 private fun String.toTransferredTickerMessage(): String {
     val normalized = trim().removeSuffix(".")
     val detail = normalized
-        .replace(Regex("^transferred\\s+", RegexOption.IGNORE_CASE), "")
+        .replace(Regex("^(transferred|siirretty)\\s+", RegexOption.IGNORE_CASE), "")
         .replace(" -> ", " → ")
-    return "BILL TRANSFERRED ${detail.ifBlank { normalized }}".trim()
+    return "LASKU SIIRRETTY ${detail.ifBlank { normalized }}".trim()
 }
 
 private fun TableTickerEntry.tickerColor(): Color {
@@ -2658,7 +2663,7 @@ private fun backendPhysicalReviewDetail(table: RestaurantTable): String? {
     val reviewFrom = formatBackendAnchorClock(table.reviewFrom)
     val reviewTo = formatBackendAnchorClock(table.reviewTo)
     if (reviewFrom != null && reviewTo != null) {
-        return "Review $reviewFrom–$reviewTo"
+        return "Tarkistus $reviewFrom–$reviewTo"
     }
     val emptyAnchor = formatBackendAnchorClock(table.emptyAnchorTime)
     return emptyAnchor?.let { "Tyhjänä alkaen $it" }
@@ -2687,7 +2692,7 @@ fun mergedHintFor(table: RestaurantTable): String? {
     return when {
         "+" in normalized -> normalized
         "&" in normalized -> normalized
-        "MERGE" in normalized -> "Merged"
+        "MERGE" in normalized -> "Yhdistetty"
         else -> null
     }
 }
@@ -2816,20 +2821,20 @@ private fun TableLivePreviewDialog(
                         // Table facts
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             if (table.areaName.isNotBlank()) {
-                                KeyValueRow("Area", table.areaName)
+                                KeyValueRow("Alue", table.areaName)
                             }
-                            KeyValueRow("Seats", "${table.seats}")
+                            KeyValueRow("Paikkoja", "${table.seats}")
                             if (table.guestCount > 0) {
-                                KeyValueRow("Guests", "${table.guestCount}")
+                                KeyValueRow("Asiakkaita", "${table.guestCount}")
                             }
-                            KeyValueRow("Status", displayStatus.label)
+                            KeyValueRow("Tila", displayStatus.label)
                         }
 
                         // Open bills
                         if (openBillCount > 0) {
                             val totalCents = openSales.sumOf { it.openSaleTotalCents() }
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                KeyValueRow("Open bills", "$openBillCount")
+                                KeyValueRow("Avoimet laskut", "$openBillCount")
                                 openSales.forEach { sale ->
                                     Row(
                                         modifier = Modifier
@@ -2854,15 +2859,15 @@ private fun TableLivePreviewDialog(
                                     modifier = Modifier.padding(top = 2.dp),
                                     color = MaterialTheme.colorScheme.outline.copy(alpha = 0.26f),
                                 )
-                                KeyValueRow("TOTAL", formatOpenTotal(totalCents))
+                                KeyValueRow("Yhteensä", formatOpenTotal(totalCents))
                             }
                         }
 
                         // Attention / operational flags
                         val activeFlags = buildList<Pair<String, Color>> {
-                            if (displayStatus.hasCheckAttention) add("CHECK" to TableCheckAttentionColor)
-                            if (displayStatus.hasServiceAttention) add("SERVE" to TableServiceAttentionColor)
-                            if (displayStatus.kind == TableDisplayStatusKind.DIRTY) add("NEEDS CLEANING" to TableMapVisualTokens.DirtyColor)
+                            if (displayStatus.hasCheckAttention) add("TARKISTA" to TableCheckAttentionColor)
+                            if (displayStatus.hasServiceAttention) add("TARJOILE" to TableServiceAttentionColor)
+                            if (displayStatus.kind == TableDisplayStatusKind.DIRTY) add("SIIVOUS" to TableMapVisualTokens.DirtyColor)
                         }
                         if (activeFlags.isNotEmpty()) {
                             Row(
@@ -2889,7 +2894,7 @@ private fun TableLivePreviewDialog(
 
                     // Camera id — compact technical footnote
                     Text(
-                        text = "cam: ${target.cameraId}",
+                        text = "kamera: ${target.cameraId}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
                     )
@@ -2900,7 +2905,7 @@ private fun TableLivePreviewDialog(
                             onClick = onRetry,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Text("Retry")
+                            Text("Yritä uudelleen")
                         }
                     }
                 }
@@ -2939,7 +2944,7 @@ private fun TableLivePreviewDialog(
                                 ) {
                                     Text(
                                         text = if (previewState.isWaitingForFreshFrames(isPreviewLiveForUser)) {
-                                            "Waiting for fresh video frames..."
+                                            "Odotetaan tuoreita videoruutuja..."
                                         } else {
                                             previewState.detailMessage
                                         },
@@ -3419,12 +3424,12 @@ private fun PreviewStatusPill(connectionState: CameraConnectionState) {
     ) {
         Text(
             text = when (connectionState) {
-                CameraConnectionState.CONNECTING -> "Connecting"
-                CameraConnectionState.WAITING_FOR_VIDEO -> "Waiting for video"
+                CameraConnectionState.CONNECTING -> "Yhdistetään"
+                CameraConnectionState.WAITING_FOR_VIDEO -> "Odotetaan videota"
                 CameraConnectionState.LIVE -> "Live"
-                CameraConnectionState.RECONNECTING -> "Reconnecting"
-                CameraConnectionState.ERROR -> "Error"
-                CameraConnectionState.IDLE -> "Idle"
+                CameraConnectionState.RECONNECTING -> "Yhdistetään uudelleen"
+                CameraConnectionState.ERROR -> "Virhe"
+                CameraConnectionState.IDLE -> "Valmiustila"
             },
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
             color = tint,

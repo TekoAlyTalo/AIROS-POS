@@ -243,7 +243,7 @@ internal fun TableMapViewModeToggle(
                 onClick = { onViewModeChange(mode) },
             ) {
                 Text(
-                    text = if (mode == TableMapViewMode.GRID) "Grid" else "Floor Plan",
+                    text = if (mode == TableMapViewMode.GRID) "Ruudukko" else "Pohjakartta",
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                     color = if (selected) TableMapVisualTokens.AccentText else TableMapVisualTokens.TextSecondary,
                     style = MaterialTheme.typography.labelLarge,
@@ -277,7 +277,7 @@ internal fun FloorPlanVisualStyleToggle(
                 onClick = { onStyleChange(item) },
             ) {
                 Text(
-                    text = if (item == FloorPlanVisualStyle.SIMPLE) "Simple" else "Rich",
+                    text = if (item == FloorPlanVisualStyle.SIMPLE) "Selkeä" else "Näyttävä",
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                     color = if (selected) TableMapVisualTokens.AccentText else TableMapVisualTokens.TextSecondary,
                     style = MaterialTheme.typography.labelMedium,
@@ -650,7 +650,7 @@ private fun SimpleFloorPlanTableMap(
                     onClick = onRotate,
                 ) {
                     Text(
-                        text = "Rotate 90Â°",
+                        text = "Käännä 90°",
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                         style = MaterialTheme.typography.labelLarge,
                         color = TableMapVisualTokens.TextSecondary,
@@ -4477,34 +4477,37 @@ private data class FloorPlanChipMetrics(
     val heightPx: Float,
 )
 
-private const val FLOOR_PLAN_STATUS_STABLE_WIDTH_LABEL = "Tarjoile"
+private const val FLOOR_PLAN_STATUS_STABLE_WIDTH_LABEL = "Tarkista"
 
 
 private fun String.toFinnishFloorPlanStatusChipLabel(): String {
     return when (trim().lowercase()) {
-        "free" -> "Vapaa"
-        "occupied" -> "Varattu"
-        "needs cleaning", "dirty" -> "Siivoa"
-        "reserved" -> "Varaus"
-        "open bill", "bill" -> "Lasku"
-        "serve" -> "Tarjoile"
-        "check" -> "Lasku"
+        "free", "vapaa" -> "Vapaa"
+        "occupied", "käytössä", "kaytossa" -> "Käytössä"
+        "needs cleaning", "dirty", "siivous", "siivoa" -> "Siivous"
+        "reserved", "varattu", "varaus" -> "Varattu"
+        "open bill", "bill", "lasku" -> "Lasku"
+        "serve", "tarjoile" -> "Tarjoile"
+        "check", "tarkista" -> "Tarkista"
         else -> this
     }
 }
 
 private fun String.shouldPulseFloorPlanStatusChip(): Boolean {
-    return equals("SERVE", ignoreCase = true) || equals("CHECK", ignoreCase = true)
+    return equals("SERVE", ignoreCase = true) ||
+        equals("TARJOILE", ignoreCase = true) ||
+        equals("CHECK", ignoreCase = true) ||
+        equals("TARKISTA", ignoreCase = true)
 }
 
 private fun RestaurantTable.floorPlanCustomerLabel(): String? {
     val count = guestCount.coerceAtLeast(0)
-    return if (count > 0) "${count}C" else null
+    return if (count > 0) "${count} hlö" else null
 }
 
 private fun RestaurantTable.floorPlanSeatsLabel(): String? {
     val count = seats.coerceAtLeast(0)
-    return if (count > 1) "${count}S" else null
+    return if (count > 1) "${count} paikkaa" else null
 }
 
 @Composable
