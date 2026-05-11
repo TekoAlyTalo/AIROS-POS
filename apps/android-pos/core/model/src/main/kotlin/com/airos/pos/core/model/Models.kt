@@ -266,6 +266,14 @@ data class RestaurantTable(
     val tableMaterial: String? = null,
     val backrestDirection: String? = null,
     val backrestMode: String? = null,
+    /**
+     * Canonical bar-stool appearance identity. "ROUND" or "SQUARE".
+     * Renderer must dispatch on this; never on shape/backrestMode/color.
+     * Null = unknown (e.g. legacy stale floor-plan payload pre-dating the
+     * appearance contract). The data-boundary adapter is responsible for
+     * deriving a value from legacy `floorPlanShape` when this is null.
+     */
+    val barStoolStyle: String? = null,
     val statusChipAnchor: FloorPlanMarkerAnchor? = null,
     val seatMarkerAnchor: FloorPlanMarkerAnchor? = null,
 )
