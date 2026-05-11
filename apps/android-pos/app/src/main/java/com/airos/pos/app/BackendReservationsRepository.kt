@@ -13,7 +13,7 @@ import org.json.JSONObject
 
 data class BackendReservation(
     val id: Int,
-    val tableId: Int,
+    val tableId: Int?,
     val customerName: String,
     val customerPhone: String?,
     val customerProfileId: Int?,
@@ -25,7 +25,7 @@ data class BackendReservation(
 )
 
 data class BackendReservationWrite(
-    val tableId: Int,
+    val tableId: Int?,
     val customerName: String,
     val customerPhone: String?,
     val customerProfileId: Int? = null,
@@ -139,7 +139,7 @@ class BackendReservationsRepository(
 }
 
 private fun BackendReservationWrite.toJson(): JSONObject = JSONObject().apply {
-    put("table_id", tableId)
+    if (tableId == null) put("table_id", JSONObject.NULL) else put("table_id", tableId)
     put("customer_name", customerName)
     if (customerPhone.isNullOrBlank()) put("customer_phone", JSONObject.NULL) else put("customer_phone", customerPhone)
     if (customerProfileId == null) put("customer_profile_id", JSONObject.NULL) else put("customer_profile_id", customerProfileId)
@@ -152,7 +152,7 @@ private fun BackendReservationWrite.toJson(): JSONObject = JSONObject().apply {
 private fun JSONObject.toBackendReservation(): BackendReservation {
     return BackendReservation(
         id = optInt("id"),
-        tableId = optInt("table_id"),
+        tableId = optIntOrNull("table_id"),
         customerName = optString("customer_name"),
         customerPhone = optStringOrNull("customer_phone"),
         customerProfileId = optIntOrNull("customer_profile_id"),
