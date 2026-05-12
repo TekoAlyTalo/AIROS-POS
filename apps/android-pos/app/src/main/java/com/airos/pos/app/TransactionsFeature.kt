@@ -2,7 +2,6 @@ package com.airos.pos.app
 
 import android.text.format.DateFormat
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -14,28 +13,30 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -56,9 +57,7 @@ import com.airos.pos.core.model.ReceiptLine
 import com.airos.pos.core.model.ReceiptPaymentRecord
 import com.airos.pos.core.model.ReceiptTotals
 import com.airos.pos.core.model.ReceiptVatRow
-import com.airos.pos.core.ui.KeyValueRow
 import com.airos.pos.core.ui.PosPane
-import com.airos.pos.core.ui.StatusBanner
 import com.airos.pos.domain.OpenSaleRepository
 import java.util.Calendar
 import java.util.Locale
@@ -117,6 +116,12 @@ private enum class TransactionSyncStatus {
     UNKNOWN,
 }
 
+private enum class SalesActionDialogType {
+    REPRINT,
+    REFUND,
+    CORRECT,
+}
+
 private data class TransactionPaymentSnapshot(
     val methodCode: String,
     val amountCents: Int,
@@ -173,6 +178,15 @@ private data class TransactionsUiState(
     val currentEvents: List<TransactionRecord> = emptyList(),
     val pastEvents: List<TransactionRecord> = emptyList(),
     val selectedEventId: String? = null,
+)
+
+private data class HourlyBucket(val hour: Int, val amountCents: Int)
+
+private data class PaymentMethodBucket(
+    val methodCode: String,
+    val label: String,
+    val amountCents: Int,
+    val totalCents: Int,
 )
 
 private class TransactionsRepository(
@@ -334,32 +348,6 @@ private class TransactionsViewModel private constructor(
         }
     }
 
-    fun setScope(scope: TransactionsScope) {
-        mutableState.update {
-            it.copy(
-                scope = scope,
-                statusFilter = TransactionsStatusFilter.ALL,
-                paymentFilter = TransactionsPaymentFilter.ALL,
-            )
-        }
-    }
-
-    fun setSearchQuery(value: String) {
-        mutableState.update { it.copy(searchQuery = value) }
-    }
-
-    fun setDateRange(value: TransactionsDateRange) {
-        mutableState.update { it.copy(dateRange = value) }
-    }
-
-    fun setStatusFilter(value: TransactionsStatusFilter) {
-        mutableState.update { it.copy(statusFilter = value) }
-    }
-
-    fun setPaymentFilter(value: TransactionsPaymentFilter) {
-        mutableState.update { it.copy(paymentFilter = value) }
-    }
-
     fun selectEvent(stableId: String) {
         mutableState.update { it.copy(selectedEventId = stableId) }
     }
@@ -384,28 +372,30 @@ private class TransactionsViewModel private constructor(
 @Composable
 private fun TransactionsScreen(
     state: TransactionsUiState,
-    onScopeChange: (TransactionsScope) -> Unit,
-    onSearchChange: (String) -> Unit,
-    onDateRangeChange: (TransactionsDateRange) -> Unit,
-    onStatusFilterChange: (TransactionsStatusFilter) -> Unit,
-    onPaymentFilterChange: (TransactionsPaymentFilter) -> Unit,
     onSelectEvent: (String) -> Unit,
 ) {
     val strings = rememberCashierStrings()
-    val visibleEvents = remember(
-        state.scope,
-        state.searchQuery,
-        state.dateRange,
-        state.statusFilter,
-        state.paymentFilter,
-        state.currentEvents,
-        state.pastEvents,
-    ) {
-        filterTransactions(state)
+    val todayStart = remember { startOfTodayEpochMillis() }
+
+    val todayPast = remember(state.pastEvents, todayStart) {
+        state.pastEvents.filter { it.occurredAtEpochMillis >= todayStart }
     }
-    val selectedEvent = visibleEvents.firstOrNull { it.stableId == state.selectedEventId } ?: visibleEvents.firstOrNull()
-    val horizontalScrollState = rememberScrollState()
-    val statusOptions = remember(state.scope) { statusOptionsForScope(state.scope) }
+    val todayTotal = remember(todayPast) { todayPast.sumOf { it.amountCents } }
+    val lastHourTotal = remember(state.pastEvents) {
+        val hourAgo = System.currentTimeMillis() - 3_600_000L
+        state.pastEvents.filter { it.occurredAtEpochMillis >= hourAgo }.sumOf { it.amountCents }
+    }
+    val receiptCount = remember(todayPast) { todayPast.size }
+    val openBillsCount = remember(state.currentEvents) { state.currentEvents.size }
+
+    val hourlyBuckets = remember(todayPast) { computeHourlyBuckets(todayPast) }
+    val paymentBuckets = remember(todayPast) { computePaymentBuckets(todayPast, strings) }
+    val recentSales = remember(state.pastEvents) { state.pastEvents.take(20) }
+    val openBills = state.currentEvents
+
+    val selectedEvent = remember(state.selectedEventId, openBills, recentSales) {
+        (openBills + recentSales).firstOrNull { it.stableId == state.selectedEventId }
+    }
 
     Row(
         modifier = Modifier.fillMaxSize(),
@@ -418,129 +408,123 @@ private fun TransactionsScreen(
                 .weight(1.2f)
                 .fillMaxHeight(),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                ToggleButton(
-                    label = strings[CashierStringKey.TransactionsCurrent],
-                    selected = state.scope == TransactionsScope.CURRENT,
-                    onClick = { onScopeChange(TransactionsScope.CURRENT) },
-                    modifier = Modifier.weight(1f),
-                )
-                ToggleButton(
-                    label = strings[CashierStringKey.TransactionsPast],
-                    selected = state.scope == TransactionsScope.PAST,
-                    onClick = { onScopeChange(TransactionsScope.PAST) },
-                    modifier = Modifier.weight(1f),
-                )
-            }
-
-            OutlinedTextField(
-                value = state.searchQuery,
-                onValueChange = onSearchChange,
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text(strings[CashierStringKey.TransactionsSearchPlaceholder]) },
-                singleLine = true,
-            )
-
-            Row(
+            LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .horizontalScroll(horizontalScrollState),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    .weight(1f, fill = true),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                TransactionsDateRange.entries.forEach { range ->
-                    FilterToggleChip(
-                        label = strings[range.toStringKey()],
-                        selected = state.dateRange == range,
-                        onClick = { onDateRangeChange(range) },
-                    )
-                }
-            }
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                statusOptions.forEach { option ->
-                    FilterToggleChip(
-                        label = strings[option.toStringKey()],
-                        selected = state.statusFilter == option,
-                        onClick = { onStatusFilterChange(option) },
-                    )
-                }
-            }
-
-            if (state.scope == TransactionsScope.PAST) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    TransactionsPaymentFilter.entries.forEach { option ->
-                        FilterToggleChip(
-                            label = strings[option.toStringKey()],
-                            selected = state.paymentFilter == option,
-                            onClick = { onPaymentFilterChange(option) },
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        SalesKpiCard(
+                            label = strings[CashierStringKey.SalesDashboardToday],
+                            value = CentsFormatter.format(todayTotal),
+                            modifier = Modifier.weight(1f),
+                        )
+                        SalesKpiCard(
+                            label = strings[CashierStringKey.SalesDashboardLastHour],
+                            value = CentsFormatter.format(lastHourTotal),
+                            modifier = Modifier.weight(1f),
+                        )
+                        SalesKpiCard(
+                            label = strings[CashierStringKey.SalesDashboardReceiptCount],
+                            value = receiptCount.toString(),
+                            modifier = Modifier.weight(1f),
+                        )
+                        SalesKpiCard(
+                            label = strings[CashierStringKey.SalesDashboardOpenBillsKpi],
+                            value = openBillsCount.toString(),
+                            modifier = Modifier.weight(1f),
                         )
                     }
                 }
-            }
 
-            if (visibleEvents.isEmpty()) {
-                Text(
-                    text = if (state.scope == TransactionsScope.CURRENT) {
-                        strings[CashierStringKey.TransactionsListEmptyCurrent]
-                    } else {
-                        strings[CashierStringKey.TransactionsListEmptyPast]
-                    },
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f, fill = true),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(
-                        items = visibleEvents,
-                        key = { it.stableId },
-                    ) { event ->
-                        TransactionListRow(
+                item { DashboardSectionHeader(strings[CashierStringKey.SalesDashboardHourlySales]) }
+                item {
+                    HourlySalesChart(
+                        buckets = hourlyBuckets,
+                        noDataText = strings[CashierStringKey.SalesDashboardNoHourlyData],
+                    )
+                }
+
+                item { DashboardSectionHeader(strings[CashierStringKey.SalesDashboardPaymentMethods]) }
+                if (paymentBuckets.isEmpty()) {
+                    item {
+                        Text(
+                            text = strings[CashierStringKey.SalesDashboardNoData],
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else {
+                    items(paymentBuckets, key = { it.methodCode }) { bucket ->
+                        PaymentMethodRow(bucket = bucket)
+                    }
+                }
+
+                item { DashboardSectionHeader(strings[CashierStringKey.SalesDashboardByCategory]) }
+                item {
+                    CategoryBreakdownSection(
+                        totalCents = todayTotal,
+                        categoryLabel = strings[CashierStringKey.SalesDashboardCategoryOther],
+                        noDataText = strings[CashierStringKey.SalesDashboardNoCategoryData],
+                    )
+                }
+
+                item { DashboardSectionHeader(strings[CashierStringKey.SalesDashboardOpenBillsSection]) }
+                if (openBills.isEmpty()) {
+                    item {
+                        Text(
+                            text = strings[CashierStringKey.SalesDashboardNoOpenBills],
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else {
+                    items(openBills, key = { it.stableId }) { event ->
+                        OpenBillRow(
                             event = event,
                             selected = selectedEvent?.stableId == event.stableId,
+                            strings = strings,
                             onClick = { onSelectEvent(event.stableId) },
                         )
                     }
                 }
+
+                item { DashboardSectionHeader(strings[CashierStringKey.SalesDashboardRecentSales]) }
+                if (recentSales.isEmpty()) {
+                    item {
+                        Text(
+                            text = strings[CashierStringKey.SalesDashboardNoData],
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else {
+                    items(recentSales, key = { it.stableId }) { event ->
+                        RecentSaleRow(
+                            event = event,
+                            selected = selectedEvent?.stableId == event.stableId,
+                            strings = strings,
+                            onClick = { onSelectEvent(event.stableId) },
+                        )
+                    }
+                }
+
+                item { Spacer(modifier = Modifier.height(8.dp)) }
             }
         }
 
-        PosPane(
-            title = strings[CashierStringKey.TransactionsTitle],
-            supportingText = selectedEvent?.detailSupportingText(strings)
-                ?: strings[CashierStringKey.TransactionsDetailEmpty],
+        PaperReceiptPane(
+            event = selectedEvent,
+            strings = strings,
             modifier = Modifier
                 .weight(0.92f)
                 .fillMaxHeight(),
-        ) {
-            if (selectedEvent == null) {
-                Text(
-                    text = strings[CashierStringKey.TransactionsDetailEmpty],
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else {
-                TransactionsDetailPane(
-                    event = selectedEvent,
-                    strings = strings,
-                )
-            }
-        }
+        )
     }
 }
 
@@ -558,85 +542,37 @@ internal fun TransactionsRoute(
     val state by viewModel.uiState.collectAsState()
     TransactionsScreen(
         state = state,
-        onScopeChange = viewModel::setScope,
-        onSearchChange = viewModel::setSearchQuery,
-        onDateRangeChange = viewModel::setDateRange,
-        onStatusFilterChange = viewModel::setStatusFilter,
-        onPaymentFilterChange = viewModel::setPaymentFilter,
         onSelectEvent = viewModel::selectEvent,
     )
 }
 
 @Composable
-private fun TransactionListRow(
-    event: TransactionRecord,
-    selected: Boolean,
-    onClick: () -> Unit,
+private fun SalesKpiCard(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
 ) {
-    val strings = rememberCashierStrings()
     Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(18.dp),
-        color = if (selected) {
-            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.42f)
-        } else {
-            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f)
-        },
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.28f),
-        ),
+        modifier = modifier,
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = event.listHeadline(strings),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = CentsFormatter.format(event.amountCents),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
-
             Text(
-                text = "${formatUiDateTime(event.occurredAtEpochMillis)} | ${event.locationLabel(strings)}",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                text = value,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-
             Text(
-                text = buildString {
-                    append(strings[CashierStringKey.TransactionsFieldCashier])
-                    append(": ")
-                    append(event.actorDisplayName ?: strings[CashierStringKey.TransactionsUnavailable])
-                    append(" | ")
-                    append(strings[CashierStringKey.TransactionsFieldPaymentMethod])
-                    append(": ")
-                    append(event.paymentSummary(strings))
-                    append(" | ")
-                    append(strings[CashierStringKey.TransactionsFieldStatus])
-                    append(": ")
-                    append(event.statusLabel(strings))
-                },
-                style = MaterialTheme.typography.bodySmall,
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
+                maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
         }
@@ -644,108 +580,312 @@ private fun TransactionListRow(
 }
 
 @Composable
-private fun TransactionsDetailPane(
-    event: TransactionRecord,
-    strings: CashierStrings,
+private fun DashboardSectionHeader(title: String) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 4.dp),
+    )
+}
+
+@Composable
+private fun HourlySalesChart(
+    buckets: List<HourlyBucket>,
+    noDataText: String,
 ) {
-    val timelineScroll = rememberScrollState()
-    val summaryScroll = rememberScrollState()
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+    val hasData = buckets.any { it.amountCents > 0 }
+    if (!hasData) {
+        Text(
+            text = noDataText,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        return
+    }
+    val maxCents = buckets.maxOf { it.amountCents }.coerceAtLeast(1)
+    val scrollState = rememberScrollState()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(scrollState),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.Bottom,
     ) {
-        KeyValueRow(strings[CashierStringKey.TransactionsFieldTime], formatUiDateTime(event.occurredAtEpochMillis))
-        KeyValueRow(
-            strings[CashierStringKey.TransactionsFieldReceipt],
-            event.receiptNumber ?: strings[CashierStringKey.TransactionsUnavailable],
-        )
-        KeyValueRow(
-            strings[CashierStringKey.TransactionsFieldSaleId],
-            event.saleId ?: strings[CashierStringKey.TransactionsUnavailable],
-        )
-        KeyValueRow(strings[CashierStringKey.TransactionsFieldTable], event.locationLabel(strings))
-        KeyValueRow(
-            strings[CashierStringKey.TransactionsFieldCashier],
-            event.actorDisplayName ?: strings[CashierStringKey.TransactionsUnavailable],
-        )
-        KeyValueRow(
-            strings[CashierStringKey.TransactionsFieldCorrectionActor],
-            strings[CashierStringKey.TransactionsUnavailable],
-        )
-        KeyValueRow(strings[CashierStringKey.TransactionsFieldAmount], CentsFormatter.format(event.amountCents))
-        KeyValueRow(strings[CashierStringKey.TransactionsFieldPaymentMethod], event.paymentSummary(strings))
-        KeyValueRow(strings[CashierStringKey.TransactionsFieldStatus], event.statusLabel(strings))
-        event.syncStatus?.let {
-            KeyValueRow(strings[CashierStringKey.TransactionsFieldSync], event.syncStatusLabel(strings))
-        }
-        if (event.source == TransactionsScope.PAST) {
-            KeyValueRow(
-                strings[CashierStringKey.TransactionsFieldPublicReceipt],
-                if (event.publicReceiptUrlPath.isNullOrBlank()) {
-                    strings[CashierStringKey.TransactionsPublicReceiptPending]
-                } else {
-                    strings[CashierStringKey.TransactionsPublicReceiptReady]
-                },
-            )
-        } else {
-            event.updatedAtEpochMillis?.let { updatedAt ->
-                KeyValueRow(strings[CashierStringKey.TransactionsFieldUpdated], formatUiDateTime(updatedAt))
+        buckets.forEach { bucket ->
+            val fraction = bucket.amountCents.toFloat() / maxCents.toFloat()
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Bottom,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(26.dp)
+                        .height((80.dp * fraction).coerceAtLeast(2.dp))
+                        .background(
+                            color = if (bucket.amountCents > 0) {
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.72f)
+                            } else {
+                                MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)
+                            },
+                            shape = RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp),
+                        ),
+                )
+                Text(
+                    text = "${bucket.hour}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
+    }
+}
 
-        if (event.receiptDocument != null) {
-            ReceiptPreviewCard(
-                title = strings[CashierStringKey.TransactionsReceiptPreview],
-                document = event.receiptDocument,
-                strings = strings,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f, fill = false),
+@Composable
+private fun PaymentMethodRow(bucket: PaymentMethodBucket) {
+    val pct = if (bucket.totalCents > 0) bucket.amountCents * 100 / bucket.totalCents else 0
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = bucket.label,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f),
             )
-        } else {
-            CurrentBillSummaryCard(
-                title = strings[CashierStringKey.TransactionsCurrentSummary],
-                event = event,
-                strings = strings,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f, fill = false),
+            Text(
+                text = "$pct%",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 8.dp),
+            )
+            Text(
+                text = CentsFormatter.format(bucket.amountCents),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
             )
         }
+    }
+}
 
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(18.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f),
+@Composable
+private fun CategoryBreakdownSection(
+    totalCents: Int,
+    categoryLabel: String,
+    noDataText: String,
+) {
+    if (totalCents == 0) {
+        Text(
+            text = noDataText,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        return
+    }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f),
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
             ) {
+                Text(text = categoryLabel, style = MaterialTheme.typography.bodyMedium)
                 Text(
-                    text = strings[CashierStringKey.TransactionsTimeline],
-                    style = MaterialTheme.typography.titleMedium,
+                    text = "100%  ${CentsFormatter.format(totalCents)}",
+                    style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
-                if (event.timeline.isEmpty()) {
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .background(
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.72f),
+                        shape = RoundedCornerShape(3.dp),
+                    ),
+            )
+        }
+    }
+}
+
+@Composable
+private fun OpenBillRow(
+    event: TransactionRecord,
+    selected: Boolean,
+    strings: CashierStrings,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.42f)
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f)
+        },
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.22f),
+        ),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = event.locationLabel(strings),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = formatUiDateTime(event.occurredAtEpochMillis),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                text = CentsFormatter.format(event.amountCents),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(start = 12.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun RecentSaleRow(
+    event: TransactionRecord,
+    selected: Boolean,
+    strings: CashierStrings,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.42f)
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f)
+        },
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.22f),
+        ),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Text(
-                        text = strings[CashierStringKey.TransactionsTimelineEmpty],
+                        text = event.receiptNumber
+                            ?: event.saleId?.takeLast(6)?.uppercase(Locale.ROOT)
+                            ?: "—",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = "·",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                } else {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 180.dp)
-                            .verticalScroll(timelineScroll),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        event.timeline.forEach { entry ->
-                            TimelineRow(entry = entry, strings = strings)
-                        }
-                    }
+                    Text(
+                        text = event.locationLabel(strings),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = formatUiDateTime(event.occurredAtEpochMillis),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = "·",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = event.paymentSummary(strings),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Text(
+                text = CentsFormatter.format(event.amountCents),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(start = 12.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun PaperReceiptPane(
+    event: TransactionRecord?,
+    strings: CashierStrings,
+    modifier: Modifier = Modifier,
+) {
+    var activeDialog by remember { mutableStateOf<SalesActionDialogType?>(null) }
+
+    PosPane(
+        title = strings[CashierStringKey.TransactionsReceiptPreview],
+        supportingText = event?.detailSupportingText(strings)
+            ?: strings[CashierStringKey.SalesDashboardSelectSaleHint],
+        modifier = modifier,
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+        ) {
+            if (event == null) {
+                Text(
+                    text = strings[CashierStringKey.SalesDashboardSelectSaleHint],
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                PaperReceiptCard(
+                    event = event,
+                    strings = strings,
+                    modifier = Modifier.fillMaxSize(),
+                )
             }
         }
 
@@ -754,152 +894,127 @@ private fun TransactionsDetailPane(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             OutlinedButton(
-                onClick = {},
-                enabled = false,
+                onClick = { activeDialog = SalesActionDialogType.REPRINT },
+                enabled = event != null,
                 modifier = Modifier.weight(1f),
             ) {
                 Text(strings[CashierStringKey.TransactionsActionReprint])
             }
             OutlinedButton(
-                onClick = {},
-                enabled = false,
+                onClick = { activeDialog = SalesActionDialogType.REFUND },
+                enabled = event?.businessStatus == TransactionBusinessStatus.PAID,
                 modifier = Modifier.weight(1f),
             ) {
                 Text(strings[CashierStringKey.TransactionsActionRefund])
             }
             OutlinedButton(
-                onClick = {},
-                enabled = false,
+                onClick = { activeDialog = SalesActionDialogType.CORRECT },
+                enabled = event?.businessStatus == TransactionBusinessStatus.PAID,
                 modifier = Modifier.weight(1f),
             ) {
                 Text(strings[CashierStringKey.TransactionsActionCorrect])
             }
         }
     }
-}
 
-@Composable
-private fun ReceiptPreviewCard(
-    title: String,
-    document: ReceiptDocument,
-    strings: CashierStrings,
-    modifier: Modifier = Modifier,
-) {
-    val summaryScroll = rememberScrollState()
-    Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f),
-    ) {
-        Column(
-            modifier = Modifier
-                .padding(12.dp)
-                .verticalScroll(summaryScroll),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-            )
-            document.headerText?.takeIf { it.isNotBlank() }?.let { headerText ->
-                Text(
-                    text = headerText,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            document.lines.forEach { line ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Text(
-                        text = buildString {
-                            line.quantity?.let {
-                                append(it)
-                                append(' ')
-                            }
-                            append(line.label)
-                        },
-                        modifier = Modifier.weight(1f),
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Text(
-                        text = line.value
-                            ?: line.totalPriceCents?.let(CentsFormatter::format)
-                            ?: line.unitPriceCents?.let(CentsFormatter::format)
-                            ?: "",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                }
-                line.note?.takeIf { it.isNotBlank() }?.let { note ->
-                    Text(
-                        text = note,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            document.totals?.let { totals ->
-                Spacer(modifier = Modifier.height(4.dp))
-                KeyValueRow(strings[CashierStringKey.TransactionsSubtotal], CentsFormatter.format(totals.subtotalCents))
-                if (totals.discountCents > 0) {
-                    KeyValueRow(strings[CashierStringKey.TransactionsDiscount], CentsFormatter.format(totals.discountCents))
-                }
-                if (totals.taxCents > 0) {
-                    KeyValueRow(strings[CashierStringKey.TransactionsTax], CentsFormatter.format(totals.taxCents))
-                }
-                KeyValueRow(strings[CashierStringKey.TransactionsTotal], CentsFormatter.format(totals.totalCents))
-            }
-            if (document.payments.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(4.dp))
-                document.payments.forEach { payment ->
-                    KeyValueRow(
-                        label = payment.displayLabel ?: payment.method.name.toPaymentLabel(strings),
-                        value = CentsFormatter.format(payment.amountCents),
-                    )
-                }
-            }
-        }
+    activeDialog?.let { type ->
+        AirosActionDialog(
+            type = type,
+            strings = strings,
+            onDismiss = { activeDialog = null },
+        )
     }
 }
 
 @Composable
-private fun CurrentBillSummaryCard(
-    title: String,
+private fun PaperReceiptCard(
     event: TransactionRecord,
     strings: CashierStrings,
     modifier: Modifier = Modifier,
 ) {
-    val sale = event.openSale
+    val receiptPaper = Color(0xFFFAF9F5)
+    val receiptInk = Color(0xFF1C1410)
+    val scrollState = rememberScrollState()
+
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f),
+        shape = RoundedCornerShape(6.dp),
+        color = receiptPaper,
+        shadowElevation = 4.dp,
     ) {
         Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier
+                .padding(horizontal = 18.dp, vertical = 20.dp)
+                .verticalScroll(scrollState),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
         ) {
+            // Header block
             Text(
-                text = title,
+                text = event.receiptDocument?.title?.takeIf { it.isNotBlank() }
+                    ?: strings[CashierStringKey.TransactionsReceiptPreview],
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = FontWeight.Bold,
+                color = receiptInk,
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center,
             )
-            if (sale == null) {
+            val headerTimestamp = event.receiptDocument?.printedAtEpochMillis
+                ?: event.occurredAtEpochMillis
+            Text(
+                text = formatUiDateTime(headerTimestamp),
+                style = MaterialTheme.typography.bodySmall,
+                color = receiptInk.copy(alpha = 0.65f),
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center,
+            )
+            event.receiptDocument?.receiptNumber?.let { num ->
                 Text(
-                    text = strings[CashierStringKey.TransactionsUnavailable],
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = num,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = receiptInk.copy(alpha = 0.65f),
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center,
                 )
-            } else if (sale.lines.isEmpty()) {
+            }
+            val location = event.receiptDocument?.tableLabel ?: event.tableLabel
+            if (!location.isNullOrBlank()) {
                 Text(
-                    text = strings[CashierStringKey.TransactionsNoLineItems],
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = location,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = receiptInk.copy(alpha = 0.65f),
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center,
                 )
-            } else {
-                sale.lines.forEach { line ->
+            }
+            event.receiptDocument?.cashierName?.takeIf { it.isNotBlank() }?.let { cashier ->
+                Text(
+                    text = cashier,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = receiptInk.copy(alpha = 0.65f),
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center,
+                )
+            }
+            event.receiptDocument?.headerText?.takeIf { it.isNotBlank() }?.let { header ->
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = header,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = receiptInk.copy(alpha = 0.8f),
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            ReceiptDivider(inkColor = receiptInk)
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // Line items
+            if (event.receiptDocument != null) {
+                event.receiptDocument.lines.forEach { line ->
+                    ReceiptLineRow(line = line, inkColor = receiptInk)
+                }
+            } else if (event.openSale != null) {
+                event.openSale.lines.forEach { line ->
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -908,61 +1023,75 @@ private fun CurrentBillSummaryCard(
                             text = "${line.quantity}x ${line.name}",
                             modifier = Modifier.weight(1f),
                             style = MaterialTheme.typography.bodyMedium,
+                            color = receiptInk,
                         )
                         Text(
                             text = CentsFormatter.format(line.totalCents()),
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
-                        )
-                    }
-                    line.discountSummary(strings)?.let { discount ->
-                        Text(
-                            text = discount,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = receiptInk,
                         )
                     }
                 }
-                Spacer(modifier = Modifier.height(4.dp))
-                KeyValueRow(strings[CashierStringKey.TransactionsTotal], CentsFormatter.format(event.amountCents))
-            }
-        }
-    }
-}
-
-@Composable
-private fun TimelineRow(
-    entry: TransactionTimelineEntry,
-    strings: CashierStrings,
-) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            MaterialTheme.colorScheme.outline.copy(alpha = 0.18f),
-        ),
-    ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            Text(
-                text = strings[entry.titleKey],
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                text = formatUiDateTime(entry.occurredAtEpochMillis),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            entry.supportingText?.takeIf { it.isNotBlank() }?.let { supportingText ->
+            } else {
                 Text(
-                    text = supportingText,
+                    text = strings[CashierStringKey.TransactionsUnavailable],
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = receiptInk.copy(alpha = 0.55f),
+                )
+            }
+
+            // Totals
+            Spacer(modifier = Modifier.height(4.dp))
+            ReceiptDivider(inkColor = receiptInk)
+            Spacer(modifier = Modifier.height(4.dp))
+
+            val totals = event.receiptDocument?.totals
+            if (totals != null) {
+                if (totals.discountCents > 0) {
+                    ReceiptKvRow(strings[CashierStringKey.TransactionsDiscount], CentsFormatter.format(totals.discountCents), receiptInk)
+                }
+                if (totals.taxCents > 0) {
+                    ReceiptKvRow(strings[CashierStringKey.TransactionsTax], CentsFormatter.format(totals.taxCents), receiptInk)
+                }
+                ReceiptKvRow(strings[CashierStringKey.TransactionsTotal], CentsFormatter.format(totals.totalCents), receiptInk, bold = true)
+            } else {
+                ReceiptKvRow(strings[CashierStringKey.TransactionsTotal], CentsFormatter.format(event.amountCents), receiptInk, bold = true)
+            }
+
+            // Payments
+            val docPayments = event.receiptDocument?.payments.orEmpty()
+            if (docPayments.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                docPayments.forEach { payment ->
+                    ReceiptKvRow(
+                        label = payment.displayLabel ?: payment.method.name.toPaymentLabel(strings),
+                        value = CentsFormatter.format(payment.amountCents),
+                        color = receiptInk,
+                    )
+                }
+            } else if (event.paymentMethods.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                event.paymentMethods.forEach { pm ->
+                    ReceiptKvRow(
+                        label = pm.methodCode.toPaymentLabel(strings),
+                        value = CentsFormatter.format(pm.amountCents),
+                        color = receiptInk,
+                    )
+                }
+            }
+
+            // Footer
+            event.receiptDocument?.footerText?.takeIf { it.isNotBlank() }?.let { footer ->
+                Spacer(modifier = Modifier.height(8.dp))
+                ReceiptDivider(inkColor = receiptInk)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = footer,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = receiptInk.copy(alpha = 0.65f),
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center,
                 )
             }
         }
@@ -970,68 +1099,154 @@ private fun TimelineRow(
 }
 
 @Composable
-private fun ToggleButton(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    OutlinedButton(
-        onClick = onClick,
-        modifier = modifier,
+private fun ReceiptLineRow(line: ReceiptLine, inkColor: Color) {
+    when (line.alignment) {
+        ReceiptAlignment.CENTER -> {
+            Text(
+                text = buildString {
+                    line.quantity?.let { append(it); append(' ') }
+                    append(line.label)
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = inkColor,
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center,
+            )
+        }
+        ReceiptAlignment.RIGHT -> {
+            Text(
+                text = line.label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = inkColor,
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.End,
+            )
+        }
+        ReceiptAlignment.LEFT -> {
+            Column {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        text = buildString {
+                            line.quantity?.let { append(it); append(' ') }
+                            append(line.label)
+                        },
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = inkColor,
+                    )
+                    val priceText = line.value
+                        ?: line.totalPriceCents?.let(CentsFormatter::format)
+                        ?: line.unitPriceCents?.let(CentsFormatter::format)
+                    if (priceText != null) {
+                        Text(
+                            text = priceText,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = inkColor,
+                        )
+                    }
+                }
+                line.note?.takeIf { it.isNotBlank() }?.let { note ->
+                    Text(
+                        text = note,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = inkColor.copy(alpha = 0.65f),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReceiptKvRow(label: String, value: String, color: Color, bold: Boolean = false) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Text(
             text = label,
-            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            style = MaterialTheme.typography.bodyMedium,
+            color = color.copy(alpha = if (bold) 1f else 0.85f),
+            fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (bold) FontWeight.Bold else FontWeight.SemiBold,
+            color = color,
         )
     }
 }
 
 @Composable
-private fun FilterToggleChip(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    Surface(
+private fun ReceiptDivider(inkColor: Color) {
+    Box(
         modifier = Modifier
-            .clickable(onClick = onClick)
-            .border(
-                width = 1.dp,
-                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.24f),
-                shape = RoundedCornerShape(999.dp),
-            ),
-        shape = RoundedCornerShape(999.dp),
-        color = if (selected) {
-            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.42f)
-        } else {
-            Color.Transparent
-        },
-    ) {
-        Text(
-            text = label,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            style = MaterialTheme.typography.labelLarge,
-            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
+            .fillMaxWidth()
+            .height(1.dp)
+            .background(inkColor.copy(alpha = 0.18f)),
+    )
 }
 
-private fun filterTransactions(state: TransactionsUiState): List<TransactionRecord> {
-    val source = when (state.scope) {
-        TransactionsScope.CURRENT -> state.currentEvents
-        TransactionsScope.PAST -> state.pastEvents
+@Composable
+private fun AirosActionDialog(
+    type: SalesActionDialogType,
+    strings: CashierStrings,
+    onDismiss: () -> Unit,
+) {
+    val titleKey = when (type) {
+        SalesActionDialogType.REPRINT -> CashierStringKey.SalesDashboardReprintDialogTitle
+        SalesActionDialogType.REFUND -> CashierStringKey.SalesDashboardRefundDialogTitle
+        SalesActionDialogType.CORRECT -> CashierStringKey.SalesDashboardCorrectDialogTitle
     }
-    val now = System.currentTimeMillis()
-    val query = state.searchQuery.trim().lowercase(Locale.ROOT)
+    val bodyKey = when (type) {
+        SalesActionDialogType.REPRINT -> CashierStringKey.SalesDashboardReprintDialogBody
+        SalesActionDialogType.REFUND -> CashierStringKey.SalesDashboardRefundDialogBody
+        SalesActionDialogType.CORRECT -> CashierStringKey.SalesDashboardCorrectDialogBody
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(strings[titleKey]) },
+        text = { Text(strings[bodyKey]) },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(strings[CashierStringKey.SalesDashboardDialogOk])
+            }
+        },
+    )
+}
 
-    return source.filter { event ->
-        event.matchesDateRange(state.dateRange, now) &&
-            event.matchesStatus(state.statusFilter) &&
-            event.matchesPayment(state.paymentFilter) &&
-            event.matchesSearch(query)
+private fun computeHourlyBuckets(events: List<TransactionRecord>): List<HourlyBucket> {
+    val byHour = Array(24) { 0 }
+    events.forEach { event ->
+        val cal = Calendar.getInstance().apply { timeInMillis = event.occurredAtEpochMillis }
+        byHour[cal.get(Calendar.HOUR_OF_DAY)] += event.amountCents
     }
+    return (0 until 24).map { h -> HourlyBucket(hour = h, amountCents = byHour[h]) }
+}
+
+private fun computePaymentBuckets(events: List<TransactionRecord>, strings: CashierStrings): List<PaymentMethodBucket> {
+    val totalCents = events.sumOf { it.amountCents }
+    val byMethod = mutableMapOf<String, Int>()
+    events.forEach { event ->
+        event.paymentMethods.forEach { pm ->
+            byMethod[pm.methodCode] = (byMethod[pm.methodCode] ?: 0) + pm.amountCents
+        }
+    }
+    return byMethod.entries
+        .sortedByDescending { it.value }
+        .map { (code, amount) ->
+            PaymentMethodBucket(
+                methodCode = code,
+                label = code.toPaymentLabel(strings),
+                amountCents = amount,
+                totalCents = totalCents,
+            )
+        }
 }
 
 private fun TransactionRecord.matchesDateRange(
@@ -1090,16 +1305,6 @@ private fun TransactionRecord.matchesSearch(query: String): Boolean {
         append(businessStatus.name)
     }.lowercase(Locale.ROOT)
     return haystack.contains(query)
-}
-
-private fun TransactionRecord.listHeadline(strings: CashierStrings): String {
-    return when (source) {
-        TransactionsScope.CURRENT -> saleId?.takeLast(6)?.uppercase(Locale.ROOT)?.let {
-            "${strings[CashierStringKey.TransactionsStatusOpen]} $it"
-        }
-            ?: strings[CashierStringKey.TransactionsStatusOpen]
-        TransactionsScope.PAST -> receiptNumber ?: saleId ?: strings[CashierStringKey.TransactionsStatusPaid]
-    }
 }
 
 private fun TransactionRecord.locationLabel(strings: CashierStrings): String {
@@ -1180,23 +1385,6 @@ private fun TransactionsPaymentFilter.toStringKey(): CashierStringKey {
         TransactionsPaymentFilter.CARD -> CashierStringKey.TransactionsPaymentCard
         TransactionsPaymentFilter.VOUCHER -> CashierStringKey.TransactionsPaymentVoucher
         TransactionsPaymentFilter.MIXED -> CashierStringKey.TransactionsPaymentMixed
-    }
-}
-
-private fun statusOptionsForScope(scope: TransactionsScope): List<TransactionsStatusFilter> {
-    return when (scope) {
-        TransactionsScope.CURRENT -> listOf(
-            TransactionsStatusFilter.ALL,
-            TransactionsStatusFilter.OPEN,
-        )
-        TransactionsScope.PAST -> listOf(
-            TransactionsStatusFilter.ALL,
-            TransactionsStatusFilter.PAID,
-            TransactionsStatusFilter.SYNCED,
-            TransactionsStatusFilter.PENDING,
-            TransactionsStatusFilter.FAILED,
-            TransactionsStatusFilter.BLOCKED,
-        )
     }
 }
 

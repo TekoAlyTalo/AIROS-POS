@@ -2387,6 +2387,8 @@ private fun RailButton(
                 text = label,
                 style = MaterialTheme.typography.labelLarge,
                 color = if (selected) AppShellTextPrimary else AppShellTextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }
