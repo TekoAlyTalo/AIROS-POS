@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">AIROS POS</string>
+    <string name="app_name">AIROS Kassa</string>
     <string name="webrtc_smoke_test_title">AIROS POS WebRTC Smoke Test</string>
     <string name="webrtc_smoke_test_heading">WebRTC Camera Smoke Test</string>
     <string name="webrtc_smoke_test_subheading">Isolated viewer-only check against the existing backend signaling flow.</string>
