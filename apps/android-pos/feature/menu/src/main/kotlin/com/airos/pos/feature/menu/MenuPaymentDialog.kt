@@ -97,10 +97,10 @@ private enum class VoucherProviderUi(
 enum class MenuPaymentMode(
     val label: String,
 ) {
-    CASH("Cash"),
-    CARD("Card"),
-    VOUCHER("Voucher"),
-    SPLIT_PAYMENT("Split payment"),
+    CASH("Käteinen"),
+    CARD("Kortti"),
+    VOUCHER("Etuseteli"),
+    SPLIT_PAYMENT("Jaa maksu"),
 }
 
 data class MenuPaymentDialogResult(
@@ -118,7 +118,7 @@ data class MenuPaymentDialogResult(
 @Composable
 fun MenuPaymentDialog(
     subtotalCents: Int,
-    paymentContextLabel: String = "Bar",
+    paymentContextLabel: String = "Baari",
     onDismiss: () -> Unit,
     onConfirm: (MenuPaymentDialogResult) -> Unit,
 ) {
@@ -216,7 +216,7 @@ fun MenuPaymentDialog(
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     Text(
-                        text = "Payment options",
+                        text = "Maksuvaihtoehdot",
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
                         color = PaymentDialogTextPrimary,
@@ -239,16 +239,16 @@ fun MenuPaymentDialog(
 
                     PaymentHintCard(
                         title = when (mode) {
-                            MenuPaymentMode.CASH -> "Cash flow"
-                            MenuPaymentMode.CARD -> "Card flow"
-                            MenuPaymentMode.VOUCHER -> "${voucherProvider.label} flow"
-                            MenuPaymentMode.SPLIT_PAYMENT -> "Split payment flow"
+                            MenuPaymentMode.CASH -> "Käteismaksu"
+                            MenuPaymentMode.CARD -> "Korttimaksu"
+                            MenuPaymentMode.VOUCHER -> "${voucherProvider.label}-maksu"
+                            MenuPaymentMode.SPLIT_PAYMENT -> "Jaettu maksu"
                         },
                         message = when (mode) {
-                            MenuPaymentMode.CASH -> "Enter received cash on the right. Change is calculated automatically."
-                            MenuPaymentMode.CARD -> "Card uses the discounted total automatically. No drawer open unless cash is included."
-                            MenuPaymentMode.VOUCHER -> "Use the ${voucherProvider.label} button row above, enter the amount on the right, and keep the code field ready for the later scanner hookup."
-                            MenuPaymentMode.SPLIT_PAYMENT -> "Build the payment on the right with cash, card, and voucher parts until the total is covered."
+                            MenuPaymentMode.CASH -> "Syötä vastaanotettu käteinen oikealla. Vaihtoraha lasketaan automaattisesti."
+                            MenuPaymentMode.CARD -> "Korttimaksu käyttää alennettua loppusummaa automaattisesti. Kassalaatikkoa ei avata, ellei mukana ole käteistä."
+                            MenuPaymentMode.VOUCHER -> "Valitse ${voucherProvider.label} yllä olevista painikkeista, syötä summa oikealla ja jätä koodikenttä valmiiksi myöhempää skannerikytkentää varten."
+                            MenuPaymentMode.SPLIT_PAYMENT -> "Kokoa maksu oikealla käteisestä, kortista ja etusetelistä, kunnes koko summa on katettu."
                         },
                     )
 
@@ -267,7 +267,7 @@ fun MenuPaymentDialog(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         PaymentUtilityButton(
-                            label = "Discount %",
+                            label = "Alennus %",
                             selected = discountMode == BillDiscountMode.PERCENT,
                             modifier = Modifier.weight(1f),
                             icon = { DiscountPercentIcon(selected = discountMode == BillDiscountMode.PERCENT) },
@@ -282,7 +282,7 @@ fun MenuPaymentDialog(
                             },
                         )
                         PaymentUtilityButton(
-                            label = "Discount €",
+                            label = "Alennus €",
                             selected = discountMode == BillDiscountMode.AMOUNT,
                             modifier = Modifier.weight(1f),
                             icon = { DiscountCoinsIcon(selected = discountMode == BillDiscountMode.AMOUNT) },
@@ -297,7 +297,7 @@ fun MenuPaymentDialog(
                             },
                         )
                         PaymentUtilityButton(
-                            label = "Voucher",
+                            label = "Etuseteli",
                             selected = mode == MenuPaymentMode.VOUCHER,
                             modifier = Modifier.weight(1f),
                             icon = { VoucherTicketIcon(selected = mode == MenuPaymentMode.VOUCHER) },
@@ -307,7 +307,7 @@ fun MenuPaymentDialog(
                             },
                         )
                         PaymentUtilityButton(
-                            label = "Split payment",
+                            label = "Jaa maksu",
                             selected = mode == MenuPaymentMode.SPLIT_PAYMENT,
                             modifier = Modifier.weight(1f),
                             icon = { SplitPaymentIcon(selected = mode == MenuPaymentMode.SPLIT_PAYMENT) },
@@ -380,7 +380,7 @@ fun MenuPaymentDialog(
                                 verticalArrangement = Arrangement.spacedBy(12.dp),
                             ) {
                                 Text(
-                                    text = "Payment input",
+                                    text = "Maksun syöttö",
                                     style = MaterialTheme.typography.titleLarge,
                                     fontWeight = FontWeight.SemiBold,
                                     color = PaymentDialogTextPrimary,
@@ -389,9 +389,9 @@ fun MenuPaymentDialog(
                                 when (mode) {
                                     MenuPaymentMode.CASH -> {
                                         PaymentInputSelector(
-                                            label = "Cash received",
+                                            label = "Saatu käteinen",
                                             value = cashInput,
-                                            hint = "Use quick buttons or keypad",
+                                            hint = "Käytä pikapainikkeita tai näppäimistöä",
                                             selected = activeTarget == PaymentInputTarget.CASH_RECEIVED,
                                             onClick = { activeInputTarget = PaymentInputTarget.CASH_RECEIVED.name },
                                         )
@@ -406,24 +406,24 @@ fun MenuPaymentDialog(
 
                                     MenuPaymentMode.CARD -> {
                                         PaymentHintCard(
-                                            title = "Card payment",
-                                            message = "Card uses the discounted total automatically. Finish the payment when the terminal side is done.",
+                                            title = "Korttimaksu",
+                                            message = "Korttimaksu käyttää alennettua loppusummaa automaattisesti. Viimeistele maksu, kun maksupääte on valmis.",
                                         )
                                     }
 
                                     MenuPaymentMode.VOUCHER -> {
                                         PaymentInputSelector(
-                                            label = "${voucherProvider.label} amount",
+                                            label = "${voucherProvider.label}-summa",
                                             value = voucherInput,
-                                            hint = "${voucherProvider.label} value is required",
+                                            hint = "${voucherProvider.label}-summa vaaditaan",
                                             selected = activeTarget == PaymentInputTarget.VOUCHER_AMOUNT,
                                             onClick = { activeInputTarget = PaymentInputTarget.VOUCHER_AMOUNT.name },
                                         )
                                         OutlinedTextField(
                                             value = voucherBarcodeInput,
                                             onValueChange = { voucherBarcodeInput = it },
-                                            label = { Text("${voucherProvider.label} barcode / code") },
-                                            supportingText = { Text("Manual entry now. Scanner hookup can fill this later.") },
+                                            label = { Text("${voucherProvider.label}-viivakoodi / koodi") },
+                                            supportingText = { Text("Manuaalinen syöttö nyt. Skanneri voi täyttää tämän myöhemmin.") },
                                             modifier = Modifier.fillMaxWidth(),
                                             singleLine = true,
                                         )
@@ -431,9 +431,9 @@ fun MenuPaymentDialog(
 
                                     MenuPaymentMode.SPLIT_PAYMENT -> {
                                         PaymentInputSelector(
-                                            label = "Cash part",
+                                            label = "Käteisosuus",
                                             value = splitCashInput,
-                                            hint = "Opens drawer if cash is used",
+                                            hint = "Avaa laatikon, jos käteistä käytetään",
                                             selected = activeTarget == PaymentInputTarget.SPLIT_CASH,
                                             onClick = { activeInputTarget = PaymentInputTarget.SPLIT_CASH.name },
                                         )
@@ -445,24 +445,24 @@ fun MenuPaymentDialog(
                                             },
                                         )
                                         PaymentInputSelector(
-                                            label = "Card part",
+                                            label = "Korttiosuus",
                                             value = splitCardInput,
-                                            hint = "Optional",
+                                            hint = "Valinnainen",
                                             selected = activeTarget == PaymentInputTarget.SPLIT_CARD,
                                             onClick = { activeInputTarget = PaymentInputTarget.SPLIT_CARD.name },
                                         )
                                         PaymentInputSelector(
-                                            label = "Voucher part",
+                                            label = "Etuseteliosuus",
                                             value = splitVoucherInput,
-                                            hint = "Optional",
+                                            hint = "Valinnainen",
                                             selected = activeTarget == PaymentInputTarget.SPLIT_VOUCHER,
                                             onClick = { activeInputTarget = PaymentInputTarget.SPLIT_VOUCHER.name },
                                         )
                                         OutlinedTextField(
                                             value = voucherBarcodeInput,
                                             onValueChange = { voucherBarcodeInput = it },
-                                            label = { Text("Voucher barcode / code") },
-                                            supportingText = { Text("Used when split includes a voucher.") },
+                                            label = { Text("Etusetelin viivakoodi / koodi") },
+                                            supportingText = { Text("Käytetään, kun jaetussa maksussa on etuseteli.") },
                                             modifier = Modifier.fillMaxWidth(),
                                             singleLine = true,
                                         )
@@ -475,7 +475,7 @@ fun MenuPaymentDialog(
                                 verticalArrangement = Arrangement.spacedBy(12.dp),
                             ) {
                                 Text(
-                                    text = "Keypad",
+                                    text = "Näppäimistö",
                                     style = MaterialTheme.typography.titleLarge,
                                     fontWeight = FontWeight.SemiBold,
                                     color = PaymentDialogTextPrimary,
@@ -534,17 +534,17 @@ fun MenuPaymentDialog(
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         PaymentDialogButton(
-                            label = "Close",
+                            label = "Sulje",
                             onClick = onDismiss,
                             primary = false,
                             modifier = Modifier.weight(0.42f),
                         )
                         PaymentDialogButton(
                             label = when (mode) {
-                                MenuPaymentMode.CASH -> "Finish cash payment"
-                                MenuPaymentMode.CARD -> "Finish card payment"
-                                MenuPaymentMode.VOUCHER -> "Finish ${voucherProvider.label} payment"
-                                MenuPaymentMode.SPLIT_PAYMENT -> "Finish split payment"
+                                MenuPaymentMode.CASH -> "Viimeistele käteismaksu"
+                                MenuPaymentMode.CARD -> "Viimeistele korttimaksu"
+                                MenuPaymentMode.VOUCHER -> "Viimeistele ${voucherProvider.label}-maksu"
+                                MenuPaymentMode.SPLIT_PAYMENT -> "Viimeistele jaettu maksu"
                             },
                             onClick = { onConfirm(result) },
                             modifier = Modifier.weight(0.58f),
@@ -585,47 +585,47 @@ private fun PaymentSummaryCard(
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            PaymentSummaryRow(label = "Bill", value = paymentContextLabel, emphasized = true)
-            PaymentSummaryRow(label = "Subtotal", value = CentsFormatter.format(subtotalCents))
+            PaymentSummaryRow(label = "Lasku", value = paymentContextLabel, emphasized = true)
+            PaymentSummaryRow(label = "Välisumma", value = CentsFormatter.format(subtotalCents))
             if (billDiscountAmountCents > 0) {
                 val discountLabel = when {
                     discountMode == BillDiscountMode.PERCENT && discountInput.isNotBlank() ->
-                        "Discount (${discountInput.trimStart('0').ifBlank { "0" }}%)"
-                    else -> "Discount"
+                        "Alennus (${discountInput.trimStart('0').ifBlank { "0" }}%)"
+                    else -> "Alennus"
                 }
                 PaymentSummaryRow(
                     label = discountLabel,
                     value = "-${CentsFormatter.format(billDiscountAmountCents)}",
                 )
             }
-            PaymentSummaryRow(label = "To pay", value = CentsFormatter.format(finalTotalCents), emphasized = true)
+            PaymentSummaryRow(label = "Maksettavaa", value = CentsFormatter.format(finalTotalCents), emphasized = true)
             when (mode) {
                 MenuPaymentMode.CASH -> {
                     val changeCents = ((cashTenderedCents ?: 0) - finalTotalCents).coerceAtLeast(0)
                     val remainingCents = (finalTotalCents - (cashTenderedCents ?: 0)).coerceAtLeast(0)
-                    PaymentSummaryRow(label = "Cash received", value = cashTenderedCents?.let(CentsFormatter::format) ?: "—")
-                    PaymentSummaryRow(label = "Remaining", value = CentsFormatter.format(remainingCents))
-                    PaymentSummaryRow(label = "Change", value = CentsFormatter.format(changeCents), emphasized = true)
+                    PaymentSummaryRow(label = "Saatu käteinen", value = cashTenderedCents?.let(CentsFormatter::format) ?: "—")
+                    PaymentSummaryRow(label = "Puuttuu", value = CentsFormatter.format(remainingCents))
+                    PaymentSummaryRow(label = "Vaihtoraha", value = CentsFormatter.format(changeCents), emphasized = true)
                 }
 
                 MenuPaymentMode.CARD -> {
-                    PaymentSummaryRow(label = "Card amount", value = CentsFormatter.format(finalTotalCents), emphasized = true)
+                    PaymentSummaryRow(label = "Korttimaksu", value = CentsFormatter.format(finalTotalCents), emphasized = true)
                 }
 
                 MenuPaymentMode.VOUCHER -> {
                     val voucherCents = voucherAmountCents ?: 0
                     val remainingCents = (finalTotalCents - voucherCents).coerceAtLeast(0)
-                    PaymentSummaryRow(label = "Voucher amount", value = voucherAmountCents?.let(CentsFormatter::format) ?: "—")
-                    PaymentSummaryRow(label = "Remaining", value = CentsFormatter.format(remainingCents), emphasized = remainingCents == 0)
+                    PaymentSummaryRow(label = "Etuseteli", value = voucherAmountCents?.let(CentsFormatter::format) ?: "—")
+                    PaymentSummaryRow(label = "Puuttuu", value = CentsFormatter.format(remainingCents), emphasized = remainingCents == 0)
                 }
 
                 MenuPaymentMode.SPLIT_PAYMENT -> {
-                    PaymentSummaryRow(label = "Cash", value = CentsFormatter.format(splitCashCents))
-                    PaymentSummaryRow(label = "Card", value = CentsFormatter.format(splitCardCents))
-                    PaymentSummaryRow(label = "Voucher", value = CentsFormatter.format(splitVoucherCents))
-                    PaymentSummaryRow(label = "Paid together", value = CentsFormatter.format(splitPaidCents))
+                    PaymentSummaryRow(label = "Käteinen", value = CentsFormatter.format(splitCashCents))
+                    PaymentSummaryRow(label = "Kortti", value = CentsFormatter.format(splitCardCents))
+                    PaymentSummaryRow(label = "Etuseteli", value = CentsFormatter.format(splitVoucherCents))
+                    PaymentSummaryRow(label = "Maksettu yhteensä", value = CentsFormatter.format(splitPaidCents))
                     PaymentSummaryRow(
-                        label = if (splitPaidCents >= finalTotalCents) "Change / overpay" else "Remaining",
+                        label = if (splitPaidCents >= finalTotalCents) "Vaihtoraha / ylimaksu" else "Puuttuu",
                         value = CentsFormatter.format(abs(finalTotalCents - splitPaidCents)),
                         emphasized = true,
                     )
@@ -650,8 +650,8 @@ private fun DiscountSelectorRow(
     ) {
         PaymentDialogButton(
             label = when {
-                discountMode == BillDiscountMode.PERCENT && discountInput.isNotBlank() -> "Discount % (${discountInput.trimStart('0').ifBlank { "0" }}%)"
-                else -> "Discount %"
+                discountMode == BillDiscountMode.PERCENT && discountInput.isNotBlank() -> "Alennus % (${discountInput.trimStart('0').ifBlank { "0" }}%)"
+                else -> "Alennus %"
             },
             onClick = onSelectPercent,
             primary = discountMode == BillDiscountMode.PERCENT,
@@ -659,15 +659,15 @@ private fun DiscountSelectorRow(
         )
         PaymentDialogButton(
             label = when {
-                discountMode == BillDiscountMode.AMOUNT && discountInput.isNotBlank() -> "Discount € (${discountInput.replace('.', ',')})"
-                else -> "Discount €"
+                discountMode == BillDiscountMode.AMOUNT && discountInput.isNotBlank() -> "Alennus € (${discountInput.replace('.', ',')})"
+                else -> "Alennus €"
             },
             onClick = onSelectAmount,
             primary = discountMode == BillDiscountMode.AMOUNT,
             modifier = Modifier.weight(1f),
         )
         PaymentDialogButton(
-            label = if (billDiscountAmountCents > 0) "Clear" else "No disc.",
+            label = if (billDiscountAmountCents > 0) "Tyhjennä" else "Ei alennusta",
             onClick = onClear,
             primary = false,
             modifier = Modifier.weight(0.72f),
@@ -712,7 +712,7 @@ private fun QuickCashRow(
                 modifier = Modifier.weight(1f),
             )
             PaymentDialogButton(
-                label = "Exact",
+                label = "Tasan",
                 onClick = { onSelectAmount(exactAmountCents) },
                 primary = false,
                 modifier = Modifier.weight(1f),
@@ -791,13 +791,13 @@ private fun ReceiptPrintOptionCard(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
-                    text = "Receipt printing",
+                    text = "Kuitin tulostus",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = PaymentDialogTextPrimary,
                 )
                 Text(
-                    text = if (shouldPrintReceipt) "Receipt will be printed after payment." else "Do not print a receipt for this payment.",
+                    text = if (shouldPrintReceipt) "Kuitti tulostetaan maksun jälkeen." else "Älä tulosta kuittia tästä maksusta.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = PaymentDialogTextSecondary,
                 )
@@ -1314,13 +1314,13 @@ private enum class PaymentInputTarget(
     val supportsDecimal: Boolean,
     val formatter: (String) -> String,
 ) {
-    CASH_RECEIVED("Cash received", true, ::formatPaymentDisplayValue),
-    VOUCHER_AMOUNT("Voucher amount", true, ::formatPaymentDisplayValue),
-    SPLIT_CASH("Cash part", true, ::formatPaymentDisplayValue),
-    SPLIT_CARD("Card part", true, ::formatPaymentDisplayValue),
-    SPLIT_VOUCHER("Voucher part", true, ::formatPaymentDisplayValue),
-    DISCOUNT_PERCENT("Discount %", false, ::formatPercentDisplayValue),
-    DISCOUNT_AMOUNT("Discount €", true, ::formatPaymentDisplayValue),
+    CASH_RECEIVED("Saatu käteinen", true, ::formatPaymentDisplayValue),
+    VOUCHER_AMOUNT("Etusetelin summa", true, ::formatPaymentDisplayValue),
+    SPLIT_CASH("Käteisosuus", true, ::formatPaymentDisplayValue),
+    SPLIT_CARD("Korttiosuus", true, ::formatPaymentDisplayValue),
+    SPLIT_VOUCHER("Etuseteliosuus", true, ::formatPaymentDisplayValue),
+    DISCOUNT_PERCENT("Alennus %", false, ::formatPercentDisplayValue),
+    DISCOUNT_AMOUNT("Alennus €", true, ::formatPaymentDisplayValue),
     ;
 
     fun formatValue(value: String): String = formatter(value)

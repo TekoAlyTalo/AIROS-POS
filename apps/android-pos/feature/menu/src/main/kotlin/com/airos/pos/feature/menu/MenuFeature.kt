@@ -466,7 +466,7 @@ class MenuViewModel(
     fun submitPayment(result: MenuPaymentDialogResult) {
         val state = mutableState.value
         if (state.ticketLines.isEmpty()) {
-            mutableState.update { it.copy(paymentMessage = "Ticket is empty.") }
+            mutableState.update { it.copy(paymentMessage = "Kuitti on tyhjä.") }
             return
         }
 
@@ -501,18 +501,18 @@ class MenuViewModel(
                     val messageParts = buildList {
                         add(
                             when (printResult) {
-                                is PosResult.Success<*> -> "Receipt printed."
-                                is PosResult.Failure -> "Payment completed, but receipt print failed: ${printResult.message}"
-                                null -> "Receipt printing skipped."
+                                is PosResult.Success<*> -> "Kuitti tulostettu."
+                                is PosResult.Failure -> "Maksu valmis, mutta kuitin tulostus epäonnistui: ${printResult.message}"
+                                null -> "Kuitin tulostus ohitettu."
                             },
                         )
                         if (tableResult.changeCents > 0) {
-                            add("Change ${CentsFormatter.format(tableResult.changeCents)}.")
+                            add("Vaihtoraha ${CentsFormatter.format(tableResult.changeCents)}.")
                         }
                         if (drawerResult is PosResult.Failure) {
-                            add("Cash drawer failed: ${drawerResult.message}")
+                            add("Kassalaatikon avaus epäonnistui: ${drawerResult.message}")
                         }
-                        add("Ticket closed and bill cleared.")
+                        add("Kuitti suljettu ja lasku kuitattu.")
                     }
 
                     mutableState.update {
@@ -522,7 +522,7 @@ class MenuViewModel(
                             receiptHandoffPayload = tableResult.receiptHandoff,
                             receiptHandoffWaiting = false,
                             receiptHandoffMessage = tableResult.receiptHandoff?.let {
-                                "Electronic receipt ready. Tap phone for receipt."
+                                "Sähköinen kuitti valmis. Kosketa puhelimella."
                             },
                         )
                     }
@@ -548,7 +548,7 @@ class MenuViewModel(
             mutableState.update {
                 it.copy(
                     receiptHandoffWaiting = false,
-                    receiptHandoffMessage = "Electronic receipt link is not available for the last sale.",
+                    receiptHandoffMessage = "Sähköisen kuitin linkki ei ole saatavilla viimeiselle myynnille.",
                 )
             }
             return
@@ -557,7 +557,7 @@ class MenuViewModel(
         mutableState.update {
             it.copy(
                 receiptHandoffWaiting = true,
-                receiptHandoffMessage = "Waiting for customer NFC tap for receipt ${payload.receiptNumber}.",
+                receiptHandoffMessage = "Odotetaan asiakkaan NFC-kosketusta kuitille ${payload.receiptNumber}.",
             )
         }
         viewModelScope.launch {
@@ -570,7 +570,7 @@ class MenuViewModel(
         mutableState.update {
             it.copy(
                 receiptHandoffWaiting = false,
-                receiptHandoffMessage = "Receipt NFC handoff cancelled.",
+                receiptHandoffMessage = "Kuitin NFC-luovutus peruttu.",
             )
         }
     }
@@ -591,14 +591,14 @@ class MenuViewModel(
             mutableState.update {
                 it.copy(
                     receiptHandoffWaiting = false,
-                    receiptHandoffMessage = "Receipt NFC handoff is not available on this terminal.",
+                    receiptHandoffMessage = "Kuitin NFC-luovutus ei ole käytettävissä tällä päätteellä.",
                 )
             }
             return
         }
 
         mutableState.update {
-            it.copy(receiptHandoffMessage = "Customer tap received. Linking receipt...")
+            it.copy(receiptHandoffMessage = "Asiakkaan kosketus vastaanotettu. Liitetään kuittia...")
         }
         viewModelScope.launch {
             when (val result = repository.recordReceiptHandoff(canonicalUid, payload)) {
@@ -607,8 +607,8 @@ class MenuViewModel(
                         it.copy(
                             receiptHandoffWaiting = false,
                             receiptHandoffMessage = result.value.linkedCustomerDisplayLabel?.let { customer ->
-                                "Receipt ${payload.receiptNumber} linked to $customer."
-                            } ?: "Receipt ${payload.receiptNumber} linked to NFC tag ${result.value.canonicalUid}.",
+                                "Kuitti ${payload.receiptNumber} liitetty asiakkaaseen $customer."
+                            } ?: "Kuitti ${payload.receiptNumber} liitetty NFC-tunnisteeseen ${result.value.canonicalUid}.",
                         )
                     }
                     Log.i(
@@ -647,7 +647,7 @@ class MenuViewModel(
         viewModelScope.launch {
             val repo = tableRepository
             if (repo == null) {
-                mutableState.update { it.copy(paymentMessage = "Service spot assignment is not available on this terminal.") }
+                mutableState.update { it.copy(paymentMessage = "Paikan vaihto ei ole käytettävissä tällä päätteellä.") }
                 return@launch
             }
             when (val result = repo.assignDraftToServiceSpot(fromSpotId, toSpotId, staffId)) {
@@ -701,8 +701,8 @@ class MenuViewModel(
                         it.copy(
                             manualDrawerInProgress = false,
                             paymentMessage = when (result) {
-                                is PosResult.Success<*> -> "Cash drawer opened."
-                                is PosResult.Failure -> "Cash drawer failed: ${result.message}"
+                                is PosResult.Success<*> -> "Kassalaatikko avattu."
+                                is PosResult.Failure -> "Kassalaatikon avaus epäonnistui: ${result.message}"
                             },
                         )
                     }
@@ -712,7 +712,7 @@ class MenuViewModel(
                     mutableState.update {
                         it.copy(
                             manualDrawerInProgress = false,
-                            paymentMessage = "PIN rejected. ${pinResult.message}",
+                            paymentMessage = "PIN hylätty. ${pinResult.message}",
                         )
                     }
                 }
@@ -1062,7 +1062,7 @@ fun MenuScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 Text(
-                    text = "Products",
+                    text = "Tuotteet",
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Bold,
                     color = MenuTextPrimary,
@@ -1206,7 +1206,7 @@ fun MenuScreen(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        text = if (productDrag.overTicket) "Drop to receipt" else "Drag to receipt",
+                        text = if (productDrag.overTicket) "Pudota laskulle" else "Vedä laskulle",
                         style = MaterialTheme.typography.bodySmall,
                         color = if (productDrag.overTicket) MenuAccentTextColor else MenuTextSecondary,
                     )
@@ -1230,7 +1230,7 @@ private fun EmptyWorkspaceState() {
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                text = "No menu items available yet.",
+                text = "Tuotteita ei ole vielä saatavilla.",
                 style = MaterialTheme.typography.titleMedium,
                 color = MenuTextSecondary,
             )
@@ -1715,7 +1715,7 @@ private fun RowScope.TicketPane(
                     )
                     if (isProductDropTargetActive) {
                         Text(
-                            text = if (isProductDraggedOver) "Drop product to add it to the receipt" else "Long-press and drag a product here",
+                            text = if (isProductDraggedOver) "Pudota tuote lisätäksesi sen laskulle" else "Paina pitkään ja vedä tuote tähän",
                             style = MaterialTheme.typography.bodySmall,
                             color = if (isProductDraggedOver) MenuAccentTextColor else MenuTextSecondary,
                         )
@@ -1803,11 +1803,11 @@ private fun RowScope.TicketPane(
                         .background(MenuBorderColor),
                 )
                 openedAtEpochMillis?.let { openedAt ->
-                    MenuKeyValueRow("Opened at:", formatReceiptOpenedAt(openedAt))
+                    MenuKeyValueRow("Avattu:", formatReceiptOpenedAt(openedAt))
                 }
-                MenuKeyValueRow("Items", totalTicketItems.toString())
-                MenuKeyValueRow("Lines", ticketLines.size.toString())
-                MenuKeyValueRow("Subtotal", CentsFormatter.format(ticketSubtotalCents), emphasized = true)
+                MenuKeyValueRow("Tuotteet", totalTicketItems.toString())
+                MenuKeyValueRow("Rivit", ticketLines.size.toString())
+                MenuKeyValueRow("Välisumma", CentsFormatter.format(ticketSubtotalCents), emphasized = true)
                 if (activeTableRequiresCheckAck) {
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
@@ -1871,7 +1871,7 @@ private fun RowScope.TicketPane(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         OutlinedReceiptActionButton(
-                            label = if (receiptHandoffWaiting) "Cancel NFC receipt" else "Tap phone for receipt",
+                            label = if (receiptHandoffWaiting) "Peru kuitin NFC" else "Kosketa puhelimella",
                             onClick = if (receiptHandoffWaiting) onCancelReceiptHandoff else onStartReceiptHandoff,
                             modifier = Modifier.weight(1f),
                             enabled = !paymentInProgress,
@@ -2099,7 +2099,7 @@ private fun TicketLineRow(
             verticalArrangement = Arrangement.spacedBy(1.dp),
         ) {
             Text(
-                text = "Total",
+                text = "Yhteensä",
                 style = MaterialTheme.typography.bodySmall,
                 color = MenuTextMuted,
             )
@@ -2328,20 +2328,20 @@ private fun LineActionsDialog(
                     overflow = TextOverflow.Ellipsis,
                 )
                 ActionDialogButton(
-                    label = "Discount %",
+                    label = "Alennus %",
                     onClick = onDiscountPercent,
                 )
                 ActionDialogButton(
-                    label = "Discount €",
+                    label = "Alennus €",
                     onClick = onDiscountAmount,
                 )
                 ActionDialogButton(
-                    label = "Remove line",
+                    label = "Poista rivi",
                     onClick = onRemoveLine,
                     danger = true,
                 )
                 ActionDialogButton(
-                    label = "Cancel",
+                    label = "Peru",
                     onClick = onDismiss,
                     primary = false,
                 )
@@ -2400,11 +2400,11 @@ private fun DiscountEntryDialog(
                             overflow = TextOverflow.Ellipsis,
                         )
                         DiscountInfoRow(
-                            label = "Unit price",
+                            label = "Yksikköhinta",
                             value = CentsFormatter.format(editor.unitPriceCents),
                         )
                         DiscountInfoRow(
-                            label = "Line total",
+                            label = "Rivin summa",
                             value = CentsFormatter.format(editor.lineTotalCents),
                         )
                     }
@@ -2433,15 +2433,15 @@ private fun DiscountEntryDialog(
                             overflow = TextOverflow.Ellipsis,
                         )
                         DiscountInfoRow(
-                            label = "Original amount",
+                            label = "Alkuperäinen summa",
                             value = CentsFormatter.format(preview.originalLineAmountCents),
                         )
                         DiscountInfoRow(
-                            label = "Entered discount",
+                            label = "Syötetty alennus",
                             value = CentsFormatter.format(preview.enteredDiscountCents),
                         )
                         DiscountInfoRow(
-                            label = "Discounted total",
+                            label = "Alennettu yhteensä",
                             value = CentsFormatter.format(preview.discountedTotalCents),
                             emphasized = true,
                         )
@@ -2459,7 +2459,7 @@ private fun DiscountEntryDialog(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     ActionDialogButton(
-                        label = "Cancel",
+                        label = "Peru",
                         onClick = onDismiss,
                         primary = false,
                         modifier = Modifier.weight(1f),
@@ -2655,9 +2655,9 @@ private fun buildReceiptTitle(
 ): String {
     val resolvedLabel = activeTableLabel?.takeIf { it.isNotBlank() } ?: activeTableId
     return if (resolvedLabel.isNullOrBlank()) {
-        "Receipt"
+        "Lasku"
     } else {
-        "Receipt • $resolvedLabel"
+        "Lasku • $resolvedLabel"
     }
 }
 
@@ -2667,9 +2667,9 @@ private fun buildReceiptSubtitle(
 ): String {
     return when {
         !activeTableLabel.isNullOrBlank() && !activeTableId.isNullOrBlank() && activeTableLabel != activeTableId ->
-            "Active table: $activeTableLabel ($activeTableId)"
-        !activeTableLabel.isNullOrBlank() -> "Active table: $activeTableLabel"
-        !activeTableId.isNullOrBlank() -> "Active table: $activeTableId"
+            "Aktiivinen pöytä: $activeTableLabel ($activeTableId)"
+        !activeTableLabel.isNullOrBlank() -> "Aktiivinen pöytä: $activeTableLabel"
+        !activeTableId.isNullOrBlank() -> "Aktiivinen pöytä: $activeTableId"
         else -> ""
     }
 }
@@ -2680,9 +2680,9 @@ private fun buildEmptyReceiptMessage(
 ): String {
     val resolvedLabel = activeTableLabel?.takeIf { it.isNotBlank() } ?: activeTableId
     return if (resolvedLabel.isNullOrBlank()) {
-        "Tap a product tile to start this ticket."
+        "Valitse tuote aloittaaksesi laskun."
     } else {
-        "Tap a product tile to start the receipt for $resolvedLabel."
+        "Valitse tuote aloittaaksesi laskun paikalle $resolvedLabel."
     }
 }
 
@@ -2700,7 +2700,7 @@ private fun buildCategoryGroups(items: List<MenuItem>): List<MenuCategoryGroup> 
     val visibleItems = items.filterNot(::isHiddenMenuItem)
 
     return visibleItems
-        .groupBy { item -> item.category.ifBlank { "Other" } }
+        .groupBy { item -> item.category.ifBlank { "Muut" } }
         .toList()
         .sortedBy { (category, _) -> category }
         .map { (category, categoryItems) ->
@@ -2737,12 +2737,12 @@ private enum class LineDiscountMode(
     val inputLabel: String,
 ) {
     PERCENT(
-        dialogTitle = "Discount %",
-        inputLabel = "Percent",
+        dialogTitle = "Alennus %",
+        inputLabel = "Prosentti",
     ),
     AMOUNT(
-        dialogTitle = "Discount €",
-        inputLabel = "Amount in euros",
+        dialogTitle = "Alennus €",
+        inputLabel = "Summa euroina",
     ),
 }
 
@@ -2804,7 +2804,7 @@ private fun MenuTicketLine.discountLabel(): String? {
 }
 
 private fun buildLineMetaText(line: MenuTicketLine): String {
-    val base = "Unit ${CentsFormatter.format(line.unitPriceCents)}"
+    val base = "Yksikkö ${CentsFormatter.format(line.unitPriceCents)}"
     val discountLabel = line.discountLabel() ?: return base
     return "$base • $discountLabel"
 }
