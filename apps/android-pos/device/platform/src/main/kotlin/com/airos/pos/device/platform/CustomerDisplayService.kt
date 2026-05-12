@@ -88,11 +88,15 @@ class SunmiCustomerDisplayService(
 
     override fun updateCustomerTotalDisplay(totalCents: Int?) {
         val ticketPresent = totalCents != null
-        val displayValue = formatCustomerDisplayTotal(totalCents)
+        val displayValue = if (ticketPresent) {
+            formatCustomerDisplayTotal(totalCents)
+        } else {
+            " "
+        }
         logInfo(
             "customerDisplayUpdate start " +
                 "ticketPresent=$ticketPresent totalCents=${totalCents ?: "-"} " +
-                "displayValue=$displayValue nullFallback=$CUSTOMER_DISPLAY_EMPTY_TOTAL",
+                "displayValue=$displayValue idleClear=${!ticketPresent}",
         )
         thread(start = true, isDaemon = true, name = "sunmi-customer-display-update") {
             val sdkInstance = runCatching { PrinterSdk.getInstance() }.getOrElse { error ->
@@ -169,6 +173,14 @@ class SunmiCustomerDisplayService(
                 return@thread
             }
 
+            if (!ticketPresent && tryClearCustomerDisplay(lcdApi)) {
+                logInfo(
+                    "customerDisplayUpdate clearSuccess " +
+                        "ticketPresent=$ticketPresent totalCents=${totalCents ?: "-"} displayValue=$displayValue",
+                )
+                return@thread
+            }
+
             runCatching { lcdApi.showDigital(displayValue) }
                 .onSuccess {
                     logInfo(
@@ -186,6 +198,77 @@ class SunmiCustomerDisplayService(
         }
     }
 
+    private fun tryClearCustomerDisplay(lcdApi: Any): Boolean {
+        val lcdClass = lcdApi.javaClass
+
+        lcdClass.methods
+            .filter { method ->
+                method.parameterTypes.isEmpty() &&
+                    method.name.contains("clear", ignoreCase = true)
+            }
+            .forEach { method ->
+                if (invokeCustomerDisplayClear(method, lcdApi, emptyArray())) {
+                    return true
+                }
+            }
+
+        lcdClass.methods
+            .filter { method ->
+                method.name.equals("config", ignoreCase = true) &&
+                    method.parameterTypes.size == 1
+            }
+            .forEach { method ->
+                val clearArgument = resolveCustomerDisplayClearArgument(method.parameterTypes.first())
+                if (clearArgument != null && invokeCustomerDisplayClear(method, lcdApi, arrayOf(clearArgument))) {
+                    return true
+                }
+            }
+
+        return false
+    }
+
+    private fun resolveCustomerDisplayClearArgument(parameterType: Class<*>): Any? {
+        if (parameterType.isEnum) {
+            return parameterType.enumConstants?.firstOrNull { constant ->
+                val value = constant.toString()
+                val enumName = (constant as? Enum<*>)?.name
+                value.equals("CLEAR", ignoreCase = true) ||
+                    value.contains("Clear", ignoreCase = true) ||
+                    enumName?.contains("CLEAR", ignoreCase = true) == true
+            }
+        }
+
+        return if (parameterType == String::class.java) {
+            "Clear"
+        } else {
+            null
+        }
+    }
+
+    private fun invokeCustomerDisplayClear(
+        method: Method,
+        receiver: Any,
+        args: Array<Any>,
+    ): Boolean {
+        return runCatching {
+            @Suppress("DEPRECATION")
+            method.isAccessible = true
+            method.invoke(receiver, *args)
+            true
+        }.getOrElse { error ->
+            val actual = if (error is InvocationTargetException) {
+                error.targetException ?: error
+            } else {
+                error
+            }
+            logDebug(
+                "customerDisplayClearCandidate failed " +
+                    "method=${method.name} class=${method.declaringClass.name} " +
+                    "error=${actual.javaClass.simpleName}: ${actual.message ?: "-"}",
+            )
+            false
+        }
+    }
     override fun sendTestText(text: String): PosResult<Unit> {
         val report = probeCapabilityInternal(trigger = "manual-send", text = text)
         return if (report.sendSucceeded) {
@@ -4081,3 +4164,4 @@ class SunmiCustomerDisplayService(
         )
     }
 }
+

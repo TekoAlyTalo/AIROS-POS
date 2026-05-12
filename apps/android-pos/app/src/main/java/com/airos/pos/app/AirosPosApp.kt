@@ -133,6 +133,11 @@ private val AppShellTextPrimary = Color(0xFFFBFEFF)
 private val AppShellTextSecondary = Color(0xFFE1EBF2)
 private val AppShellTextMuted = Color(0xFFB0C0CD)
 private val AppShellAccentText = Color(0xFF85F5E0)
+
+private val SHELL_CONTENT_GUTTER = 12.dp
+private val RAIL_WIDTH = 128.dp
+private val RAIL_BUTTON_WIDTH = 96.dp
+
 private val ShellNowFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 private const val CustomerDisplayLogTag = "SunmiCustomerDisplay"
 private const val NfcLogTag = "AIROS_NFC"
@@ -753,7 +758,7 @@ private fun SignedInApp(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(AppShellBackground)
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                    .padding(horizontal = SHELL_CONTENT_GUTTER, vertical = 8.dp),
             ) {
                 NavHost(
                     navController = navController,
@@ -2243,7 +2248,7 @@ private fun AppRail(
     Surface(
         modifier = Modifier
             .fillMaxHeight()
-            .width(112.dp)
+            .width(RAIL_WIDTH)
             .padding(start = 8.dp, top = 8.dp, bottom = 8.dp),
         shape = RoundedCornerShape(28.dp),
         color = AppShellRailColor,
@@ -2359,7 +2364,7 @@ private fun RailButton(
     ) {
         Column(
             modifier = Modifier
-                .width(82.dp)
+                .width(RAIL_BUTTON_WIDTH)
                 .padding(vertical = 10.dp, horizontal = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
