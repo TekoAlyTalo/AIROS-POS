@@ -160,11 +160,11 @@ private enum class ReservationStatus(
     val tag: String,
     val label: String,
 ) {
-    BOOKED("BOOKED", "Booked"),
-    ARRIVED("ARRIVED", "Arrived"),
-    SEATED("SEATED", "Seated"),
-    CANCELLED("CANCELLED", "Cancelled"),
-    NOSHOW("NOSHOW", "No-show"),
+    BOOKED("BOOKED", "Varattu"),
+    ARRIVED("ARRIVED", "Saapunut"),
+    SEATED("SEATED", "Istutettu"),
+    CANCELLED("CANCELLED", "Peruttu"),
+    NOSHOW("NOSHOW", "Ei saapunut"),
 }
 
 private enum class ReservationTimeWindow(
@@ -174,7 +174,7 @@ private enum class ReservationTimeWindow(
 ) {
     ALL("Kaikki ajat", null, null),
     LUNCH("Lounas", LocalTime.of(11, 0), LocalTime.of(15, 0)),
-    AFTERNOON("Iltapaiva", LocalTime.of(15, 0), LocalTime.of(18, 0)),
+    AFTERNOON("Iltapäivä", LocalTime.of(15, 0), LocalTime.of(18, 0)),
     EVENING("Ilta", LocalTime.of(18, 0), LocalTime.of(23, 0)),
 }
 
@@ -322,7 +322,7 @@ private class ReservationsViewModel(
     fun applyDateInput() {
         val parsed = parseDateInput(uiState.value.dateInput)
         if (parsed == null) {
-            mutableState.update { it.copy(error = "Date must use YYYY-MM-DD.", message = null) }
+            mutableState.update { it.copy(error = "Päivämäärän muodon pitää olla VVVV-KK-PP.", message = null) }
             return
         }
         selectDate(parsed)
@@ -502,7 +502,7 @@ private class ReservationsViewModel(
         if (option == null) {
             mutableState.update {
                 it.copy(
-                    error = "Selected table was not found in current table truth.",
+                    error = "Valittua pöytää ei löytynyt nykyisestä pöytätotuudesta.",
                     message = null,
                 )
             }
@@ -512,7 +512,7 @@ private class ReservationsViewModel(
         if (backendTableId == null) {
             mutableState.update {
                 it.copy(
-                    error = "Selected table has no backend table id.",
+                    error = "Valitulla pöydällä ei ole backendin pöytä-ID:tä.",
                     message = null,
                 )
             }
@@ -593,7 +593,7 @@ private class ReservationsViewModel(
             persons = reservation.persons.toString(),
             selectedTableId = reservation.tableId,
             selectedTableLabel = reservation.tableId?.let { tableId ->
-                state.tables.firstOrNull { it.backendTableId == tableId }?.label ?: "Table $tableId"
+                state.tables.firstOrNull { it.backendTableId == tableId }?.label ?: "Pöytä $tableId"
             },
             startTime = parsedStart?.toLocalTime()?.format(TimeFormatter) ?: state.form.startTime,
             durationMinutes = durationMinutesBetween(
@@ -626,7 +626,7 @@ private class ReservationsViewModel(
         if (state.form.selectedTableId != null && selectedAvailability?.isSelectable != true) {
             mutableState.update {
                 it.copy(
-                    error = selectedAvailability?.reason ?: "Select an available table.",
+                    error = selectedAvailability?.reason ?: "Valitse käytettävissä oleva pöytä.",
                     message = null,
                 )
             }
@@ -647,9 +647,9 @@ private class ReservationsViewModel(
                 is PosResult.Success -> {
                     refreshAfterMutation(
                         message = if (state.form.editingReservationId == null) {
-                            "Reservation created."
+                            "Varaus luotu."
                         } else {
-                            "Reservation updated."
+                            "Varaus päivitetty."
                         },
                     )
                 }
@@ -667,7 +667,7 @@ private class ReservationsViewModel(
             mutableState.update {
                 it.copy(
                     pendingAssignReservationId = null,
-                    error = "Reservation was not found.",
+                    error = "Varausta ei löytynyt.",
                     message = null,
                 )
             }
@@ -679,7 +679,7 @@ private class ReservationsViewModel(
             mutableState.update {
                 it.copy(
                     pendingAssignReservationId = null,
-                    error = "Reservation time could not be parsed.",
+                    error = "Varauksen aikaa ei voitu tulkita.",
                     message = null,
                 )
             }
@@ -705,7 +705,7 @@ private class ReservationsViewModel(
                 )
             }
             when (val result = reservationsRepository.updateReservation(reservation.id, payload)) {
-                is PosResult.Success -> refreshAfterMutation(message = "Table assigned.")
+                is PosResult.Success -> refreshAfterMutation(message = "Pöytä valittu.")
                 is PosResult.Failure -> mutableState.update { it.copy(isSaving = false, error = result.message) }
             }
         }
@@ -715,7 +715,7 @@ private class ReservationsViewModel(
         val parsedStart = parseReservationDateTime(reservation.startTime)
         val parsedEnd = parseReservationDateTime(reservation.endTime)
         if (parsedStart == null || parsedEnd == null) {
-            mutableState.update { it.copy(error = "Reservation time could not be parsed.", message = null) }
+            mutableState.update { it.copy(error = "Varauksen aikaa ei voitu tulkita.", message = null) }
             return
         }
         val parts = splitReservationNotes(reservation.notes.orEmpty())
@@ -737,7 +737,7 @@ private class ReservationsViewModel(
         viewModelScope.launch {
             mutableState.update { it.copy(isSaving = true, error = null, message = null) }
             when (val result = reservationsRepository.updateReservation(reservation.id, payload)) {
-                is PosResult.Success -> refreshAfterMutation(message = "Reservation status updated.")
+                is PosResult.Success -> refreshAfterMutation(message = "Varauksen tila päivitetty.")
                 is PosResult.Failure -> mutableState.update { it.copy(isSaving = false, error = result.message) }
             }
         }
@@ -1165,7 +1165,7 @@ private fun ReservationWeekStrip(
     onCalendarClick: () -> Unit,
 ) {
     val weekStart = selectedDate.minusDays((selectedDate.dayOfWeek.value - 1).toLong())
-    val locale = Locale.getDefault()
+    val locale = Locale("fi", "FI")
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1395,7 +1395,7 @@ private fun ReservationPulseDayRow(
     onSelectDate: (LocalDate) -> Unit,
     onSlotClick: (ReservationPulseSlotSelection) -> Unit,
 ) {
-    val locale = Locale.getDefault()
+    val locale = Locale("fi", "FI")
     val dayIsPast = row.date.isBefore(now.toLocalDate())
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -2105,7 +2105,7 @@ private fun ReservationTabRow(
             onClick = { onSelect(ReservationsViewTab.INBOX) },
         )
         ReservationChip(
-            text = "Timeline",
+            text = "Aikajana",
             selected = selectedTab == ReservationsViewTab.TIMELINE,
             onClick = { onSelect(ReservationsViewTab.TIMELINE) },
         )
@@ -2337,7 +2337,7 @@ private fun ReservationTimeline(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text(
-            text = "Timeline ${formatSelectedDate(state.selectedDate)}",
+            text = "Aikajana ${formatSelectedDate(state.selectedDate)}",
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
         )
@@ -2409,7 +2409,7 @@ private fun EmptyReservationList() {
         color = MaterialTheme.colorScheme.surfaceVariant,
     ) {
         Text(
-            text = "No reservations for this day.",
+            text = "Ei varauksia tälle päivälle.",
             modifier = Modifier.padding(16.dp),
             style = MaterialTheme.typography.bodyMedium,
         )
@@ -2567,7 +2567,7 @@ private fun ReservationActionSheet(
                     Button(
                         onClick = onAssignTable,
                         modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Assign table") }
+                    ) { Text("Valitse pöytä") }
                 } else {
                     OutlinedButton(
                         onClick = onAssignTable,
@@ -2591,7 +2591,7 @@ private fun ReservationActionSheet(
                         onClick = { onStatusUpdate(ReservationStatus.NOSHOW) },
                         enabled = started && status != ReservationStatus.NOSHOW,
                         modifier = Modifier.weight(1f),
-                    ) { Text("No-show") }
+                    ) { Text("Ei saapunut") }
                 }
                 TextButton(
                     onClick = onDismiss,
@@ -2698,7 +2698,7 @@ private fun ReservationRow(
                     }
                 }
                 Column(horizontalAlignment = Alignment.End) {
-                    TextButton(onClick = onEdit, enabled = enabled) { Text("Edit") }
+                    TextButton(onClick = onEdit, enabled = enabled) { Text("Muokkaa") }
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         TextButton(
                             onClick = { onStatusUpdate(reservation, ReservationStatus.ARRIVED) },
@@ -2716,7 +2716,7 @@ private fun ReservationRow(
                             onDismissRequest = { menuOpen = false },
                         ) {
                             DropdownMenuItem(
-                                text = { Text("Assign table") },
+                                text = { Text("Valitse pöytä") },
                                 onClick = {
                                     menuOpen = false
                                     onAssignTable(reservation)
@@ -2730,7 +2730,7 @@ private fun ReservationRow(
                                 },
                             )
                             DropdownMenuItem(
-                                text = { Text("No-show") },
+                                text = { Text("Ei saapunut") },
                                 onClick = {
                                     menuOpen = false
                                     onStatusUpdate(reservation, ReservationStatus.NOSHOW)
@@ -3249,7 +3249,7 @@ private fun ReservationWizardDialog(
                 ) {
                     Column {
                         Text(
-                            text = if (editing) "Edit reservation" else "New reservation",
+                            text = if (editing) "Muokkaa varausta" else "Uusi varaus",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
                         )
@@ -3318,21 +3318,21 @@ private fun ReservationWizardDialog(
                             },
                             enabled = !state.isSaving,
                         ) {
-                            Text(if (state.wizardStep == ReservationWizardStep.DATE_TIME) "Cancel" else "Back")
+                            Text(if (state.wizardStep == ReservationWizardStep.DATE_TIME) "Peruuta" else "Takaisin")
                         }
                         if (state.wizardStep == ReservationWizardStep.TABLE) {
                             Button(
                                 onClick = onSubmit,
                                 enabled = !state.isSaving,
                             ) {
-                                Text(if (editing) "Save" else "Save")
+                                Text(if (editing) "Tallenna" else "Tallenna")
                             }
                         } else {
                             Button(
                                 onClick = { onStepChange(nextWizardStep(state.wizardStep)) },
                                 enabled = !state.isSaving,
                             ) {
-                                Text("Next")
+                                Text("Seuraava")
                             }
                         }
                     }
@@ -3409,7 +3409,7 @@ private fun ReservationWizardDateTimeStep(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column {
-                    Text("Date", style = MaterialTheme.typography.labelLarge)
+                    Text("Päivä", style = MaterialTheme.typography.labelLarge)
                     Text(
                         text = formatSelectedDate(state.selectedDate),
                         style = MaterialTheme.typography.titleMedium,
@@ -3452,7 +3452,7 @@ private fun ReservationWizardDateTimeStep(
             OutlinedTextField(
                 value = form.durationMinutes,
                 onValueChange = onDurationMinutesChange,
-                label = { Text("Custom min") },
+                label = { Text("Omat min") },
                 singleLine = true,
                 modifier = Modifier.width(150.dp),
             )
@@ -3511,7 +3511,7 @@ private fun ReservationWizardGuestStep(
         OutlinedTextField(
             value = form.customerName,
             onValueChange = onCustomerNameChange,
-            label = { Text("Name *") },
+            label = { Text("Nimi *") },
             singleLine = true,
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
             modifier = Modifier.fillMaxWidth(),
@@ -3519,7 +3519,7 @@ private fun ReservationWizardGuestStep(
         OutlinedTextField(
             value = form.customerPhone,
             onValueChange = onCustomerPhoneChange,
-            label = { Text("Phone optional") },
+            label = { Text("Puhelin, vapaaehtoinen") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -3552,14 +3552,14 @@ private fun ReservationWizardGuestStep(
             OutlinedTextField(
                 value = form.customerEmail,
                 onValueChange = onCustomerEmailChange,
-                label = { Text("Email optional") },
+                label = { Text("Sähköposti, vapaaehtoinen") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(
                 value = form.allergies,
                 onValueChange = onAllergiesChange,
-                label = { Text("Allergies optional") },
+                label = { Text("Allergiat, vapaaehtoinen") },
                 minLines = 2,
                 maxLines = 3,
                 modifier = Modifier.fillMaxWidth(),
@@ -3567,7 +3567,7 @@ private fun ReservationWizardGuestStep(
             OutlinedTextField(
                 value = form.notes,
                 onValueChange = onNotesChange,
-                label = { Text("Notes optional") },
+                label = { Text("Muistiinpanot, vapaaehtoinen") },
                 minLines = 2,
                 maxLines = 4,
                 modifier = Modifier.fillMaxWidth(),
@@ -3690,14 +3690,14 @@ private fun ReservationForm(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text(
-            text = if (editing) "Edit reservation" else "New reservation",
+            text = if (editing) "Muokkaa varausta" else "Uusi varaus",
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
         )
         OutlinedTextField(
             value = form.customerName,
             onValueChange = onCustomerNameChange,
-            label = { Text("Customer name") },
+            label = { Text("Asiakkaan nimi") },
             singleLine = true,
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
             modifier = Modifier.fillMaxWidth(),
@@ -3705,7 +3705,7 @@ private fun ReservationForm(
         OutlinedTextField(
             value = form.customerPhone,
             onValueChange = onCustomerPhoneChange,
-            label = { Text("Customer phone") },
+            label = { Text("Asiakkaan puhelin") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -3713,7 +3713,7 @@ private fun ReservationForm(
             OutlinedTextField(
                 value = form.persons,
                 onValueChange = onPersonsChange,
-                label = { Text("Persons") },
+                label = { Text("Henkilöä") },
                 singleLine = true,
                 modifier = Modifier.weight(1f),
             )
@@ -3728,7 +3728,7 @@ private fun ReservationForm(
             OutlinedTextField(
                 value = form.durationMinutes,
                 onValueChange = onDurationMinutesChange,
-                label = { Text("Duration min") },
+                label = { Text("Kesto min") },
                 singleLine = true,
                 modifier = Modifier.weight(1f),
             )
@@ -3785,7 +3785,7 @@ private fun ReservationForm(
         OutlinedTextField(
             value = form.notes,
             onValueChange = onNotesChange,
-            label = { Text("Notes") },
+            label = { Text("Muistiinpanot") },
             minLines = 3,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -3798,13 +3798,13 @@ private fun ReservationForm(
                 enabled = !state.isSaving && selectedAvailability?.isSelectable == true,
                 modifier = Modifier.weight(1f),
             ) {
-                Text(if (editing) "Save changes" else "Create reservation")
+                Text(if (editing) "Tallenna muutokset" else "Luo varaus")
             }
             OutlinedButton(
                 onClick = onClearForm,
                 enabled = !state.isSaving,
             ) {
-                Text("Clear")
+                Text("Tyhjennä")
             }
         }
     }
@@ -4069,7 +4069,7 @@ private fun tableLabelForReservation(reservation: BackendReservation): String {
     return if (reservationIsUnassigned(reservation)) {
         "Ei pöytää"
     } else {
-        reservation.tableId?.let { "Table $it" } ?: "Ei pöytää"
+        reservation.tableId?.let { "Pöytä $it" } ?: "Ei pöytää"
     }
 }
 
@@ -4161,17 +4161,17 @@ private data class ReservationNoteParts(
 
 private fun ReservationTableOption.availability(state: ReservationsUiState): ReservationTableAvailability {
     val backendId = backendTableId
-        ?: return ReservationTableAvailability(isSelectable = false, reason = "No backend table id")
+        ?: return ReservationTableAvailability(isSelectable = false, reason = "Ei backendin pöytä-ID:tä")
     val persons = state.form.persons.toIntOrNull()
-        ?: return ReservationTableAvailability(isSelectable = false, reason = "Set persons first")
+        ?: return ReservationTableAvailability(isSelectable = false, reason = "Aseta henkilömäärä ensin")
     if (seats <= 0) {
-        return ReservationTableAvailability(isSelectable = false, reason = "Capacity unavailable")
+        return ReservationTableAvailability(isSelectable = false, reason = "Kapasiteetti ei ole saatavilla")
     }
     if (persons > seats) {
-        return ReservationTableAvailability(isSelectable = false, reason = "Too small for $persons persons")
+        return ReservationTableAvailability(isSelectable = false, reason = "Liian pieni $persons henkilölle")
     }
     if (hasClientSideOverlap(backendId, state)) {
-        return ReservationTableAvailability(isSelectable = false, reason = "Reserved in this time")
+        return ReservationTableAvailability(isSelectable = false, reason = "Varattu tähän aikaan")
     }
     return ReservationTableAvailability(isSelectable = true)
 }
@@ -4213,12 +4213,12 @@ private fun ReservationFormState.proposedInterval(date: LocalDate): Pair<LocalDa
 private fun ReservationFormState.toPayload(date: LocalDate): PosResult<BackendReservationWrite> {
     val tableId = selectedTableId
     val name = customerName.trim()
-    if (name.isBlank()) return PosResult.Failure("Customer name is required.")
+    if (name.isBlank()) return PosResult.Failure("Asiakkaan nimi vaaditaan.")
     val phone = customerPhone.trim()
-    val personsInt = persons.toIntOrNull()?.takeIf { it > 0 } ?: return PosResult.Failure("Persons must be greater than zero.")
-    val start = parseFormTime(startTime) ?: return PosResult.Failure("Start time must use HH:mm.")
-    val end = parseFormTime(endTime) ?: return PosResult.Failure("End time must use HH:mm.")
-    if (!end.isAfter(start)) return PosResult.Failure("End time must be after start time.")
+    val personsInt = persons.toIntOrNull()?.takeIf { it > 0 } ?: return PosResult.Failure("Henkilömäärän pitää olla suurempi kuin nolla.")
+    val start = parseFormTime(startTime) ?: return PosResult.Failure("Aloitusajan muodon pitää olla HH:mm.")
+    val end = parseFormTime(endTime) ?: return PosResult.Failure("Päättymisajan muodon pitää olla HH:mm.")
+    if (!end.isAfter(start)) return PosResult.Failure("Päättymisajan pitää olla aloitusajan jälkeen.")
 
     return PosResult.Success(
         BackendReservationWrite(
@@ -4382,7 +4382,7 @@ private fun formatSelectedDateFinnish(date: LocalDate): String {
 }
 
 private fun formatSelectedDate(date: LocalDate): String {
-    val locale = Locale.getDefault()
+    val locale = Locale("fi", "FI")
     val raw = date.format(DateTimeFormatter.ofPattern("EEE d.M.yyyy", locale))
     return raw.take(1).uppercase(locale) + raw.drop(1)
 }

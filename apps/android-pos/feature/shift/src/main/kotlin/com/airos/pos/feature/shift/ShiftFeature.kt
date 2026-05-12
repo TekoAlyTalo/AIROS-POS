@@ -72,7 +72,7 @@ class ShiftViewModel(
     fun openShift(staffId: String) {
         val cents = euroInputToCents(mutableState.value.openingFloatInput)
         if (cents == null) {
-            mutableState.update { it.copy(message = "Opening float: enter a valid euro amount (e.g. 50,00).") }
+            mutableState.update { it.copy(message = "Pohjakassa: syötä kelvollinen euromäärä, esimerkiksi 50,00.") }
             return
         }
         viewModelScope.launch {
@@ -87,7 +87,7 @@ class ShiftViewModel(
     fun closeShift() {
         val cents = euroInputToCents(mutableState.value.countedCashInput)
         if (cents == null) {
-            mutableState.update { it.copy(message = "Counted cash: enter a valid euro amount (e.g. 123,45).") }
+            mutableState.update { it.copy(message = "Laskettu käteinen: syötä kelvollinen euromäärä, esimerkiksi 123,45.") }
             return
         }
         viewModelScope.launch {
@@ -170,8 +170,8 @@ fun ShiftScreen(
         horizontalArrangement = Arrangement.spacedBy(20.dp),
     ) {
         PosPane(
-            title = "Shift control",
-            supportingText = "Open and close the cash shift with deterministic local records.",
+            title = "Vuoronhallinta",
+            supportingText = "Avaa ja sulje kassavuoro paikallisiin kirjauksiin perustuen.",
             modifier = Modifier.weight(1f),
         ) {
             Column(
@@ -184,36 +184,36 @@ fun ShiftScreen(
                 OutlinedTextField(
                     value = state.openingFloatInput,
                     onValueChange = onOpeningFloatChanged,
-                    label = { Text("Opening float (\u20AC)") },
+                    label = { Text("Pohjakassa (€)") },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Button(
                     onClick = { currentStaffId?.let(onOpenShift) },
                     enabled = !state.busy && currentStaffId != null,
                 ) {
-                    Text("Open shift")
+                    Text("Avaa vuoro")
                 }
                 OutlinedTextField(
                     value = state.countedCashInput,
                     onValueChange = onCountedCashChanged,
-                    label = { Text("Counted cash (\u20AC)") },
+                    label = { Text("Laskettu käteinen (€)") },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Button(onClick = onCloseShift, enabled = !state.busy && state.currentShift != null) {
-                    Text("Close shift")
+                    Text("Sulje vuoro")
                 }
 
                 HorizontalDivider()
 
                 Text(
-                    text = "Attendance",
+                    text = "Työaika",
                     style = MaterialTheme.typography.titleMedium,
                 )
                 attendanceNoticeMessage?.let { StatusBanner(text = it, tint = MaterialTheme.colorScheme.primary) }
                 attendanceMessage?.let { StatusBanner(text = it, tint = MaterialTheme.colorScheme.error) }
                 if (attendanceStateLoading) {
                     Text(
-                        text = if (attendanceMessage == null) "Checking attendance..." else "Attendance status unavailable.",
+                        text = if (attendanceMessage == null) "Tarkistetaan työaikatilaa..." else "Työaikatila ei ole saatavilla.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 } else if (isClockedIn) {
@@ -223,7 +223,7 @@ fun ShiftScreen(
                         if (hours > 0) "${hours}h ${mins}min" else "${mins}min"
                     }
                     Text(
-                        text = duration?.let { "You are clocked in ($it)" } ?: "You are clocked in.",
+                        text = duration?.let { "Olet kirjautunut työvuoroon ($it)" } ?: "Olet kirjautunut työvuoroon.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     OutlinedButton(
@@ -231,11 +231,11 @@ fun ShiftScreen(
                         enabled = !attendanceBusy,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text("Clock out")
+                        Text("Kirjaa ulos")
                     }
                 } else {
                     Text(
-                        text = "You are not clocked in.",
+                        text = "Et ole kirjautunut työvuoroon.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     Button(
@@ -243,15 +243,15 @@ fun ShiftScreen(
                         enabled = !attendanceBusy && currentStaffId != null,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text("Clock in")
+                        Text("Kirjaa sisään")
                     }
                 }
             }
         }
 
         PosPane(
-            title = "Shift status",
-            supportingText = "Shift metrics are stored in cents for deterministic money integrity.",
+            title = "Vuoron tila",
+            supportingText = "Vuoron rahasummat tallennetaan sentteinä täsmällistä rahakirjanpitoa varten.",
             modifier = Modifier.weight(1f),
         ) {
             Column(
@@ -260,27 +260,27 @@ fun ShiftScreen(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                KeyValueRow("Status", state.currentShift?.status?.name ?: "CLOSED")
+                KeyValueRow("Tila", formatShiftStatus(state.currentShift?.status?.name ?: "CLOSED"))
                 state.currentShift?.let { shift ->
-                    KeyValueRow("Opened by staff ID", shift.openedByStaffId)
-                    KeyValueRow("Opening float", CentsFormatter.format(shift.openingFloatCents))
-                    KeyValueRow("Expected cash", CentsFormatter.format(shift.expectedCashCents))
+                    KeyValueRow("Avaaja", shift.openedByStaffId)
+                    KeyValueRow("Pohjakassa", CentsFormatter.format(shift.openingFloatCents))
+                    KeyValueRow("Odotettu käteinen", CentsFormatter.format(shift.expectedCashCents))
                     shift.countedCashCents?.let { counted ->
-                        KeyValueRow("Counted cash", CentsFormatter.format(counted))
+                        KeyValueRow("Laskettu käteinen", CentsFormatter.format(counted))
                     }
                 }
 
                 currentStaffName?.let {
-                    KeyValueRow("Active seller", it)
+                    KeyValueRow("Aktiivinen myyjä", it)
                 }
 
                 Text(
-                    text = "Staff on site",
+                    text = "Paikalla oleva henkilöstö",
                     style = MaterialTheme.typography.titleMedium,
                 )
                 if (attendance.currentlyOnSite.isEmpty()) {
                     Text(
-                        text = "No active work sessions.",
+                        text = "Ei aktiivisia työvuoroja.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 } else {
@@ -291,7 +291,7 @@ fun ShiftScreen(
 
                 if (attendance.clockedInToday.isNotEmpty()) {
                     Text(
-                        text = "Clocked in today",
+                        text = "Tänään kirjautuneet",
                         style = MaterialTheme.typography.titleMedium,
                     )
                     attendance.clockedInToday.forEach { entry ->
@@ -303,15 +303,23 @@ fun ShiftScreen(
     }
 }
 
+private fun formatShiftStatus(status: String): String {
+    return when (status.uppercase()) {
+        "OPEN" -> "Avoin"
+        "CLOSED" -> "Suljettu"
+        else -> status
+    }
+}
+
 @Composable
 private fun AttendanceRow(entry: AttendanceEntry) {
     val hours = (entry.durationMinutes / 60).toInt()
     val mins = (entry.durationMinutes % 60).toInt()
     val duration = if (hours > 0) "${hours}h ${mins}min" else "${mins}min"
     val statusLabel = when (entry.status) {
-        "active" -> "working"
-        "on_break" -> "on break"
-        "completed" -> "done"
+        "active" -> "töissä"
+        "on_break" -> "tauolla"
+        "completed" -> "valmis"
         else -> entry.status
     }
     KeyValueRow(entry.staffName, "$statusLabel \u00B7 $duration")

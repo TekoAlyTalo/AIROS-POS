@@ -238,12 +238,12 @@ class AuthViewModel(
         val selectedStaffId = mutableState.value.selectedStaffId
         when {
             selectedStaffId == null -> {
-                mutableState.update { it.copy(errorMessage = "Select a staff member before entering the POS.") }
+                mutableState.update { it.copy(errorMessage = "Valitse työntekijä ennen kassaan siirtymistä.") }
                 return
             }
 
             mutableState.value.pin.length != PosPinLength -> {
-                mutableState.update { it.copy(errorMessage = "Enter a 4-digit PIN.") }
+                mutableState.update { it.copy(errorMessage = "Syötä 4-numeroinen PIN.") }
                 return
             }
         }
@@ -359,7 +359,7 @@ class AuthViewModel(
                 mutableState.update { current ->
                     current.copy(
                         managerOverride = current.managerOverride.copy(
-                            errorMessage = "Select a manager profile for override approval.",
+                            errorMessage = "Valitse päällikköprofiili hyväksyntää varten.",
                         ),
                     )
                 }
@@ -370,7 +370,7 @@ class AuthViewModel(
                 mutableState.update { current ->
                     current.copy(
                         managerOverride = current.managerOverride.copy(
-                            errorMessage = "Enter a 4-digit manager PIN.",
+                            errorMessage = "Syötä päällikön 4-numeroinen PIN.",
                         ),
                     )
                 }
@@ -397,7 +397,7 @@ class AuthViewModel(
                 is PosResult.Success -> {
                     mutableState.update { current ->
                         current.copy(
-                            noticeMessage = "${result.value.managerDisplayName} approved ${formatManagerOverrideReason(result.value.reason)}.",
+                            noticeMessage = "${result.value.managerDisplayName} hyväksyi toiminnon: ${formatManagerOverrideReason(result.value.reason)}.",
                             managerOverride = current.managerOverride.copy(
                                 isVisible = false,
                                 pin = "",
@@ -456,8 +456,8 @@ fun AuthScreen(
         horizontalArrangement = Arrangement.spacedBy(24.dp),
     ) {
         PosPane(
-            title = "Staff quick select",
-            supportingText = "Select your profile to unlock the terminal with a 4-digit POS PIN.",
+            title = "Henkilöstön pikavalinta",
+            supportingText = "Valitse profiili ja avaa kassa 4-numeroisella POS-PINillä.",
             modifier = Modifier.weight(1.1f),
         ) {
             LazyVerticalGrid(
@@ -482,7 +482,7 @@ fun AuthScreen(
         }
 
         PosPane(
-            title = "Secure sign in",
+            title = "Turvallinen kirjautuminen",
             modifier = Modifier.weight(0.95f),
         ) {
             SelectedStaffSummary(selectedStaff = selectedStaff)
@@ -518,7 +518,7 @@ fun AuthScreen(
                 horizontalArrangement = Arrangement.End,
             ) {
                 TextButton(onClick = onClearPin) {
-                    Text("Clear PIN")
+                    Text("Tyhjennä PIN")
                 }
             }
 
@@ -526,7 +526,7 @@ fun AuthScreen(
                 onClick = onShowManagerOverride,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("Manager Override")
+                Text("Päällikön hyväksyntä")
             }
 
             NumericPinPad(
@@ -539,7 +539,7 @@ fun AuthScreen(
                 enabled = state.canSubmit,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(if (state.isAuthenticating) "Signing in..." else "Enter POS")
+                Text(if (state.isAuthenticating) "Kirjaudutaan..." else "Avaa kassa")
             }
         }
     }
@@ -596,9 +596,9 @@ private fun StaffQuickSelectCard(
             }
             Text(
                 text = when {
-                    !staff.isEnabled -> "Disabled"
-                    staff.isManager -> "Manager access"
-                    else -> "POS access"
+                    !staff.isEnabled -> "Pois käytöstä"
+                    staff.isManager -> "Päällikköoikeus"
+                    else -> "POS-oikeus"
                 },
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Medium,
@@ -617,7 +617,7 @@ private fun SelectedStaffSummary(selectedStaff: StaffMember?) {
             color = MaterialTheme.colorScheme.surfaceVariant,
         ) {
             Text(
-                text = "Select a staff member to continue.",
+                text = "Valitse työntekijä jatkaaksesi.",
                 modifier = Modifier.padding(18.dp),
                 style = MaterialTheme.typography.titleMedium,
             )
@@ -640,12 +640,12 @@ private fun SelectedStaffSummary(selectedStaff: StaffMember?) {
                 fontWeight = FontWeight.Bold,
             )
             Text(
-                text = "Role: ${formatStaffRole(selectedStaff.role)}",
+                text = "Rooli: ${formatStaffRole(selectedStaff.role)}",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
-                text = if (selectedStaff.isManager) "Access: Manager" else "Access: Staff",
+                text = if (selectedStaff.isManager) "Oikeus: päällikkö" else "Oikeus: työntekijä",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -678,20 +678,20 @@ private fun ManagerOverrideDialog(
                 verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
                 Text(
-                    text = "Manager override",
+                    text = "Päällikön hyväksyntä",
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    text = "Approval required for ${formatManagerOverrideReason(state.reason)}.",
+                    text = "Hyväksyntä vaaditaan: ${formatManagerOverrideReason(state.reason)}.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
 
                 Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                     PosPane(
-                        title = "Manager quick select",
-                        supportingText = "Only enabled manager profiles can approve restricted actions.",
+                        title = "Päällikön pikavalinta",
+                        supportingText = "Vain käytössä olevat päällikköprofiilit voivat hyväksyä rajoitettuja toimintoja.",
                         modifier = Modifier.weight(1f),
                     ) {
                         LazyVerticalGrid(
@@ -712,8 +712,8 @@ private fun ManagerOverrideDialog(
                     }
 
                     PosPane(
-                        title = "Authorization PIN",
-                        supportingText = "Selected manager enters their 4-digit PIN to approve the action.",
+                        title = "Hyväksynnän PIN",
+                        supportingText = "Valittu päällikkö hyväksyy toiminnon 4-numeroisella PIN-koodilla.",
                         modifier = Modifier.weight(1f),
                     ) {
                         SelectedStaffSummary(selectedStaff = selectedManager)
@@ -728,7 +728,7 @@ private fun ManagerOverrideDialog(
                                 verticalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
                                 Text(
-                                    text = "Manager PIN",
+                                    text = "Päällikön PIN",
                                     style = MaterialTheme.typography.labelLarge,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -757,20 +757,20 @@ private fun ManagerOverrideDialog(
                                 onClick = onClearManagerPin,
                                 modifier = Modifier.weight(1f),
                             ) {
-                                Text("Clear")
+                                Text("Tyhjennä")
                             }
                             OutlinedButton(
                                 onClick = onDismiss,
                                 modifier = Modifier.weight(1f),
                             ) {
-                                Text("Cancel")
+                                Text("Peruuta")
                             }
                             Button(
                                 onClick = onConfirmManagerOverride,
                                 enabled = state.canSubmit,
                                 modifier = Modifier.weight(1.2f),
                             ) {
-                                Text(if (state.isAuthorizing) "Authorizing..." else "Authorize")
+                                Text(if (state.isAuthorizing) "Hyväksytään..." else "Hyväksy")
                             }
                         }
                     }
@@ -793,20 +793,20 @@ private fun maskedPin(pin: String): String {
 
 private fun formatStaffRole(role: StaffRole): String {
     return when (role) {
-        StaffRole.SERVER -> "Waiter"
-        StaffRole.MANAGER -> "Manager"
-        StaffRole.CASHIER -> "Cashier"
-        StaffRole.KITCHEN -> "Kitchen"
-        StaffRole.ADMIN -> "Admin"
+        StaffRole.SERVER -> "Tarjoilija"
+        StaffRole.MANAGER -> "Päällikkö"
+        StaffRole.CASHIER -> "Kassa"
+        StaffRole.KITCHEN -> "Keittiö"
+        StaffRole.ADMIN -> "Ylläpito"
     }
 }
 
 private fun formatManagerOverrideReason(reason: ManagerOverrideReason): String {
     return when (reason) {
-        ManagerOverrideReason.REFUND -> "refund approval"
-        ManagerOverrideReason.VOID_TICKET -> "void approval"
-        ManagerOverrideReason.SHIFT_CLOSE -> "shift close"
-        ManagerOverrideReason.OPEN_CASH_DRAWER -> "cash drawer access"
-        ManagerOverrideReason.SETTINGS_CHANGE -> "settings change"
+        ManagerOverrideReason.REFUND -> "hyvitys"
+        ManagerOverrideReason.VOID_TICKET -> "mitätöinti"
+        ManagerOverrideReason.SHIFT_CLOSE -> "vuoron sulkeminen"
+        ManagerOverrideReason.OPEN_CASH_DRAWER -> "kassalaatikon avaus"
+        ManagerOverrideReason.SETTINGS_CHANGE -> "asetusten muutos"
     }
 }

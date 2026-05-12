@@ -63,7 +63,7 @@ data class SettingsUiState(
     val pendingNfcEnrollmentStaffId: String? = null,
     val pendingNfcEnrollmentStaffName: String? = null,
     val pendingNfcCustomerEnrollmentLabel: String? = null,
-    val customerEnrollmentLabelInput: String = "Guest customer",
+    val customerEnrollmentLabelInput: String = "Asiakas",
     val message: String? = null,
     val messageIsError: Boolean = false,
 ) {
@@ -162,7 +162,7 @@ class SettingsViewModel(
         if (floatCents == null) {
             mutableState.update {
                 it.copy(
-                    message = "Default opening float: enter a valid euro amount (e.g. 50,00).",
+                    message = "Oletuspohjakassa: syötä kelvollinen euromäärä, esimerkiksi 50,00.",
                     messageIsError = true,
                 )
             }
@@ -175,7 +175,7 @@ class SettingsViewModel(
             settingsRepository.updateDefaultOpeningFloatCents(floatCents)
             mutableState.update {
                 it.copy(
-                    message = "Settings saved locally.",
+                    message = "Asetukset tallennettu paikallisesti.",
                     messageIsError = false,
                 )
             }
@@ -187,7 +187,7 @@ class SettingsViewModel(
             settingsRepository.setOfflineMode(enabled)
             mutableState.update {
                 it.copy(
-                    message = "Offline mode ${if (enabled) "enabled" else "disabled"}.",
+                    message = "Offline-tila ${if (enabled) "käytössä" else "pois käytöstä"}.",
                     messageIsError = false,
                 )
             }
@@ -200,9 +200,9 @@ class SettingsViewModel(
             mutableState.update {
                 it.copy(
                     message = if (enabled) {
-                        "NFC direct login enabled."
+                        "NFC-suorakirjautuminen käytössä."
                     } else {
-                        "NFC direct login disabled."
+                        "NFC-suorakirjautuminen pois käytöstä."
                     },
                     messageIsError = false,
                 )
@@ -217,7 +217,7 @@ class SettingsViewModel(
                 pendingNfcEnrollmentStaffId = row.staff.id,
                 pendingNfcEnrollmentStaffName = row.staff.displayName,
                 pendingNfcCustomerEnrollmentLabel = null,
-                message = "Waiting for next NFC tag for ${row.staff.displayName}.",
+                message = "Odotetaan seuraavaa NFC-tunnistetta: ${row.staff.displayName}.",
                 messageIsError = false,
             )
         }
@@ -229,7 +229,7 @@ class SettingsViewModel(
                 pendingNfcEnrollmentStaffId = null,
                 pendingNfcEnrollmentStaffName = null,
                 pendingNfcCustomerEnrollmentLabel = null,
-                message = "NFC enrollment cancelled.",
+                message = "NFC-liitos peruttu.",
                 messageIsError = false,
             )
         }
@@ -270,7 +270,7 @@ class SettingsViewModel(
                 is com.airos.pos.core.common.PosResult.Success -> {
                     mutableState.update {
                         it.copy(
-                            message = "NFC tag removed from the staff profile.",
+                            message = "NFC-tunniste poistettu työntekijäprofiilista.",
                             messageIsError = false,
                         )
                     }
@@ -293,14 +293,14 @@ class SettingsViewModel(
     }
 
     fun beginCustomerEnrollment() {
-        val label = mutableState.value.customerEnrollmentLabelInput.trim().ifBlank { "Guest customer" }
+        val label = mutableState.value.customerEnrollmentLabelInput.trim().ifBlank { "Asiakas" }
         mutableState.update {
             it.copy(
                 pendingNfcEnrollmentStaffId = null,
                 pendingNfcEnrollmentStaffName = null,
                 pendingNfcCustomerEnrollmentLabel = label,
                 customerEnrollmentLabelInput = label,
-                message = "Waiting for next NFC tag for customer identity $label.",
+                message = "Odotetaan seuraavaa NFC-tunnistetta asiakkaalle: $label.",
                 messageIsError = false,
             )
         }
@@ -312,7 +312,7 @@ class SettingsViewModel(
                 is com.airos.pos.core.common.PosResult.Success -> {
                     mutableState.update {
                         it.copy(
-                            message = "Customer NFC tag removed.",
+                            message = "Asiakkaan NFC-tunniste poistettu.",
                             messageIsError = false,
                         )
                     }
@@ -344,7 +344,7 @@ class SettingsViewModel(
                             pendingNfcEnrollmentStaffId = null,
                             pendingNfcEnrollmentStaffName = null,
                             pendingNfcCustomerEnrollmentLabel = null,
-                            message = "NFC tag ${result.value.canonicalUid} is now linked to ${staff.displayName}.",
+                            message = "NFC-tunniste ${result.value.canonicalUid} liitetty työntekijään ${staff.displayName}.",
                             messageIsError = false,
                         )
                     }
@@ -369,7 +369,7 @@ class SettingsViewModel(
                     mutableState.update {
                         it.copy(
                             pendingNfcCustomerEnrollmentLabel = null,
-                            message = "NFC tag ${result.value.canonicalUid} is now linked to ${result.value.entityDisplayLabel}.",
+                            message = "NFC-tunniste ${result.value.canonicalUid} liitetty kohteeseen ${result.value.entityDisplayLabel}.",
                             messageIsError = false,
                         )
                     }
@@ -450,8 +450,8 @@ fun SettingsScreen(
     lastNfcTagUid: String?,
 ) {
     PosPane(
-        title = "Settings",
-        supportingText = "Terminal config, device diagnostics, sync visibility, and local NFC identity enrollment live here.",
+        title = "Asetukset",
+        supportingText = "Päätteen asetukset, laitetiedot, synkronoinnin tila ja paikalliset NFC-tunnisteet.",
         modifier = Modifier.fillMaxSize(),
     ) {
         Column(
@@ -474,34 +474,34 @@ fun SettingsScreen(
             OutlinedTextField(
                 value = state.terminalNameInput,
                 onValueChange = onTerminalNameChanged,
-                label = { Text("Terminal name") },
+                label = { Text("Päätteen nimi") },
                 modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(
                 value = state.edgeBaseUrlInput,
                 onValueChange = onEdgeBaseUrlChanged,
-                label = { Text("Edge base URL") },
+                label = { Text("Edge-palvelimen URL") },
                 modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(
                 value = state.restaurantKeyInput,
                 onValueChange = onRestaurantKeyChanged,
-                label = { Text("Restaurant scope key") },
-                supportingText = { Text("Must match the backend restaurant identifier. Default: ravintola_default") },
+                label = { Text("Ravintolan tunniste") },
+                supportingText = { Text("Täytyy vastata backendin ravintolatunnistetta. Oletus: ravintola_default") },
                 modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(
                 value = state.defaultOpeningFloatInput,
                 onValueChange = onDefaultOpeningFloatChanged,
-                label = { Text("Default opening float (\u20AC)") },
-                supportingText = { Text("Prefilled on Shift when opening a new shift. Staff can still change the actual amount.") },
+                label = { Text("Oletuspohjakassa (€)") },
+                supportingText = { Text("Täytetään Vuoro-sivulle uuden vuoron avauksessa. Henkilöstö voi vielä muuttaa todellisen summan.") },
                 modifier = Modifier.fillMaxWidth(),
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Text("Offline mode")
+                Text("Offline-tila")
                 Switch(
                     checked = state.settings?.offlineModeEnabled ?: false,
                     onCheckedChange = onOfflineModeChanged,
@@ -511,35 +511,35 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Text("NFC direct login")
+                Text("NFC-suorakirjautuminen")
                 Switch(
                     checked = state.settings?.nfcDirectLoginEnabled ?: false,
                     onCheckedChange = onNfcDirectLoginChanged,
                 )
             }
             Button(onClick = onSaveSettings) {
-                Text("Save settings")
+                Text("Tallenna asetukset")
             }
-            KeyValueRow("Queued writes", state.queueDepth.toString())
-            KeyValueRow("Device", state.deviceProfile?.model ?: "-")
-            KeyValueRow("Vendor", state.deviceProfile?.vendor?.name ?: "-")
-            KeyValueRow("Printer", state.deviceProfile?.hasBuiltInPrinter?.toString() ?: "-")
-            KeyValueRow("Scanner", state.deviceProfile?.hasScanner?.toString() ?: "-")
+            KeyValueRow("Jonossa olevat kirjoitukset", state.queueDepth.toString())
+            KeyValueRow("Laite", state.deviceProfile?.model ?: "-")
+            KeyValueRow("Valmistaja", state.deviceProfile?.vendor?.name ?: "-")
+            KeyValueRow("Tulostin", state.deviceProfile?.hasBuiltInPrinter?.toString() ?: "-")
+            KeyValueRow("Skanneri", state.deviceProfile?.hasScanner?.toString() ?: "-")
 
             Text(
-                text = "NFC identity & enrollment",
+                text = "NFC-tunnisteet",
                 style = MaterialTheme.typography.titleMedium,
             )
             Text(
-                text = "Staff tags are now stored locally on the POS instead of in a hardcoded app map. This foundation can later be synced to backend-managed NFC identity policy.",
+                text = "Henkilöstön NFC-tunnisteet tallennetaan paikallisesti kassaan. Myöhemmin tämä voidaan synkronoida backendin hallitsemaan tunnistepolitiikkaan.",
                 style = MaterialTheme.typography.bodyMedium,
             )
 
             if (state.hasPendingNfcEnrollment) {
                 StatusBanner(
                     text = state.pendingNfcEnrollmentStaffName?.let { staffName ->
-                        "Waiting for next NFC tap for $staffName."
-                    } ?: "Waiting for next NFC tap for customer identity ${state.pendingNfcCustomerEnrollmentLabel}.",
+                        "Odotetaan seuraavaa NFC-lukua: $staffName."
+                    } ?: "Odotetaan seuraavaa NFC-lukua asiakkaalle: ${state.pendingNfcCustomerEnrollmentLabel}.",
                     tint = MaterialTheme.colorScheme.primary,
                 )
                 Row(
@@ -550,19 +550,19 @@ fun SettingsScreen(
                         onClick = onCancelNfcEnrollment,
                         modifier = Modifier.weight(1f),
                     ) {
-                        Text("Cancel waiting")
+                        Text("Peru odotus")
                     }
                     OutlinedButton(
                         onClick = onUseLastSeenNfcTag,
                         enabled = lastNfcTagUid != null,
                         modifier = Modifier.weight(1f),
                     ) {
-                        Text("Use last scanned tag")
+                        Text("Käytä viimeksi luettua tunnistetta")
                     }
                 }
             }
 
-            KeyValueRow("Last scanned tag", lastNfcTagSummary ?: "No NFC tag scanned yet.")
+            KeyValueRow("Viimeksi luettu tunniste", lastNfcTagSummary ?: "NFC-tunnistetta ei ole vielä luettu.")
 
             state.nfcStaffRows.forEach { row ->
                 StaffNfcEnrollmentCard(
@@ -574,17 +574,17 @@ fun SettingsScreen(
             }
 
             Text(
-                text = "Customer NFC touchpoints",
+                text = "Asiakkaan NFC-tunnisteet",
                 style = MaterialTheme.typography.titleMedium,
             )
             Text(
-                text = "Customer tags use the same identity storage but are linked as loyalty/customer identities, not staff identities. Receipt NFC handoffs are recorded separately.",
+                text = "Asiakkaan tunnisteet käyttävät samaa tunnistevarastoa, mutta ne liitetään asiakas- tai kanta-asiakastietoihin, ei henkilöstöön. Kuittien NFC-luovutukset tallennetaan erikseen.",
                 style = MaterialTheme.typography.bodyMedium,
             )
             OutlinedTextField(
                 value = state.customerEnrollmentLabelInput,
                 onValueChange = onCustomerEnrollmentLabelChanged,
-                label = { Text("Customer label") },
+                label = { Text("Asiakkaan nimi") },
                 modifier = Modifier.fillMaxWidth(),
             )
             Button(
@@ -593,16 +593,16 @@ fun SettingsScreen(
             ) {
                 Text(
                     if (state.pendingNfcCustomerEnrollmentLabel != null) {
-                        "Waiting for customer tap..."
+                        "Odotetaan asiakkaan NFC-lukua..."
                     } else {
-                        "Enroll customer tag"
+                        "Liitä asiakkaan tunniste"
                     },
                 )
             }
 
             if (state.nfcCustomerEnrollments.isEmpty()) {
                 Text(
-                    text = "No customer NFC identities enrolled yet.",
+                    text = "Asiakkaan NFC-tunnisteita ei ole vielä liitetty.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
             } else {
@@ -616,7 +616,7 @@ fun SettingsScreen(
 
             if (state.recentReceiptHandoffs.isNotEmpty()) {
                 Text(
-                    text = "Recent receipt NFC handoffs",
+                    text = "Viimeisimmät kuittien NFC-luovutukset",
                     style = MaterialTheme.typography.titleMedium,
                 )
                 state.recentReceiptHandoffs.forEach { handoff ->
@@ -628,12 +628,12 @@ fun SettingsScreen(
             }
 
             Text(
-                text = "Recent NFC events",
+                text = "Viimeisimmät NFC-tapahtumat",
                 style = MaterialTheme.typography.titleMedium,
             )
             if (state.recentNfcEvents.isEmpty()) {
                 Text(
-                    text = "No NFC identity events yet.",
+                    text = "NFC-tapahtumia ei ole vielä.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
             } else {
@@ -669,13 +669,13 @@ private fun StaffNfcEnrollmentCard(
                 style = MaterialTheme.typography.titleMedium,
             )
             Text(
-                text = "Role: ${row.staff.role.name.lowercase().replace('_', ' ')}",
+                text = "Rooli: ${row.staff.role.name.lowercase().replace('_', ' ')}",
                 style = MaterialTheme.typography.bodyMedium,
             )
             Text(
                 text = row.enrollment?.let {
-                    "Enrolled tag: ${it.canonicalUid}"
-                } ?: "No NFC tag enrolled for this staff profile.",
+                    "Liitetty tunniste: ${it.canonicalUid}"
+                } ?: "Tälle työntekijäprofiilille ei ole liitetty NFC-tunnistetta.",
                 style = MaterialTheme.typography.bodyMedium,
             )
 
@@ -689,11 +689,11 @@ private fun StaffNfcEnrollmentCard(
                 ) {
                     Text(
                         if (isPending) {
-                            "Waiting for tap…"
+                            "Odotetaan lukua…"
                         } else if (row.enrollment != null) {
-                            "Replace tag"
+                            "Vaihda tunniste"
                         } else {
-                            "Enroll tag"
+                            "Liitä tunniste"
                         },
                     )
                 }
@@ -702,7 +702,7 @@ private fun StaffNfcEnrollmentCard(
                     enabled = row.enrollment != null,
                     modifier = Modifier.weight(1f),
                 ) {
-                    Text("Remove tag")
+                    Text("Poista tunniste")
                 }
             }
         }
@@ -728,18 +728,18 @@ private fun CustomerNfcEnrollmentCard(
                 style = MaterialTheme.typography.titleMedium,
             )
             Text(
-                text = "Customer identity: ${enrollment.entityId}",
+                text = "Asiakastunniste: ${enrollment.entityId}",
                 style = MaterialTheme.typography.bodyMedium,
             )
             Text(
-                text = "Enrolled tag: ${enrollment.canonicalUid}",
+                text = "Liitetty tunniste: ${enrollment.canonicalUid}",
                 style = MaterialTheme.typography.bodyMedium,
             )
             OutlinedButton(
                 onClick = onRemoveEnrollment,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("Remove customer tag")
+                Text("Poista asiakkaan tunniste")
             }
         }
     }
