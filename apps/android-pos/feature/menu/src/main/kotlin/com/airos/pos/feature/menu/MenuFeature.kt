@@ -147,6 +147,12 @@ data class MenuUiState(
     val receiptHandoffWaiting: Boolean = false,
     val receiptHandoffMessage: String? = null,
     val manualDrawerInProgress: Boolean = false,
+    // True when TUOTTEET was opened with no tableId and no saleId — right pane shows the no-active-bill panel.
+    val isNoActiveBillMode: Boolean = false,
+    // True when a tableless quick sale is active (no table, but a specific saleId was loaded).
+    val isQuickSaleMode: Boolean = false,
+    // One-shot signal set after a sale is successfully paid and cleared.
+    val saleJustClosed: Boolean = false,
 )
 
 data class MenuTicketLine(
@@ -209,17 +215,22 @@ class MenuViewModel(
     /** Tracks the saleId of the active persisted open sale. Null until the first item is added. */
     @Volatile private var currentSaleId: String? = null
     private val shouldForceNewSale: Boolean = forceNewSale && activeSaleId == null
+    // No tableId AND no saleId AND not a forced-new — show no-active-bill panel, never auto-restore or auto-create.
+    private val isNoActiveBillModeSentinel: Boolean =
+        activeTableId == null && activeSaleId == null && !shouldForceNewSale
 
     private var lastHandledReceiptHandoffKey: String? = null
     private val mutableState = MutableStateFlow(
         MenuUiState(
             activeTableId = activeTableId,
             activeTableLabel = activeTableLabel,
-            ticketLines = if (shouldForceNewSale) {
+            ticketLines = if (shouldForceNewSale || isNoActiveBillModeSentinel) {
                 emptyList()
             } else {
                 activeTableId?.let(MenuTicketDraftStore::load).orEmpty()
             },
+            isNoActiveBillMode = isNoActiveBillModeSentinel,
+            isQuickSaleMode = !isNoActiveBillModeSentinel && activeTableId == null && activeSaleId != null,
         ),
     )
     val uiState: StateFlow<MenuUiState> = mutableState.asStateFlow()
@@ -294,6 +305,7 @@ class MenuViewModel(
                 val existingSale = when {
                     activeSaleId != null -> repo.loadOpenSaleById(activeSaleId)
                     shouldForceNewSale -> null
+                    isNoActiveBillModeSentinel -> null  // never auto-restore a tableless sale
                     else -> repo.loadOpenSaleForSpot(activeTableId)
                 }
                 if (existingSale != null) {
@@ -314,6 +326,8 @@ class MenuViewModel(
                             activeTableId = currentTableId,
                             activeTableLabel = currentTableLabel,
                             ticketLines = restored,
+                            isQuickSaleMode = currentSaleId != null && currentTableId == null,
+                            isNoActiveBillMode = false,
                         )
                     }
                     syncCustomerDisplayToCurrentTicket()
@@ -372,6 +386,7 @@ class MenuViewModel(
     }
 
     fun addToTicket(item: MenuItem) {
+        if (mutableState.value.isNoActiveBillMode) return
         if (mutableState.value.activeTableRequiresCheckAck) {
             mutableState.update { current ->
                 if (current.showCheckAddBlockedWarning) current
@@ -675,6 +690,7 @@ class MenuViewModel(
                             activeTableId = toSpotId,
                             activeTableLabel = toSpotLabel,
                             paymentMessage = null,
+                            isQuickSaleMode = false,  // bill is now table-bound
                         )
                     }
                 }
@@ -815,6 +831,34 @@ class MenuViewModel(
             currentState.copy(
                 ticketLines = emptyList(),
                 openedAtEpochMillis = null,
+                isQuickSaleMode = false,
+                saleJustClosed = true,
+            )
+        }
+        if (saleId != null) {
+            viewModelScope.launch { openSaleRepository?.closeOpenSale(saleId) }
+        }
+    }
+
+    fun acknowledgeSaleClosed() {
+        mutableState.update { it.copy(saleJustClosed = false) }
+    }
+
+    fun clearAndAbortQuickSale() {
+        val saleId = currentSaleId
+        currentSaleId = null
+        currentTableId = null
+        currentTableLabel = null
+        currentTableSpotType = null
+        currentTableMaxOpenBills = null
+        customerDisplayService?.updateCustomerTotalDisplay(null)
+        mutableState.update {
+            it.copy(
+                ticketLines = emptyList(),
+                openedAtEpochMillis = null,
+                activeTableId = null,
+                activeTableLabel = null,
+                isQuickSaleMode = false,
             )
         }
         if (saleId != null) {
@@ -849,6 +893,7 @@ class MenuViewModel(
 
     private suspend fun persistLinesToOpenSale(lines: List<MenuTicketLine>) {
         val repo = openSaleRepository ?: return
+        if (isNoActiveBillModeSentinel) return  // no active bill — never auto-create a tableless sale
         if (lines.isEmpty()) {
             val saleId = currentSaleId ?: return
             repo.saveLines(saleId, emptyList())
@@ -966,11 +1011,46 @@ fun MenuScreen(
     onAcknowledgeCheck: (() -> Unit)? = null,
     onScreenShown: () -> Unit = {},
     onScreenDisposed: () -> Unit = {},
+    onNavigateToTableMap: () -> Unit = {},
+    onQuickSaleLineCountChanged: ((Int) -> Unit)? = null,
+    openSalesCount: Int = 0,
+    requestOpenPaymentDialog: Boolean = false,
+    onPaymentDialogRequestConsumed: () -> Unit = {},
+    onClearAndAbortQuickSale: (() -> Unit)? = null,
+    onSaleJustClosed: (() -> Unit)? = null,
 ) {
     DisposableEffect(Unit) {
         onScreenShown()
-        onDispose(onScreenDisposed)
+        onDispose {
+            onScreenDisposed()
+            onQuickSaleLineCountChanged?.invoke(0)
+        }
     }
+
+    // Hoist payment dialog state so the leave-guard can trigger it externally.
+    var isPaymentDialogOpen by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(requestOpenPaymentDialog) {
+        if (requestOpenPaymentDialog) {
+            isPaymentDialogOpen = true
+            onPaymentDialogRequestConsumed()
+        }
+    }
+
+    // Notify shell about quick-sale dirty state.
+    val isQuickSale = state.isQuickSaleMode
+    val lineCount = state.ticketLines.size
+    LaunchedEffect(isQuickSale, lineCount) {
+        onQuickSaleLineCountChanged?.invoke(if (isQuickSale) lineCount else 0)
+    }
+
+    // Propagate sale-closed signal to shell so it can clear the active context.
+    LaunchedEffect(state.saleJustClosed) {
+        if (state.saleJustClosed) onSaleJustClosed?.invoke()
+    }
+
+    // Perform ViewModel clear when requested from the leave-guard dialog.
+    // (onClearAndAbortQuickSale is called once; the signal is reset by the shell after navigation.)
+    LaunchedEffect(onClearAndAbortQuickSale) { /* key is the callback reference, not a value signal */ }
 
     val categoryGroups = remember(state.items) { buildCategoryGroups(state.items) }
     var selectedCategory by rememberSaveable { mutableStateOf<String?>(null) }
@@ -1139,38 +1219,52 @@ fun MenuScreen(
             }
         }
 
-        TicketPane(
-            modifier = Modifier.onGloballyPositioned { coords -> ticketPaneBoundsInRoot = coords.boundsInRoot() },
-            isProductDropTargetActive = productDrag.active,
-            isProductDraggedOver = productDrag.overTicket,
-            activeTableId = state.activeTableId,
-            activeTableLabel = state.activeTableLabel,
-            activeTableRequiresCheckAck = state.activeTableRequiresCheckAck,
-            showCheckAddBlockedWarning = state.showCheckAddBlockedWarning,
-            openedAtEpochMillis = state.openedAtEpochMillis,
-            ticketLines = state.ticketLines,
-            totalTicketItems = totalTicketItems,
-            ticketSubtotalCents = ticketSubtotalCents,
-            paymentInProgress = state.paymentInProgress,
-            paymentMessage = state.paymentMessage,
-            receiptHandoffAvailable = state.receiptHandoffPayload != null,
-            receiptHandoffWaiting = state.receiptHandoffWaiting,
-            receiptHandoffMessage = state.receiptHandoffMessage,
-            manualDrawerInProgress = state.manualDrawerInProgress,
-            onStartNewSale = onStartNewSale,
-            onBackToTableView = onBackToTableView,
-            onOpenServiceSpotSelection = onOpenServiceSpotSelection,
-            onAcknowledgeCheck = onAcknowledgeCheck,
-            onDecrementTicketLine = onDecrementTicketLine,
-            onRemoveTicketLine = onRemoveTicketLine,
-            onApplyLinePercentDiscount = onApplyLinePercentDiscount,
-            onApplyLineAmountDiscount = onApplyLineAmountDiscount,
-            onConfirmPayment = onConfirmPayment,
-            onDismissPaymentMessage = onDismissPaymentMessage,
-            onStartReceiptHandoff = onStartReceiptHandoff,
-            onCancelReceiptHandoff = onCancelReceiptHandoff,
-            onOpenCashDrawer = onOpenCashDrawer,
-        )
+        if (state.isNoActiveBillMode) {
+            NoActiveBillPanel(
+                modifier = Modifier.weight(0.85f),
+                openSalesCount = openSalesCount,
+                onOpenCashDrawer = onOpenCashDrawer,
+                onNewSale = onStartNewSale,
+                onNavigateToTableMap = onNavigateToTableMap,
+            )
+        } else {
+            TicketPane(
+                modifier = Modifier.onGloballyPositioned { coords -> ticketPaneBoundsInRoot = coords.boundsInRoot() },
+                isProductDropTargetActive = productDrag.active,
+                isProductDraggedOver = productDrag.overTicket,
+                activeTableId = state.activeTableId,
+                activeTableLabel = state.activeTableLabel,
+                activeTableRequiresCheckAck = state.activeTableRequiresCheckAck,
+                showCheckAddBlockedWarning = state.showCheckAddBlockedWarning,
+                openedAtEpochMillis = state.openedAtEpochMillis,
+                ticketLines = state.ticketLines,
+                totalTicketItems = totalTicketItems,
+                ticketSubtotalCents = ticketSubtotalCents,
+                paymentInProgress = state.paymentInProgress,
+                paymentMessage = state.paymentMessage,
+                receiptHandoffAvailable = state.receiptHandoffPayload != null,
+                receiptHandoffWaiting = state.receiptHandoffWaiting,
+                receiptHandoffMessage = state.receiptHandoffMessage,
+                manualDrawerInProgress = state.manualDrawerInProgress,
+                isPaymentDialogOpen = isPaymentDialogOpen,
+                onOpenPaymentDialog = { isPaymentDialogOpen = true },
+                onPaymentDialogClosed = { isPaymentDialogOpen = false },
+                isQuickSaleMode = state.isQuickSaleMode,
+                onStartNewSale = onStartNewSale,
+                onBackToTableView = onBackToTableView,
+                onOpenServiceSpotSelection = onOpenServiceSpotSelection,
+                onAcknowledgeCheck = onAcknowledgeCheck,
+                onDecrementTicketLine = onDecrementTicketLine,
+                onRemoveTicketLine = onRemoveTicketLine,
+                onApplyLinePercentDiscount = onApplyLinePercentDiscount,
+                onApplyLineAmountDiscount = onApplyLineAmountDiscount,
+                onConfirmPayment = onConfirmPayment,
+                onDismissPaymentMessage = onDismissPaymentMessage,
+                onStartReceiptHandoff = onStartReceiptHandoff,
+                onCancelReceiptHandoff = onCancelReceiptHandoff,
+                onOpenCashDrawer = onOpenCashDrawer,
+            )
+        }
     }
 
         if (productDrag.active) {
@@ -1213,6 +1307,98 @@ fun MenuScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun NoActiveBillPanel(
+    modifier: Modifier = Modifier,
+    openSalesCount: Int = 0,
+    onOpenCashDrawer: (String) -> Unit,
+    onNewSale: () -> Unit,
+    onNavigateToTableMap: () -> Unit,
+) {
+    var isDrawerPinDialogOpen by remember { mutableStateOf(false) }
+
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(28.dp),
+        color = MenuShellColor,
+        border = BorderStroke(1.dp, MenuBorderColor),
+        contentColor = MenuTextPrimary,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 18.dp, vertical = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "Ei aktiivista laskua",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+                color = MenuTextPrimary,
+            )
+            Text(
+                text = "Valitse pöytä tai aloita pikamyynti.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MenuTextSecondary,
+            )
+            Text(
+                text = "Avoimet laskut: $openSalesCount",
+                style = MaterialTheme.typography.bodySmall,
+                color = MenuTextMuted,
+            )
+            Text(
+                text = "Pikamyynti: vapaa",
+                style = MaterialTheme.typography.bodySmall,
+                color = MenuTextMuted,
+            )
+            Text(
+                text = "Keittiön valmistusaika: Ei vielä dataa",
+                style = MaterialTheme.typography.bodySmall,
+                color = MenuTextMuted,
+            )
+
+            Spacer(modifier = Modifier.weight(1f))
+
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedReceiptActionButton(
+                    label = "Avaa laatikko",
+                    onClick = { isDrawerPinDialogOpen = true },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Button(
+                    onClick = onNewSale,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        text = "Uusi myynti",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                OutlinedReceiptActionButton(
+                    label = "Pöydät",
+                    onClick = onNavigateToTableMap,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+    }
+
+    if (isDrawerPinDialogOpen) {
+        CashDrawerPinDialog(
+            inProgress = false,
+            onDismiss = { isDrawerPinDialogOpen = false },
+            onConfirm = { pin ->
+                isDrawerPinDialogOpen = false
+                onOpenCashDrawer(pin)
+            },
+        )
     }
 }
 
@@ -1619,6 +1805,10 @@ private fun RowScope.TicketPane(
     receiptHandoffWaiting: Boolean,
     receiptHandoffMessage: String?,
     manualDrawerInProgress: Boolean,
+    isPaymentDialogOpen: Boolean,
+    onOpenPaymentDialog: () -> Unit,
+    onPaymentDialogClosed: () -> Unit,
+    isQuickSaleMode: Boolean = false,
     onStartNewSale: () -> Unit,
     onBackToTableView: (() -> Unit)? = null,
     onOpenServiceSpotSelection: (() -> Unit)? = null,
@@ -1633,7 +1823,6 @@ private fun RowScope.TicketPane(
     onCancelReceiptHandoff: () -> Unit,
     onOpenCashDrawer: (String) -> Unit,
 ) {
-    var isPaymentDialogOpen by rememberSaveable { mutableStateOf(false) }
     var isDrawerPinDialogOpen by rememberSaveable { mutableStateOf(false) }
     var selectedActionLineId by rememberSaveable { mutableStateOf<String?>(null) }
     var discountEditor by remember { mutableStateOf<LineDiscountEditorState?>(null) }
@@ -1721,12 +1910,14 @@ private fun RowScope.TicketPane(
                         )
                     }
                 }
-                OutlinedReceiptActionButton(
-                    label = "Uusi lasku",
-                    onClick = onStartNewSale,
-                    enabled = !paymentInProgress,
-                    modifier = Modifier.width(148.dp),
-                )
+                if (!isQuickSaleMode) {
+                    OutlinedReceiptActionButton(
+                        label = "Uusi lasku",
+                        onClick = onStartNewSale,
+                        enabled = !paymentInProgress,
+                        modifier = Modifier.width(148.dp),
+                    )
+                }
             }
 
             Box(
@@ -1917,7 +2108,7 @@ private fun RowScope.TicketPane(
                         )
                     }
                     Button(
-                        onClick = { isPaymentDialogOpen = true },
+                        onClick = onOpenPaymentDialog,
                         modifier = Modifier.weight(1.35f),
                         enabled = ticketLines.isNotEmpty() && !paymentInProgress,
                     ) {
@@ -1938,9 +2129,9 @@ private fun RowScope.TicketPane(
                         !activeTableId.isNullOrBlank() -> activeTableId
                         else -> "Bar"
                     },
-                    onDismiss = { isPaymentDialogOpen = false },
+                    onDismiss = onPaymentDialogClosed,
                     onConfirm = { result ->
-                        isPaymentDialogOpen = false
+                        onPaymentDialogClosed()
                         onConfirmPayment(result)
                     },
                 )

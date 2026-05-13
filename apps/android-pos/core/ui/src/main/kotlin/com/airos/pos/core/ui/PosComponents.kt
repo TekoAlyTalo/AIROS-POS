@@ -102,6 +102,47 @@ fun NumericPinPad(
 }
 
 @Composable
+fun NumericMoneyPad(
+    onDigit: (String) -> Unit,
+    onDecimal: () -> Unit,
+    onBackspace: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        PinPadRow(keys = listOf("1", "2", "3"), onDigit = onDigit, onBackspace = onBackspace)
+        PinPadRow(keys = listOf("4", "5", "6"), onDigit = onDigit, onBackspace = onBackspace)
+        PinPadRow(keys = listOf("7", "8", "9"), onDigit = onDigit, onBackspace = onBackspace)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            listOf("," to onDecimal, "0" to { onDigit("0") }, "⌫" to onBackspace)
+                .forEach { (key, action) ->
+                    Surface(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(64.dp)
+                            .clickable(onClick = action),
+                        shape = RoundedCornerShape(24.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                text = key,
+                                style = MaterialTheme.typography.headlineMedium,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
+                }
+        }
+    }
+}
+
+@Composable
 private fun PinPadRow(
     keys: List<String>,
     onDigit: (String) -> Unit,

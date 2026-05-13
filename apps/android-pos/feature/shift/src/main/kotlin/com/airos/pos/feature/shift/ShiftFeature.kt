@@ -1,20 +1,25 @@
 package com.airos.pos.feature.shift
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -27,6 +32,7 @@ import com.airos.pos.core.model.AttendanceEntry
 import com.airos.pos.core.model.PosShift
 import com.airos.pos.core.model.WorktimeAttendanceSnapshot
 import com.airos.pos.core.ui.KeyValueRow
+import com.airos.pos.core.ui.NumericMoneyPad
 import com.airos.pos.core.ui.PosPane
 import com.airos.pos.core.ui.StatusBanner
 import com.airos.pos.domain.ShiftRepository
@@ -169,6 +175,7 @@ fun ShiftScreen(
         modifier = Modifier.fillMaxSize(),
         horizontalArrangement = Arrangement.spacedBy(20.dp),
     ) {
+        // Left pane: cash entry via on-screen keypad + attendance management
         PosPane(
             title = "Vuoronhallinta",
             supportingText = "Avaa ja sulje kassavuoro paikallisiin kirjauksiin perustuen.",
@@ -181,26 +188,45 @@ fun ShiftScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 state.message?.let { StatusBanner(text = it, tint = MaterialTheme.colorScheme.error) }
-                OutlinedTextField(
-                    value = state.openingFloatInput,
-                    onValueChange = onOpeningFloatChanged,
-                    label = { Text("Pohjakassa (€)") },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Button(
-                    onClick = { currentStaffId?.let(onOpenShift) },
-                    enabled = !state.busy && currentStaffId != null,
-                ) {
-                    Text("Avaa vuoro")
-                }
-                OutlinedTextField(
-                    value = state.countedCashInput,
-                    onValueChange = onCountedCashChanged,
-                    label = { Text("Laskettu käteinen (€)") },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Button(onClick = onCloseShift, enabled = !state.busy && state.currentShift != null) {
-                    Text("Sulje vuoro")
+
+                if (state.currentShift == null) {
+                    Text(
+                        text = "Pohjakassa",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    CashAmountDisplay(state.openingFloatInput)
+                    NumericMoneyPad(
+                        onDigit = { d -> onOpeningFloatChanged(appendShiftMoneyDigit(state.openingFloatInput, d)) },
+                        onDecimal = { onOpeningFloatChanged(appendShiftMoneyDecimal(state.openingFloatInput)) },
+                        onBackspace = { onOpeningFloatChanged(removeShiftMoneyChar(state.openingFloatInput)) },
+                    )
+                    Button(
+                        onClick = { currentStaffId?.let(onOpenShift) },
+                        enabled = !state.busy && currentStaffId != null,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Avaa vuoro")
+                    }
+                } else {
+                    Text(
+                        text = "Laskettu käteinen",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    CashAmountDisplay(state.countedCashInput)
+                    NumericMoneyPad(
+                        onDigit = { d -> onCountedCashChanged(appendShiftMoneyDigit(state.countedCashInput, d)) },
+                        onDecimal = { onCountedCashChanged(appendShiftMoneyDecimal(state.countedCashInput)) },
+                        onBackspace = { onCountedCashChanged(removeShiftMoneyChar(state.countedCashInput)) },
+                    )
+                    Button(
+                        onClick = onCloseShift,
+                        enabled = !state.busy,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Sulje vuoro")
+                    }
                 }
 
                 HorizontalDivider()
@@ -223,7 +249,8 @@ fun ShiftScreen(
                         if (hours > 0) "${hours}h ${mins}min" else "${mins}min"
                     }
                     Text(
-                        text = duration?.let { "Olet kirjautunut työvuoroon ($it)" } ?: "Olet kirjautunut työvuoroon.",
+                        text = duration?.let { "Olet kirjautunut työvuoroon ($it)" }
+                            ?: "Olet kirjautunut työvuoroon.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     OutlinedButton(
@@ -249,6 +276,7 @@ fun ShiftScreen(
             }
         }
 
+        // Right pane: shift status + shift list + staff attendance
         PosPane(
             title = "Vuoron tila",
             supportingText = "Vuoron rahasummat tallennetaan sentteinä täsmällistä rahakirjanpitoa varten.",
@@ -269,10 +297,27 @@ fun ShiftScreen(
                         KeyValueRow("Laskettu käteinen", CentsFormatter.format(counted))
                     }
                 }
-
                 currentStaffName?.let {
                     KeyValueRow("Aktiivinen myyjä", it)
                 }
+
+                HorizontalDivider()
+
+                Text(
+                    text = "Kassavuorolista",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                if (state.currentShift != null) {
+                    ShiftListRow(state.currentShift)
+                } else {
+                    Text(
+                        text = "Ei vuoroja näkyvissä.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                HorizontalDivider()
 
                 Text(
                     text = "Paikalla oleva henkilöstö",
@@ -288,7 +333,6 @@ fun ShiftScreen(
                         AttendanceRow(entry)
                     }
                 }
-
                 if (attendance.clockedInToday.isNotEmpty()) {
                     Text(
                         text = "Tänään kirjautuneet",
@@ -311,6 +355,67 @@ private fun formatShiftStatus(status: String): String {
     }
 }
 
+private fun formatShiftOpenedAt(epochMillis: Long): String {
+    val instant = java.time.Instant.ofEpochMilli(epochMillis)
+    val local = instant.atZone(java.time.ZoneId.systemDefault())
+    return local.format(java.time.format.DateTimeFormatter.ofPattern("d.M. HH:mm"))
+}
+
+private fun appendShiftMoneyDigit(current: String, digit: String): String {
+    val s = current.replace('.', ',').trim()
+    return if (s.contains(',')) {
+        val dec = s.substringAfter(',')
+        if (dec.length >= 2) s else s + digit
+    } else {
+        if (s == "0") digit else s + digit
+    }
+}
+
+private fun appendShiftMoneyDecimal(current: String): String {
+    val s = current.replace('.', ',').trim()
+    return if (s.contains(',')) s else "${s.ifBlank { "0" }},"
+}
+
+private fun removeShiftMoneyChar(current: String): String = current.dropLast(1)
+
+@Composable
+private fun CashAmountDisplay(value: String, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        Box(
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
+            contentAlignment = Alignment.CenterEnd,
+        ) {
+            Text(
+                text = if (value.isBlank()) "0,00 €" else "${value.replace('.', ',')} €",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ShiftListRow(shift: PosShift) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            KeyValueRow("Avattiin", formatShiftOpenedAt(shift.openedAtEpochMillis))
+            KeyValueRow("Pohjakassa", CentsFormatter.format(shift.openingFloatCents))
+            KeyValueRow("Tila", formatShiftStatus(shift.status.name))
+        }
+    }
+}
+
 @Composable
 private fun AttendanceRow(entry: AttendanceEntry) {
     val hours = (entry.durationMinutes / 60).toInt()
@@ -322,5 +427,5 @@ private fun AttendanceRow(entry: AttendanceEntry) {
         "completed" -> "valmis"
         else -> entry.status
     }
-    KeyValueRow(entry.staffName, "$statusLabel \u00B7 $duration")
+    KeyValueRow(entry.staffName, "$statusLabel · $duration")
 }

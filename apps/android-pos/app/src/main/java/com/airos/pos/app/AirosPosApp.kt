@@ -138,6 +138,15 @@ private val SHELL_CONTENT_GUTTER = 12.dp
 private val RAIL_WIDTH = 128.dp
 private val RAIL_BUTTON_WIDTH = 96.dp
 
+private data class ActiveSaleContext(
+    val tableId: String?,
+    val tableLabel: String?,
+    val saleId: String?,
+    val spotType: ServiceSpotType? = null,
+    val maxOpenBills: Int? = null,
+    val returnToTableView: Boolean = false,
+)
+
 private val ShellNowFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 private const val CustomerDisplayLogTag = "SunmiCustomerDisplay"
 private const val NfcLogTag = "AIROS_NFC"
@@ -691,6 +700,14 @@ private fun SignedInApp(
     var todayReservations by remember { mutableStateOf<List<BackendReservation>>(emptyList()) }
     var tableLabelsByBackendId by remember { mutableStateOf<Map<Int, String>>(emptyMap()) }
 
+    // Quick sale / active context state — tracked at shell level to bridge rail nav and MenuScreen.
+    var activeSaleContext by remember { mutableStateOf<ActiveSaleContext?>(null) }
+    var quickSaleHasLines by remember { mutableStateOf(false) }
+    var showQuickSaleLeaveDialog by remember { mutableStateOf(false) }
+    var pendingNavDestination by remember { mutableStateOf<String?>(null) }
+    var openPaymentDialogRequest by remember { mutableStateOf(false) }
+    var clearQuickSaleRequest by remember { mutableStateOf(false) }
+
     LaunchedEffect(appContainer.tableRepository) {
         appContainer.tableRepository.observeFloorMap().collect { floorMap ->
             tableLabelsByBackendId = floorMap.tables
@@ -748,6 +765,47 @@ private fun SignedInApp(
                 signOutPinError = null
                 sellerSwitchDialogVisible = false  // Rule 8: sign-out takes priority
                 signOutDialogVisible = true
+            },
+            isQuickSaleDirty = quickSaleHasLines,
+            onNavigationBlocked = { destination ->
+                pendingNavDestination = destination
+                showQuickSaleLeaveDialog = true
+            },
+            onNavigateToMenu = {
+                val ctx = activeSaleContext
+                if (ctx != null && (ctx.tableId != null || quickSaleHasLines)) {
+                    navController.navigate(
+                        Routes.menu(
+                            tableId = ctx.tableId,
+                            tableLabel = ctx.tableLabel,
+                            saleId = ctx.saleId,
+                            spotType = ctx.spotType,
+                            maxOpenBills = ctx.maxOpenBills,
+                            returnToTableView = ctx.returnToTableView,
+                        ),
+                    )
+                } else {
+                    if (ctx != null && ctx.tableId == null && ctx.saleId != null) {
+                        val saleId = ctx.saleId
+                        scope.launch {
+                            runCatching { appContainer.openSaleRepository.clearOpenSale(saleId) }
+                        }
+                    }
+                    activeSaleContext = null
+                    navController.navigate(Routes.Menu)
+                }
+            },
+            onWillNavigateAway = {
+                val ctx = activeSaleContext
+                if (ctx != null && ctx.tableId == null && !quickSaleHasLines) {
+                    val saleId = ctx.saleId
+                    activeSaleContext = null
+                    if (saleId != null) {
+                        scope.launch {
+                            runCatching { appContainer.openSaleRepository.clearOpenSale(saleId) }
+                        }
+                    }
+                }
             },
         )
 
@@ -1385,6 +1443,14 @@ private fun SignedInApp(
 
                                 if (!blockTableTapMultiBill) {
                                     val selectedSpot = state.floorMap?.tables?.firstOrNull { it.id == tableId }
+                                    activeSaleContext = ActiveSaleContext(
+                                        tableId = tableId,
+                                        tableLabel = tableLabel,
+                                        saleId = saleId,
+                                        spotType = selectedSpot?.spotType,
+                                        maxOpenBills = selectedSpot?.maxOpenBills,
+                                        returnToTableView = true,
+                                    )
                                     navController.navigate(
                                         Routes.menu(
                                             tableId = tableId,
@@ -1627,6 +1693,24 @@ private fun SignedInApp(
                             }
                         }
                     }
+                    // Clear quick sale and navigate to pending destination when requested by leave guard.
+                    LaunchedEffect(clearQuickSaleRequest) {
+                        if (clearQuickSaleRequest) {
+                            viewModel.clearAndAbortQuickSale()
+                            activeSaleContext = null
+                            quickSaleHasLines = false
+                            clearQuickSaleRequest = false
+                            pendingNavDestination?.let { dest ->
+                                navController.navigate(dest)
+                                pendingNavDestination = null
+                            }
+                        }
+                    }
+                    // Collect open sales count for the no-active-bill panel.
+                    val openSalesFlow = remember(appContainer.openSaleRepository) {
+                        appContainer.openSaleRepository.observeOpenSales()
+                    }
+                    val openSales by openSalesFlow.collectAsState(initial = emptyList())
                     MenuScreen(
                         state = state,
                         onAddItemToTicket = viewModel::addToTicket,
@@ -1644,6 +1728,12 @@ private fun SignedInApp(
                                 runCatching {
                                     appContainer.openSaleRepository.createOpenSale(null, null)
                                 }.onSuccess { sale ->
+                                    activeSaleContext = ActiveSaleContext(
+                                        tableId = null,
+                                        tableLabel = null,
+                                        saleId = sale.saleId,
+                                        returnToTableView = returnToTableView,
+                                    )
                                     navController.navigate(
                                         Routes.menu(
                                             saleId = sale.saleId,
@@ -1670,6 +1760,23 @@ private fun SignedInApp(
                         },
                         onOpenServiceSpotSelection = {
                             navController.navigate(Routes.tableMap(menuPlacePicker = true))
+                        },
+                        onNavigateToTableMap = {
+                            if (!navController.popBackStack(Routes.TableMapPattern, inclusive = false)) {
+                                if (!navController.popBackStack(Routes.TableMap, inclusive = false)) {
+                                    navController.navigate(Routes.tableMap())
+                                }
+                            }
+                        },
+                        onQuickSaleLineCountChanged = { count -> quickSaleHasLines = count > 0 },
+                        openSalesCount = openSales.size,
+                        requestOpenPaymentDialog = openPaymentDialogRequest,
+                        onPaymentDialogRequestConsumed = { openPaymentDialogRequest = false },
+                        onClearAndAbortQuickSale = viewModel::clearAndAbortQuickSale,
+                        onSaleJustClosed = {
+                            activeSaleContext = null
+                            quickSaleHasLines = false
+                            viewModel.acknowledgeSaleClosed()
                         },
                         onAcknowledgeCheck = {
                             scope.launch {
@@ -2006,6 +2113,29 @@ private fun SignedInApp(
         }
     }
 
+    if (showQuickSaleLeaveDialog) {
+        QuickSaleLeaveDialog(
+            onPay = {
+                showQuickSaleLeaveDialog = false
+                pendingNavDestination = null
+                openPaymentDialogRequest = true
+            },
+            onMoveToTable = {
+                showQuickSaleLeaveDialog = false
+                pendingNavDestination = null
+                navController.navigate(Routes.tableMap(menuPlacePicker = true))
+            },
+            onClearAndLeave = {
+                showQuickSaleLeaveDialog = false
+                clearQuickSaleRequest = true
+            },
+            onStayOnBill = {
+                showQuickSaleLeaveDialog = false
+                pendingNavDestination = null
+            },
+        )
+    }
+
     if (sellerSwitchDialogVisible) {
         Dialog(onDismissRequest = {
             sellerSwitchDialogVisible = false
@@ -2222,6 +2352,74 @@ private fun WorktimeActiveSession.toAttendanceEntry(
 }
 
 
+@Composable
+private fun QuickSaleLeaveDialog(
+    onPay: () -> Unit,
+    onMoveToTable: () -> Unit,
+    onClearAndLeave: () -> Unit,
+    onStayOnBill: () -> Unit,
+) {
+    Dialog(onDismissRequest = onStayOnBill) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = AppShellPanelColor,
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = "Pikamyyntilasku on auki",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = AppShellTextPrimary,
+                )
+                Text(
+                    text = "Laskulla on avoimia tuotteita. Valitse toiminto ennen poistumista.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = AppShellTextSecondary,
+                )
+                Button(
+                    onClick = onPay,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Maksa")
+                }
+                Button(
+                    onClick = onMoveToTable,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = AppShellButtonColor,
+                        contentColor = AppShellTextPrimary,
+                    ),
+                ) {
+                    Text("Siirrä pöytään")
+                }
+                Button(
+                    onClick = onClearAndLeave,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = AppShellButtonColor,
+                        contentColor = AppShellTextPrimary,
+                    ),
+                ) {
+                    Text("Tyhjennä ja sulje")
+                }
+                Button(
+                    onClick = onStayOnBill,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = AppShellButtonMutedColor,
+                        contentColor = AppShellTextSecondary,
+                    ),
+                ) {
+                    Text("Palaa laskulle")
+                }
+            }
+        }
+    }
+}
+
+
 private fun isRailDestinationSelected(
     currentRoute: String?,
     destinationRoute: String,
@@ -2240,6 +2438,10 @@ private fun AppRail(
     currentStaffName: String,
     onSellerSwitchRequested: () -> Unit,
     onSignOut: () -> Unit,
+    isQuickSaleDirty: Boolean = false,
+    onNavigationBlocked: ((String) -> Unit)? = null,
+    onNavigateToMenu: (() -> Unit)? = null,
+    onWillNavigateAway: (() -> Unit)? = null,
 ) {
     val strings = rememberCashierStrings()
     val backStackEntry by navController.currentBackStackEntryAsState()
@@ -2278,18 +2480,25 @@ private fun AppRail(
                     iconTint = destination.iconTint,
                     selected = isRailDestinationSelected(currentRoute, destination.route),
                     onClick = {
-                        if (destination.route == Routes.TableMap) {
+                        val alreadySelected = isRailDestinationSelected(currentRoute, destination.route)
+                        if (isQuickSaleDirty && !alreadySelected) {
+                            onNavigationBlocked?.invoke(destination.route)
+                        } else if (destination.route == Routes.TableMap) {
                             val previousRoute = navController.previousBackStackEntry?.destination?.route
-                            when {
-                                isRailDestinationSelected(currentRoute, destination.route) -> Unit
-                                previousRoute == Routes.TableMap || previousRoute == Routes.TableMapPattern ->
+                            if (!alreadySelected) {
+                                onWillNavigateAway?.invoke()
+                                if (previousRoute == Routes.TableMap || previousRoute == Routes.TableMapPattern) {
                                     navController.popBackStack()
-                                else ->
+                                } else {
                                     navController.navigate(Routes.tableMap()) {
                                         launchSingleTop = true
                                     }
+                                }
                             }
+                        } else if (destination.route == Routes.Menu) {
+                            if (!alreadySelected) onNavigateToMenu?.invoke()
                         } else {
+                            onWillNavigateAway?.invoke()
                             navController.navigate(destination.route)
                         }
                     },
