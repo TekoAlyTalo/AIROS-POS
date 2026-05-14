@@ -21,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 @Composable
@@ -107,32 +108,57 @@ fun NumericMoneyPad(
     onDecimal: () -> Unit,
     onBackspace: () -> Unit,
     modifier: Modifier = Modifier,
+    keyHeight: Dp = 64.dp,
+    keyColor: Color = MaterialTheme.colorScheme.surfaceVariant,
+    keyContentColor: Color = MaterialTheme.colorScheme.onSurface,
 ) {
     Column(
         modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        PinPadRow(keys = listOf("1", "2", "3"), onDigit = onDigit, onBackspace = onBackspace)
-        PinPadRow(keys = listOf("4", "5", "6"), onDigit = onDigit, onBackspace = onBackspace)
-        PinPadRow(keys = listOf("7", "8", "9"), onDigit = onDigit, onBackspace = onBackspace)
+        PinPadRow(
+            keys = listOf("1", "2", "3"),
+            onDigit = onDigit,
+            onBackspace = onBackspace,
+            keyHeight = keyHeight,
+            keyColor = keyColor,
+            keyContentColor = keyContentColor,
+        )
+        PinPadRow(
+            keys = listOf("4", "5", "6"),
+            onDigit = onDigit,
+            onBackspace = onBackspace,
+            keyHeight = keyHeight,
+            keyColor = keyColor,
+            keyContentColor = keyContentColor,
+        )
+        PinPadRow(
+            keys = listOf("7", "8", "9"),
+            onDigit = onDigit,
+            onBackspace = onBackspace,
+            keyHeight = keyHeight,
+            keyColor = keyColor,
+            keyContentColor = keyContentColor,
+        )
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             listOf("," to onDecimal, "0" to { onDigit("0") }, "⌫" to onBackspace)
                 .forEach { (key, action) ->
                     Surface(
                         modifier = Modifier
                             .weight(1f)
-                            .height(64.dp)
+                            .height(keyHeight)
                             .clickable(onClick = action),
-                        shape = RoundedCornerShape(24.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(16.dp),
+                        color = keyColor,
+                        contentColor = keyContentColor,
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Text(
                                 text = key,
-                                style = MaterialTheme.typography.headlineMedium,
+                                style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.Bold,
                             )
                         }
@@ -147,31 +173,35 @@ private fun PinPadRow(
     keys: List<String>,
     onDigit: (String) -> Unit,
     onBackspace: () -> Unit,
+    keyHeight: Dp = 64.dp,
+    keyColor: Color = MaterialTheme.colorScheme.surfaceVariant,
+    keyContentColor: Color = MaterialTheme.colorScheme.onSurface,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         keys.forEach { key ->
             if (key.isEmpty()) {
                 Spacer(
                     modifier = Modifier
                         .weight(1f)
-                        .height(64.dp),
+                        .height(keyHeight),
                 )
             } else {
                 Surface(
                     modifier = Modifier
                         .weight(1f)
-                        .height(64.dp)
+                        .height(keyHeight)
                         .clickable {
                             if (key == "⌫") onBackspace() else onDigit(key)
                         },
-                    shape = RoundedCornerShape(24.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = RoundedCornerShape(16.dp),
+                    color = keyColor,
+                    contentColor = keyContentColor,
                 ) {
                     Box(contentAlignment = Alignment.Center) {
-                        Text(text = key, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                        Text(text = key, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                     }
                 }
             }

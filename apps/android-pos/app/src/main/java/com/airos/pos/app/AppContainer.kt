@@ -36,6 +36,7 @@ import com.airos.pos.domain.PaymentRepository
 import com.airos.pos.domain.SettingsRepository
 import com.airos.pos.domain.StaffUiPreferencesRepository
 import com.airos.pos.domain.ShiftRepository
+import com.airos.pos.domain.ShiftScheduleRepository
 import com.airos.pos.domain.SyncQueueRepository
 import com.airos.pos.domain.TableRepository
 import com.airos.pos.domain.TicketRepository
@@ -56,6 +57,7 @@ interface AppContainer {
     val authRepository: AuthRepository
     val openSaleRepository: OpenSaleRepository
     val shiftRepository: ShiftRepository
+    val shiftScheduleRepository: ShiftScheduleRepository
     val tableRepository: TableRepository
     val menuRepository: MenuRepository
     val ticketRepository: TicketRepository
@@ -117,6 +119,10 @@ class DefaultAppContainer(
     override val nfcStaffResolver: NfcStaffResolver = RepositoryNfcStaffResolver(roomNfcIdentityRepository)
     override val openSaleRepository: OpenSaleRepository = RoomOpenSaleRepository(database.openSaleDao())
     override val shiftRepository: ShiftRepository = FakeShiftRepository(store, syncQueueRepository)
+    override val shiftScheduleRepository: ShiftScheduleRepository = BackendShiftScheduleRepository(
+        backendBaseUrlProvider = { currentLedgerBackendBaseUrl().orEmpty() },
+        restaurantKeyProvider = { currentRestaurantKey() },
+    )
     private val localTableRepository = FakeTableRepository(store, syncQueueRepository)
     // Write-through sink: apply backend truth to the in-memory delegate AND
     // persist it to the durable floor-map cache so the next cold start has a

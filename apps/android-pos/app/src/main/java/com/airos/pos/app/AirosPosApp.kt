@@ -81,6 +81,7 @@ import com.airos.pos.core.model.WorktimeAttendanceSnapshot
 import com.airos.pos.core.model.ManagerOverrideReason
 import com.airos.pos.core.model.ScanEvent
 import com.airos.pos.core.model.ServiceSpotType
+import com.airos.pos.core.model.ShiftScheduleSnapshot
 import com.airos.pos.core.model.TerminalSettings
 import com.airos.pos.domain.MenuSyncResult
 import com.airos.pos.feature.auth.AuthScreen
@@ -117,6 +118,7 @@ import com.airos.pos.core.ui.NumericPinPad
 import kotlinx.coroutines.withContext
 import java.time.Duration
 import java.time.Instant
+import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
 import java.time.ZoneId
@@ -834,6 +836,16 @@ private fun SignedInApp(
                     val attendanceRepository = appContainer.worktimeAttendanceRepository
                     val attendanceFlow = remember(attendanceRepository) { attendanceRepository.observeAttendance() }
                     val attendance by attendanceFlow.collectAsState(initial = WorktimeAttendanceSnapshot())
+                    val shiftScheduleRepository = appContainer.shiftScheduleRepository
+                    val scheduleToday = remember { LocalDate.now() }
+                    val scheduleDateFrom = remember(scheduleToday) { scheduleToday.minusDays(1) }
+                    val scheduleDateTo = remember(scheduleToday) { scheduleToday.plusDays(20) }
+                    var scheduleSnapshot by remember { mutableStateOf<ShiftScheduleSnapshot?>(null) }
+                    var scheduleLoading by remember { mutableStateOf(false) }
+                    var scheduleMessage by remember { mutableStateOf<String?>(null) }
+                    var ownScheduleSnapshot by remember(currentStaffId) { mutableStateOf<ShiftScheduleSnapshot?>(null) }
+                    var ownScheduleLoading by remember(currentStaffId) { mutableStateOf(false) }
+                    var ownScheduleMessage by remember(currentStaffId) { mutableStateOf<String?>(null) }
                     val currentUserStateFlow = remember(attendanceRepository, currentStaffId) { attendanceRepository.observeCurrentUserState(currentStaffId) }
                     val currentAttendance by currentUserStateFlow.collectAsState(initial = WorktimeEffectiveAttendanceState())
                     val attendanceScope = rememberCoroutineScope()
@@ -842,6 +854,43 @@ private fun SignedInApp(
 
                     LaunchedEffect(attendanceRepository, currentStaffId, currentStaffName) {
                         attendanceRepository.syncAndRefreshCurrentUser(currentStaffId, currentStaffName)
+                    }
+
+                    LaunchedEffect(shiftScheduleRepository, currentStaffId, scheduleDateFrom, scheduleDateTo) {
+                        scheduleLoading = true
+                        scheduleMessage = null
+                        ownScheduleLoading = currentStaffId.isNotBlank()
+                        ownScheduleMessage = null
+
+                        when (val result = shiftScheduleRepository.fetchPosSchedule(scheduleDateFrom, scheduleDateTo)) {
+                            is PosResult.Success -> {
+                                scheduleSnapshot = result.value
+                                scheduleMessage = null
+                            }
+                            is PosResult.Failure -> {
+                                scheduleSnapshot = null
+                                scheduleMessage = result.message
+                            }
+                        }
+                        scheduleLoading = false
+
+                        if (currentStaffId.isBlank()) {
+                            ownScheduleSnapshot = null
+                            ownScheduleMessage = "Omia vuoroja ei voi hakea ilman aktiivista henkilöllisyyttä."
+                            ownScheduleLoading = false
+                        } else {
+                            when (val result = shiftScheduleRepository.fetchOwnShifts(currentStaffId, scheduleDateFrom, scheduleDateTo)) {
+                                is PosResult.Success -> {
+                                    ownScheduleSnapshot = result.value
+                                    ownScheduleMessage = null
+                                }
+                                is PosResult.Failure -> {
+                                    ownScheduleSnapshot = null
+                                    ownScheduleMessage = result.message
+                                }
+                            }
+                            ownScheduleLoading = false
+                        }
                     }
 
                     val polledMyEntry = attendance.currentlyOnSite.find { it.staffId == currentStaffId }
@@ -903,13 +952,18 @@ private fun SignedInApp(
                         state = state,
                         currentStaffId = currentStaffId,
                         currentStaffName = currentStaffName,
-                        onOpeningFloatChanged = viewModel::updateOpeningFloat,
                         onCountedCashChanged = viewModel::updateCountedCash,
                         onOpenShift = viewModel::openShift,
                         onCloseShift = viewModel::closeShift,
                         attendance = effectiveAttendance,
                         isClockedIn = isClockedIn,
                         myAttendanceEntry = myEntry,
+                        schedule = scheduleSnapshot,
+                        scheduleLoading = scheduleLoading,
+                        scheduleMessage = scheduleMessage,
+                        ownSchedule = ownScheduleSnapshot,
+                        ownScheduleLoading = ownScheduleLoading,
+                        ownScheduleMessage = ownScheduleMessage,
                         attendanceStateLoading = false,
                         attendanceBusy = attendanceBusy,
                         attendanceNoticeMessage = attendanceNoticeMessage,

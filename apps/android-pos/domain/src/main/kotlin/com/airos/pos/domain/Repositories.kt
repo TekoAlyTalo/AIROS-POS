@@ -19,6 +19,7 @@ import com.airos.pos.core.model.TablePaymentResult
 import com.airos.pos.core.model.RefundRequest
 import com.airos.pos.core.model.RestaurantTable
 import com.airos.pos.core.model.ServiceSpotType
+import com.airos.pos.core.model.ShiftScheduleSnapshot
 import com.airos.pos.core.model.StaffMember
 import com.airos.pos.core.model.PersistedOpenSale
 import com.airos.pos.core.model.PersistedOpenSaleLine
@@ -30,6 +31,7 @@ import com.airos.pos.core.model.TerminalSettings
 import com.airos.pos.core.model.StaffUiPreferences
 import com.airos.pos.core.model.StaffTableMapViewPreference
 import com.airos.pos.core.model.Ticket
+import java.time.LocalDate
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -51,6 +53,15 @@ interface ShiftRepository {
     fun observeCurrentShift(): Flow<PosShift?>
     suspend fun openShift(openingFloatCents: Int, staffId: String): PosResult<PosShift>
     suspend fun closeShift(countedCashCents: Int, managerPin: String? = null): PosResult<PosShift>
+}
+
+interface ShiftScheduleRepository {
+    suspend fun fetchPosSchedule(dateFrom: LocalDate, dateTo: LocalDate): PosResult<ShiftScheduleSnapshot>
+    suspend fun fetchOwnShifts(
+        staffId: String,
+        dateFrom: LocalDate,
+        dateTo: LocalDate,
+    ): PosResult<ShiftScheduleSnapshot>
 }
 
 interface TableRepository {

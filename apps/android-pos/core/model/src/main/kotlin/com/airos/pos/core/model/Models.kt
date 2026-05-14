@@ -1,5 +1,7 @@
 package com.airos.pos.core.model
 
+import java.time.LocalDate
+import java.time.LocalDateTime
 import java.util.UUID
 
 enum class StaffRole {
@@ -507,6 +509,37 @@ data class AttendanceEntry(
 data class WorktimeAttendanceSnapshot(
     val currentlyOnSite: List<AttendanceEntry> = emptyList(),
     val clockedInToday: List<AttendanceEntry> = emptyList(),
+)
+
+enum class ShiftSchedulePublicationStatus {
+    UNPUBLISHED,
+    DRAFT,
+    PUBLISHED,
+    CLOSED,
+}
+
+data class PlannedStaffShift(
+    val id: Int,
+    val staffId: String,
+    val staffName: String,
+    val startsAt: LocalDateTime,
+    val endsAt: LocalDateTime,
+    val role: String? = null,
+    val status: String? = null,
+    val source: String? = null,
+)
+
+data class ShiftScheduleDay(
+    val date: LocalDate,
+    val publicationStatus: ShiftSchedulePublicationStatus,
+    val plannedShifts: List<PlannedStaffShift> = emptyList(),
+)
+
+data class ShiftScheduleSnapshot(
+    val restaurantKey: String,
+    val dateFrom: LocalDate,
+    val dateTo: LocalDate,
+    val days: List<ShiftScheduleDay> = emptyList(),
 )
 
 enum class PaymentMethod {

@@ -1,25 +1,48 @@
 package com.airos.pos.feature.shift
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -29,18 +52,52 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.airos.pos.core.common.CentsFormatter
 import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.model.AttendanceEntry
+import com.airos.pos.core.model.PlannedStaffShift
 import com.airos.pos.core.model.PosShift
+import com.airos.pos.core.model.ShiftScheduleDay
+import com.airos.pos.core.model.ShiftSchedulePublicationStatus
+import com.airos.pos.core.model.ShiftScheduleSnapshot
 import com.airos.pos.core.model.WorktimeAttendanceSnapshot
-import com.airos.pos.core.ui.KeyValueRow
 import com.airos.pos.core.ui.NumericMoneyPad
-import com.airos.pos.core.ui.PosPane
-import com.airos.pos.core.ui.StatusBanner
 import com.airos.pos.domain.ShiftRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.time.Duration
+import java.time.Instant
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.temporal.ChronoUnit
+import java.time.format.DateTimeFormatter
+import java.util.Locale
+
+private val ShiftPageBackground = Color(0xFF0D151E)
+private val ShiftPanelColor = Color(0xFF111B25)
+private val ShiftPanelRaisedColor = Color(0xFF152231)
+private val ShiftPanelDeepColor = Color(0xFF09111A)
+private val ShiftBorderColor = Color(0x2637D6C8)
+private val ShiftBorderWarmColor = Color(0x38D6A557)
+private val ShiftTextPrimary = Color(0xFFF8FBFF)
+private val ShiftTextSecondary = Color(0xFFDDE8EF)
+private val ShiftTextMuted = Color(0xFF9FB0BD)
+private val ShiftCyan = Color(0xFF85F5E0)
+private val ShiftCyanSoft = Color(0xFF2C7C80)
+private val ShiftGold = Color(0xFFD6A557)
+private val ShiftSuccess = Color(0xFF7DD88F)
+private val ShiftWarning = Color(0xFFE5B65D)
+private val ShiftUpcoming = Color(0xFF5CAEFF)
+private val ShiftAbsent = Color(0xFFB0A7D8)
+private val ShiftDanger = Color(0xFFFF6B65)
+private val ShiftLineColor = Color(0x1AFFFFFF)
+private val ShiftKeyColor = Color(0xFF182633)
+private val ShiftKeyContentColor = Color(0xFFEAF5FA)
+private val ShiftJournalDayFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy", Locale.getDefault())
+private val ShiftJournalTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm", Locale.getDefault())
+private val ShiftCardShape = RoundedCornerShape(26.dp)
+private val ShiftInnerShape = RoundedCornerShape(18.dp)
 
 data class ShiftUiState(
     val currentShift: PosShift? = null,
@@ -122,9 +179,7 @@ class ShiftViewModel(
         fun euroInputToCents(input: String): Int? {
             val trimmed = input.trim()
             if (trimmed.isEmpty()) return null
-            // Normalize: replace comma with period for parsing
             val normalized = trimmed.replace(',', '.')
-            // Reject multiple dots, leading dots without digit, etc.
             if (normalized.count { it == '.' } > 1) return null
             val parts = normalized.split('.')
             val integerPart = parts[0].toLongOrNull() ?: return null
@@ -132,7 +187,6 @@ class ShiftViewModel(
             val fractionCents = if (parts.size == 2) {
                 val frac = parts[1]
                 if (frac.length > 2 || frac.isEmpty()) return null
-                // "5" → 50 cents, "50" → 50 cents, "03" → 3 cents
                 val padded = frac.padEnd(2, '0')
                 padded.toIntOrNull() ?: return null
             } else {
@@ -157,13 +211,18 @@ fun ShiftScreen(
     state: ShiftUiState,
     currentStaffId: String?,
     currentStaffName: String? = null,
-    onOpeningFloatChanged: (String) -> Unit,
     onCountedCashChanged: (String) -> Unit,
     onOpenShift: (String) -> Unit,
     onCloseShift: () -> Unit,
     attendance: WorktimeAttendanceSnapshot = WorktimeAttendanceSnapshot(),
     isClockedIn: Boolean = false,
     myAttendanceEntry: AttendanceEntry? = null,
+    schedule: ShiftScheduleSnapshot? = null,
+    scheduleLoading: Boolean = false,
+    scheduleMessage: String? = null,
+    ownSchedule: ShiftScheduleSnapshot? = null,
+    ownScheduleLoading: Boolean = false,
+    ownScheduleMessage: String? = null,
     attendanceStateLoading: Boolean = false,
     attendanceBusy: Boolean = false,
     attendanceNoticeMessage: String? = null,
@@ -171,181 +230,1100 @@ fun ShiftScreen(
     onClockIn: () -> Unit = {},
     onClockOut: () -> Unit = {},
 ) {
-    Row(
-        modifier = Modifier.fillMaxSize(),
-        horizontalArrangement = Arrangement.spacedBy(20.dp),
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(ShiftPageBackground)
+            .padding(4.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        // Left pane: cash entry via on-screen keypad + attendance management
-        PosPane(
-            title = "Vuoronhallinta",
-            supportingText = "Avaa ja sulje kassavuoro paikallisiin kirjauksiin perustuen.",
-            modifier = Modifier.weight(1f),
+        ShiftHeader()
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(0.58f),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            ShiftSchedulePulseCard(
+                schedule = schedule,
+                attendance = attendance,
+                loading = scheduleLoading,
+                message = scheduleMessage,
+                modifier = Modifier
+                    .weight(1.7f)
+                    .fillMaxHeight(),
+            )
+            ShiftJournalCard(
+                state = state,
+                currentStaffName = currentStaffName,
+                isClockedIn = isClockedIn,
+                attendance = attendance,
+                attendanceNoticeMessage = attendanceNoticeMessage,
+                attendanceMessage = attendanceMessage,
+                modifier = Modifier
+                    .weight(0.9f)
+                    .fillMaxHeight(),
+            )
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(0.42f),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            OwnShiftsCard(
+                schedule = ownSchedule,
+                currentStaffId = currentStaffId,
+                loading = ownScheduleLoading,
+                message = ownScheduleMessage,
+                modifier = Modifier
+                    .weight(1.35f)
+                    .fillMaxHeight(),
+            )
+            OnSiteAttendanceCard(
+                attendance = attendance,
+                modifier = Modifier
+                    .weight(0.95f)
+                    .fillMaxHeight(),
+            )
+            CashShiftCard(
+                state = state,
+                currentStaffId = currentStaffId,
+                onCountedCashChanged = onCountedCashChanged,
+                onOpenShift = onOpenShift,
+                onCloseShift = onCloseShift,
+                modifier = Modifier
+                    .weight(0.78f)
+                    .fillMaxHeight(),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ShiftHeader() {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(58.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = "Vuoro",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = ShiftTextPrimary,
+                )
+                Text(
+                    text = "✦",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = ShiftGold,
+                )
+            }
+            Text(
+                text = "Hallitse kassavuoroa, työaikaa ja henkilöstöä.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = ShiftTextMuted,
+            )
+        }
+    }
+}
+
+@Composable
+private fun CashShiftCard(
+    state: ShiftUiState,
+    currentStaffId: String?,
+    onCountedCashChanged: (String) -> Unit,
+    onOpenShift: (String) -> Unit,
+    onCloseShift: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val currentShift = state.currentShift
+    val isOpen = currentShift != null
+    var cashCounterOpen by remember(isOpen) { mutableStateOf(false) }
+
+    ShiftCard(
+        title = "Kassavuoro",
+        icon = "▣",
+        modifier = modifier,
+        statusLabel = if (isOpen) "Avoin" else "Suljettu",
+        statusColor = if (isOpen) ShiftSuccess else ShiftWarning,
+    ) {
+        state.message?.let { ShiftStatusBanner(text = it, tint = ShiftDanger) }
+
+        Row(
+            modifier = Modifier.fillMaxSize(),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                    .weight(0.78f)
+                    .fillMaxHeight(),
+                verticalArrangement = Arrangement.spacedBy(9.dp),
             ) {
-                state.message?.let { StatusBanner(text = it, tint = MaterialTheme.colorScheme.error) }
-
-                if (state.currentShift == null) {
+                if (isOpen) {
+                    ShiftKeyValueRow("Avaaja", currentShift?.openedByStaffId.orEmpty())
+                    ShiftKeyValueRow("Pohjakassa", CentsFormatter.format(currentShift!!.openingFloatCents), highlight = true)
+                    ShiftKeyValueRow("Odotettu käteinen", CentsFormatter.format(currentShift.expectedCashCents), highlight = true)
+                    ShiftKeyValueRow(
+                        label = "Laskettu käteinen",
+                        value = displayMoneyInput(state.countedCashInput),
+                        highlight = state.countedCashInput.isNotBlank(),
+                    )
+                    Text(
+                        text = "Sulje kassavuoro laskemalla käteinen ja vahvistamalla sulku.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ShiftTextMuted,
+                    )
+                } else {
                     Text(
                         text = "Pohjakassa",
                         style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = ShiftTextMuted,
                     )
-                    CashAmountDisplay(state.openingFloatInput)
-                    NumericMoneyPad(
-                        onDigit = { d -> onOpeningFloatChanged(appendShiftMoneyDigit(state.openingFloatInput, d)) },
-                        onDecimal = { onOpeningFloatChanged(appendShiftMoneyDecimal(state.openingFloatInput)) },
-                        onBackspace = { onOpeningFloatChanged(removeShiftMoneyChar(state.openingFloatInput)) },
-                    )
-                    Button(
-                        onClick = { currentStaffId?.let(onOpenShift) },
-                        enabled = !state.busy && currentStaffId != null,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("Avaa vuoro")
-                    }
-                } else {
                     Text(
-                        text = "Laskettu käteinen",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        text = displayMoneyInput(state.openingFloatInput),
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = ShiftGold,
                     )
-                    CashAmountDisplay(state.countedCashInput)
-                    NumericMoneyPad(
-                        onDigit = { d -> onCountedCashChanged(appendShiftMoneyDigit(state.countedCashInput, d)) },
-                        onDecimal = { onCountedCashChanged(appendShiftMoneyDecimal(state.countedCashInput)) },
-                        onBackspace = { onCountedCashChanged(removeShiftMoneyChar(state.countedCashInput)) },
+                    Text(
+                        text = "Pohjakassa luetaan POS-asetuksista. Avaa kassavuoro valitulle käyttäjälle.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ShiftTextMuted,
                     )
-                    Button(
-                        onClick = onCloseShift,
-                        enabled = !state.busy,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("Sulje vuoro")
-                    }
                 }
 
-                HorizontalDivider()
+                Spacer(modifier = Modifier.weight(1f))
 
-                Text(
-                    text = "Työaika",
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                attendanceNoticeMessage?.let { StatusBanner(text = it, tint = MaterialTheme.colorScheme.primary) }
-                attendanceMessage?.let { StatusBanner(text = it, tint = MaterialTheme.colorScheme.error) }
-                if (attendanceStateLoading) {
+                Button(
+                    onClick = {
+                        if (isOpen) {
+                            onCloseShift()
+                        } else {
+                            currentStaffId?.let(onOpenShift)
+                        }
+                    },
+                    enabled = !state.busy && (isOpen || currentStaffId != null),
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isOpen) ShiftGold.copy(alpha = 0.82f) else ShiftCyan.copy(alpha = 0.82f),
+                        contentColor = Color(0xFF071109),
+                        disabledContainerColor = ShiftPanelRaisedColor,
+                        disabledContentColor = ShiftTextMuted,
+                    ),
+                    shape = RoundedCornerShape(16.dp),
+                ) {
                     Text(
-                        text = if (attendanceMessage == null) "Tarkistetaan työaikatilaa..." else "Työaikatila ei ole saatavilla.",
-                        style = MaterialTheme.typography.bodyMedium,
+                        text = if (isOpen) "Sulje vuoro" else "Avaa vuoro",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
                     )
-                } else if (isClockedIn) {
-                    val duration = myAttendanceEntry?.let { entry ->
-                        val hours = (entry.durationMinutes / 60).toInt()
-                        val mins = (entry.durationMinutes % 60).toInt()
-                        if (hours > 0) "${hours}h ${mins}min" else "${mins}min"
-                    }
-                    Text(
-                        text = duration?.let { "Olet kirjautunut työvuoroon ($it)" }
-                            ?: "Olet kirjautunut työvuoroon.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    OutlinedButton(
-                        onClick = onClockOut,
-                        enabled = !attendanceBusy,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("Kirjaa ulos")
-                    }
-                } else {
-                    Text(
-                        text = "Et ole kirjautunut työvuoroon.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Button(
-                        onClick = onClockIn,
-                        enabled = !attendanceBusy && currentStaffId != null,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("Kirjaa sisään")
-                    }
                 }
             }
-        }
 
-        // Right pane: shift status + shift list + staff attendance
-        PosPane(
-            title = "Vuoron tila",
-            supportingText = "Vuoron rahasummat tallennetaan sentteinä täsmällistä rahakirjanpitoa varten.",
-            modifier = Modifier.weight(1f),
-        ) {
             Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                    .weight(0.80f)
+                    .fillMaxHeight(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                KeyValueRow("Tila", formatShiftStatus(state.currentShift?.status?.name ?: "CLOSED"))
-                state.currentShift?.let { shift ->
-                    KeyValueRow("Avaaja", shift.openedByStaffId)
-                    KeyValueRow("Pohjakassa", CentsFormatter.format(shift.openingFloatCents))
-                    KeyValueRow("Odotettu käteinen", CentsFormatter.format(shift.expectedCashCents))
-                    shift.countedCashCents?.let { counted ->
-                        KeyValueRow("Laskettu käteinen", CentsFormatter.format(counted))
-                    }
-                }
-                currentStaffName?.let {
-                    KeyValueRow("Aktiivinen myyjä", it)
-                }
-
-                HorizontalDivider()
-
-                Text(
-                    text = "Kassavuorolista",
-                    style = MaterialTheme.typography.titleMedium,
+                CashAmountDisplay(
+                    value = if (isOpen) state.countedCashInput else state.openingFloatInput,
+                    label = if (isOpen) "Laskettu käteinen" else "Pohjakassa",
                 )
-                if (state.currentShift != null) {
-                    ShiftListRow(state.currentShift)
-                } else {
-                    Text(
-                        text = "Ei vuoroja näkyvissä.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+
+                if (isOpen && cashCounterOpen) {
+                    NumericMoneyPad(
+                        onDigit = { digit ->
+                            onCountedCashChanged(appendShiftMoneyDigit(state.countedCashInput, digit))
+                        },
+                        onDecimal = {
+                            onCountedCashChanged(appendShiftMoneyDecimal(state.countedCashInput))
+                        },
+                        onBackspace = {
+                            onCountedCashChanged(removeShiftMoneyChar(state.countedCashInput))
+                        },
+                        keyHeight = 30.dp,
+                        keyColor = ShiftKeyColor,
+                        keyContentColor = ShiftKeyContentColor,
                     )
-                }
-
-                HorizontalDivider()
-
-                Text(
-                    text = "Paikalla oleva henkilöstö",
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                if (attendance.currentlyOnSite.isEmpty()) {
-                    Text(
-                        text = "Ei aktiivisia työvuoroja.",
-                        style = MaterialTheme.typography.bodyMedium,
+                    ShiftMiniActionButton(
+                        text = "Valmis",
+                        onClick = { cashCounterOpen = false },
+                        tint = ShiftCyan,
                     )
                 } else {
-                    attendance.currentlyOnSite.forEach { entry ->
-                        AttendanceRow(entry)
+                    if (isOpen) {
+                        ShiftMiniActionButton(
+                            text = "Laske käteinen",
+                            onClick = { cashCounterOpen = true },
+                            tint = ShiftCyan,
+                        )
                     }
-                }
-                if (attendance.clockedInToday.isNotEmpty()) {
                     Text(
-                        text = "Tänään kirjautuneet",
-                        style = MaterialTheme.typography.titleMedium,
+                        text = if (isOpen) {
+                            "Näppäimistö avataan vain käteisen laskentaa varten."
+                        } else {
+                            "Pohjakassan muokkaus tehdään POS-asetuksissa."
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ShiftTextMuted,
                     )
-                    attendance.clockedInToday.forEach { entry ->
-                        AttendanceRow(entry)
-                    }
                 }
             }
         }
     }
 }
+
+@Composable
+private fun OnSiteAttendanceCard(
+    attendance: WorktimeAttendanceSnapshot,
+    modifier: Modifier = Modifier,
+) {
+    ShiftCard(
+        title = "Paikalla oleva henkilöstö",
+        icon = "☷",
+        modifier = modifier,
+        statusLabel = attendance.currentlyOnSite.size.takeIf { it > 0 }?.toString(),
+        statusColor = ShiftGold,
+    ) {
+        val entries = attendance.currentlyOnSite
+        if (entries.isEmpty()) {
+            ShiftEmptyText("Ei aktiivisia työvuoroja.")
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                entries.forEach { entry ->
+                    AttendanceCompactRow(entry)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ShiftSchedulePulseCard(
+    schedule: ShiftScheduleSnapshot?,
+    attendance: WorktimeAttendanceSnapshot,
+    loading: Boolean,
+    message: String?,
+    modifier: Modifier = Modifier,
+) {
+    ShiftCard(
+        title = "Työvuoropulssi",
+        icon = "⌁",
+        modifier = modifier,
+    ) {
+        val now = LocalDateTime.now()
+        val windowStart = now.minusHours(4).truncatedTo(ChronoUnit.HOURS)
+        val windowEnd = windowStart.plusHours(8)
+        val publishedDays = schedule?.days.orEmpty().filter { it.hasPublishedScheduleTruth() }
+        val visibleShifts = publishedDays
+            .flatMap { it.plannedShifts }
+            .filter { it.overlaps(windowStart, windowEnd) }
+            .sortedWith(compareBy<PlannedStaffShift> { it.startsAt }.thenBy { it.staffName })
+
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            when {
+                loading && schedule == null -> ShiftEmptyText("Haetaan työvuorosuunnitelmaa backendistä.")
+                message != null && schedule == null -> ShiftStatusBanner(
+                    text = "Työvuorosuunnitelma ei ole saatavilla: $message",
+                    tint = ShiftWarning,
+                )
+                schedule == null -> ShiftEmptyText("Työvuorosuunnitelma ei ole saatavilla.")
+                publishedDays.isEmpty() -> ShiftEmptyText("Aikavälillä ei ole julkaistua työvuorosuunnitelmaa.")
+                visibleShifts.isEmpty() -> ShiftEmptyText("Julkaistuilla päivillä ei ole suunniteltuja vuoroja tässä 8 tunnin ikkunassa.")
+                else -> {
+                    Text(
+                        text = "${formatPulseWindowTime(windowStart)}-${formatPulseWindowTime(windowEnd)}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = ShiftTextMuted,
+                    )
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .horizontalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        PulseTimelineHeader(windowStart = windowStart)
+                        Column(
+                            modifier = Modifier
+                                .width(PulseTimelineWidth)
+                                .verticalScroll(rememberScrollState()),
+                        ) {
+                            visibleShifts.forEachIndexed { index, shift ->
+                                PulseTimelineShiftRow(
+                                    shift = shift,
+                                    attendance = attendance,
+                                    now = now,
+                                    windowStart = windowStart,
+                                    windowEnd = windowEnd,
+                                )
+                                if (index != visibleShifts.lastIndex) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(1.dp)
+                                            .background(ShiftLineColor),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (message != null && schedule != null) {
+                ShiftStatusBanner(
+                    text = "Työvuorosuunnitelma käyttää viimeksi ladattua näkymää: $message",
+                    tint = ShiftWarning,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun OwnShiftsCard(
+    schedule: ShiftScheduleSnapshot?,
+    currentStaffId: String?,
+    loading: Boolean,
+    message: String?,
+    modifier: Modifier = Modifier,
+) {
+    ShiftCard(
+        title = "Omat vuorot",
+        icon = "▤",
+        modifier = modifier,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            when {
+                currentStaffId.isNullOrBlank() -> ShiftEmptyText("Omia vuoroja ei voi näyttää ilman aktiivista POS-henkilöä.")
+                loading && schedule == null -> ShiftEmptyText("Haetaan omia julkaistuja vuoroja backendistä.")
+                message != null && schedule == null -> ShiftStatusBanner(
+                    text = "Omat vuorot eivät ole saatavilla: $message",
+                    tint = ShiftWarning,
+                )
+                schedule == null -> ShiftEmptyText("Omia suunniteltuja vuoroja ei ole ladattu.")
+                else -> {
+                    val publishedDays = schedule.days.filter { it.hasPublishedScheduleTruth() }
+                    val ownShifts = publishedDays
+                        .flatMap { day -> day.plannedShifts.map { day.date to it } }
+                        .sortedBy { it.second.startsAt }
+                    if (publishedDays.isEmpty()) {
+                        ShiftEmptyText("Julkaistuja omia työvuoropäiviä ei ole tällä aikavälillä.")
+                    } else if (ownShifts.isEmpty()) {
+                        ShiftEmptyText(
+                            "Julkaistuilla päivillä ei ole vuoroja tälle POS-henkilölle. " +
+                                "Tarkista backend staff_id -yhteys ennen kuin tätä tulkitaan vapaapäiväksi.",
+                        )
+                    } else {
+                        var lastDate: LocalDate? = null
+                        ownShifts.forEach { (date, shift) ->
+                            if (lastDate != date) {
+                                ShiftDayBoundary(label = formatScheduleDate(date))
+                                lastDate = date
+                            }
+                            OwnPlannedShiftRow(shift = shift)
+                        }
+                    }
+                }
+            }
+
+            if (message != null && schedule != null) {
+                ShiftStatusBanner(
+                    text = "Omat vuorot käyttävät viimeksi ladattua näkymää: $message",
+                    tint = ShiftWarning,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ShiftJournalCard(
+    state: ShiftUiState,
+    currentStaffName: String?,
+    isClockedIn: Boolean,
+    attendance: WorktimeAttendanceSnapshot,
+    attendanceNoticeMessage: String?,
+    attendanceMessage: String?,
+    modifier: Modifier = Modifier,
+) {
+    ShiftCard(
+        title = "Vuoropäiväkirja",
+        icon = "☰",
+        modifier = modifier,
+    ) {
+        val events = buildList {
+            state.currentShift?.let { shift ->
+                add(
+                    JournalEvent(
+                        marker = "✓",
+                        tint = ShiftSuccess,
+                        title = "Kassavuoro avoinna",
+                        detail = "Pohjakassa ${CentsFormatter.format(shift.openingFloatCents)}",
+                        timestamp = shift.openedAtEpochMillis.toString(),
+                    ),
+                )
+            }
+            if (isClockedIn && currentStaffName != null) {
+                add(
+                    JournalEvent(
+                        marker = "●",
+                        tint = ShiftCyan,
+                        title = "$currentStaffName työvuorossa",
+                        detail = "Työaikakirjaus aktiivinen",
+                        timestamp = attendance.currentlyOnSite.firstOrNull { it.staffName == currentStaffName }?.startedAt,
+                    ),
+                )
+            }
+            attendance.currentlyOnSite.forEach { entry ->
+                add(
+                    JournalEvent(
+                        marker = "•",
+                        tint = statusColorForAttendance(entry),
+                        title = entry.staffName,
+                        detail = "${statusLabelForAttendance(entry)} · ${formatDuration(entry.durationMinutes)}",
+                        timestamp = entry.startedAt,
+                    ),
+                )
+            }
+            attendance.clockedInToday.forEach { entry ->
+                if (attendance.currentlyOnSite.none { it.staffId == entry.staffId && it.startedAt == entry.startedAt }) {
+                    add(
+                        JournalEvent(
+                            marker = "◦",
+                            tint = statusColorForAttendance(entry),
+                            title = entry.staffName,
+                            detail = "${statusLabelForAttendance(entry)} · ${formatDuration(entry.durationMinutes)}",
+                            timestamp = entry.startedAt,
+                        ),
+                    )
+                }
+            }
+            attendanceNoticeMessage?.let {
+                add(JournalEvent("i", ShiftCyan, "Työaikailmoitus", it))
+            }
+            attendanceMessage?.let {
+                add(JournalEvent("!", ShiftDanger, "Työaikavirhe", it))
+            }
+        }
+
+        if (events.isEmpty()) {
+            ShiftEmptyText("Ei työvuoromerkintöjä.")
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                var lastDay: String? = null
+                events.forEach { event ->
+                    val day = formatJournalDay(event.timestamp)
+                    if (day != lastDay) {
+                        ShiftDayBoundary(label = day)
+                        lastDay = day
+                    }
+                    JournalRow(event)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ShiftCard(
+    title: String,
+    icon: String,
+    modifier: Modifier = Modifier,
+    statusLabel: String? = null,
+    statusColor: Color = ShiftCyan,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Surface(
+        modifier = modifier,
+        shape = ShiftCardShape,
+        color = ShiftPanelColor,
+        contentColor = ShiftTextPrimary,
+        border = BorderStroke(1.dp, ShiftBorderColor),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            ShiftPanelRaisedColor.copy(alpha = 0.78f),
+                            ShiftPanelColor,
+                            ShiftPanelDeepColor.copy(alpha = 0.84f),
+                        ),
+                    ),
+                )
+                .border(BorderStroke(1.dp, ShiftBorderWarmColor.copy(alpha = 0.12f)), ShiftCardShape)
+                .padding(16.dp),
+        ) {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                ShiftCardHeader(
+                    title = title,
+                    icon = icon,
+                    statusLabel = statusLabel,
+                    statusColor = statusColor,
+                )
+                content()
+            }
+        }
+    }
+}
+
+@Composable
+private fun ShiftCardHeader(
+    title: String,
+    icon: String,
+    statusLabel: String?,
+    statusColor: Color,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = ShiftCyanSoft.copy(alpha = 0.22f),
+            border = BorderStroke(1.dp, ShiftBorderColor),
+            contentColor = ShiftCyan,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(32.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(text = icon, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            }
+        }
+        Text(
+            text = title,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = ShiftTextPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        statusLabel?.let {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(statusColor),
+                )
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = statusColor,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ShiftMiniActionButton(
+    text: String,
+    onClick: () -> Unit,
+    tint: Color,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = 36.dp)
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(14.dp),
+        color = tint.copy(alpha = 0.14f),
+        border = BorderStroke(1.dp, tint.copy(alpha = 0.34f)),
+        contentColor = tint,
+    ) {
+        Box(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = text,
+                style = MaterialTheme.typography.bodySmall,
+                color = tint,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun CashAmountDisplay(
+    value: String,
+    label: String,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = ShiftInnerShape,
+        color = ShiftPanelDeepColor,
+        border = BorderStroke(1.dp, ShiftBorderColor),
+        contentColor = ShiftTextPrimary,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = ShiftTextMuted,
+            )
+            Text(
+                text = displayMoneyInput(value),
+                modifier = Modifier.fillMaxWidth(),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = ShiftGold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun StaffAvatar(name: String, tint: Color, modifier: Modifier = Modifier) {
+    val initials = name
+        .split(" ")
+        .mapNotNull { it.firstOrNull()?.uppercaseChar()?.toString() }
+        .take(2)
+        .joinToString("")
+        .ifBlank { "?" }
+
+    Box(
+        modifier = modifier
+            .size(52.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(
+                Brush.verticalGradient(
+                    listOf(
+                        tint.copy(alpha = 0.34f),
+                        ShiftPanelDeepColor,
+                    ),
+                ),
+            )
+            .border(BorderStroke(1.dp, tint.copy(alpha = 0.34f)), RoundedCornerShape(16.dp)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = initials,
+            style = MaterialTheme.typography.titleMedium,
+            color = ShiftTextPrimary,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+}
+
+@Composable
+private fun AttendanceCompactRow(entry: AttendanceEntry) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        color = Color.Transparent,
+    ) {
+        Row(
+            modifier = Modifier.padding(vertical = 3.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            StaffAvatar(name = entry.staffName, tint = statusColorForAttendance(entry), modifier = Modifier.size(34.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = entry.staffName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ShiftTextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = statusLabelForAttendance(entry),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ShiftTextMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Text(
+                text = formatDuration(entry.durationMinutes),
+                style = MaterialTheme.typography.bodySmall,
+                color = statusColorForAttendance(entry),
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
+private val PulseTickFractions = listOf(0f, 0.25f, 0.50f, 0.75f, 1f)
+private val PulseTimelineWidth = 860.dp
+private val PulseLeftColumnWidth = 176.dp
+
+@Composable
+private fun PulseTimelineHeader(windowStart: LocalDateTime) {
+    Row(
+        modifier = Modifier.width(PulseTimelineWidth),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Spacer(modifier = Modifier.width(PulseLeftColumnWidth))
+        Row(
+            modifier = Modifier.weight(1f),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            PulseTickFractions.forEach { fraction ->
+                val label = formatPulseWindowTime(windowStart.plusMinutes((8 * 60 * fraction).toLong()))
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ShiftTextMuted,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PulseTimelineShiftRow(
+    shift: PlannedStaffShift,
+    attendance: WorktimeAttendanceSnapshot,
+    now: LocalDateTime,
+    windowStart: LocalDateTime,
+    windowEnd: LocalDateTime,
+) {
+    val pulseStatus = plannedPulseStatus(shift = shift, attendance = attendance, now = now)
+    val startFraction = pulseFraction(shift.startsAt, windowStart, windowEnd).coerceIn(0f, 1f)
+    val endFraction = pulseFraction(shift.endsAt, windowStart, windowEnd).coerceIn(startFraction + 0.035f, 1f)
+    val barWidthFraction = (endFraction - startFraction).coerceIn(0.035f, 1f)
+    val timeRange = plannedShiftTimeRange(shift)
+    val nowFraction = pulseFraction(now, windowStart, windowEnd)
+
+    Row(
+        modifier = Modifier
+            .width(PulseTimelineWidth)
+            .height(56.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(
+            modifier = Modifier.width(PulseLeftColumnWidth),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            PulseStatusGlyph(status = pulseStatus)
+            Text(
+                text = "♙",
+                style = MaterialTheme.typography.titleMedium,
+                color = ShiftTextSecondary,
+                modifier = Modifier.width(18.dp),
+                textAlign = TextAlign.Center,
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = shift.staffName.ifBlank { shift.staffId },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ShiftTextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = timeRange,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ShiftTextMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+
+        BoxWithConstraints(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight(),
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            PulseTickFractions.forEach { fraction ->
+                Box(
+                    modifier = Modifier
+                        .offset(x = maxWidth * fraction)
+                        .fillMaxHeight()
+                        .width(1.dp)
+                    .background(ShiftLineColor),
+                )
+            }
+            if (nowFraction in 0f..1f) {
+                Box(
+                    modifier = Modifier
+                        .offset(x = maxWidth * nowFraction)
+                        .width(2.dp)
+                        .fillMaxHeight()
+                        .background(ShiftGold.copy(alpha = 0.76f)),
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .offset(x = maxWidth * startFraction)
+                    .width(maxWidth * barWidthFraction)
+                    .height(22.dp)
+                    .clip(RoundedCornerShape(5.dp))
+                    .pulseBarModifier(pulseStatus),
+            )
+        }
+
+    }
+}
+
+@Composable
+private fun PulseStatusGlyph(status: PulseStatusVisual) {
+    Box(
+        modifier = Modifier
+            .size(20.dp)
+            .clip(CircleShape)
+            .background(status.tint.copy(alpha = 0.18f))
+            .border(BorderStroke(1.dp, status.tint.copy(alpha = 0.42f)), CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = status.marker,
+            style = MaterialTheme.typography.labelSmall,
+            color = status.tint,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+private fun Modifier.pulseBarModifier(status: PulseStatusVisual): Modifier {
+    return when (status.kind) {
+        PulseStatusKind.UPCOMING -> this
+            .background(status.tint.copy(alpha = 0.10f), RoundedCornerShape(5.dp))
+            .border(BorderStroke(1.dp, status.tint.copy(alpha = 0.80f)), RoundedCornerShape(5.dp))
+        PulseStatusKind.ABSENT -> this
+            .background(status.tint.copy(alpha = 0.20f), RoundedCornerShape(5.dp))
+            .border(BorderStroke(1.dp, status.tint.copy(alpha = 0.58f)), RoundedCornerShape(5.dp))
+        else -> this
+            .background(
+                Brush.horizontalGradient(
+                    colors = listOf(status.tint.copy(alpha = 0.72f), status.tint.copy(alpha = 0.95f)),
+                ),
+                RoundedCornerShape(5.dp),
+            )
+            .border(BorderStroke(1.dp, status.tint.copy(alpha = 0.38f)), RoundedCornerShape(5.dp))
+    }
+}
+
+
+@Composable
+private fun OwnPlannedShiftRow(shift: PlannedStaffShift) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = ShiftInnerShape,
+        color = ShiftPanelDeepColor,
+        border = BorderStroke(1.dp, ShiftBorderColor),
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(ShiftUpcoming),
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = plannedShiftTimeRange(shift),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = ShiftTextPrimary,
+                )
+                Text(
+                    text = shift.role?.takeIf { it.isNotBlank() } ?: "Suunniteltu vuoro",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ShiftTextMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ShiftDayBoundary(label: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .height(1.dp)
+                .background(ShiftLineColor),
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = ShiftTextMuted,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .height(1.dp)
+                .background(ShiftLineColor),
+        )
+    }
+}
+
+@Composable
+private fun JournalRow(event: JournalEvent) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(28.dp)
+                .clip(CircleShape)
+                .background(event.tint.copy(alpha = 0.18f))
+                .border(BorderStroke(1.dp, event.tint.copy(alpha = 0.32f)), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = event.marker,
+                style = MaterialTheme.typography.labelMedium,
+                color = event.tint,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = event.title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = ShiftTextPrimary,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = event.detail,
+                style = MaterialTheme.typography.bodySmall,
+                color = ShiftTextMuted,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ShiftKeyValueRow(label: String, value: String, highlight: Boolean = false) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = ShiftTextMuted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (highlight) ShiftGold else ShiftTextSecondary,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun ShiftStatusBanner(text: String, tint: Color) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(tint.copy(alpha = 0.13f), RoundedCornerShape(14.dp))
+            .border(BorderStroke(1.dp, tint.copy(alpha = 0.25f)), RoundedCornerShape(14.dp))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+    ) {
+        Text(
+            text = text,
+            color = tint,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+}
+
+@Composable
+private fun ShiftEmptyText(text: String) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = ShiftInnerShape,
+        color = ShiftPanelDeepColor,
+        border = BorderStroke(1.dp, ShiftBorderColor),
+        contentColor = ShiftTextMuted,
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(14.dp),
+            style = MaterialTheme.typography.bodyMedium,
+            color = ShiftTextMuted,
+        )
+    }
+}
+
+private data class JournalEvent(
+    val marker: String,
+    val tint: Color,
+    val title: String,
+    val detail: String,
+    val timestamp: String? = null,
+)
 
 private fun formatShiftStatus(status: String): String {
     return when (status.uppercase()) {
@@ -355,14 +1333,9 @@ private fun formatShiftStatus(status: String): String {
     }
 }
 
-private fun formatShiftOpenedAt(epochMillis: Long): String {
-    val instant = java.time.Instant.ofEpochMilli(epochMillis)
-    val local = instant.atZone(java.time.ZoneId.systemDefault())
-    return local.format(java.time.format.DateTimeFormatter.ofPattern("d.M. HH:mm"))
-}
-
 private fun appendShiftMoneyDigit(current: String, digit: String): String {
     val s = current.replace('.', ',').trim()
+    if (s.isBlank() || s == "50,00") return digit
     return if (s.contains(',')) {
         val dec = s.substringAfter(',')
         if (dec.length >= 2) s else s + digit
@@ -378,54 +1351,154 @@ private fun appendShiftMoneyDecimal(current: String): String {
 
 private fun removeShiftMoneyChar(current: String): String = current.dropLast(1)
 
-@Composable
-private fun CashAmountDisplay(value: String, modifier: Modifier = Modifier) {
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-    ) {
-        Box(
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
-            contentAlignment = Alignment.CenterEnd,
-        ) {
-            Text(
-                text = if (value.isBlank()) "0,00 €" else "${value.replace('.', ',')} €",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-            )
-        }
+private fun displayMoneyInput(value: String): String {
+    return "${value.ifBlank { "0,00" }.replace('.', ',')} €"
+}
+
+private fun formatJournalDay(raw: String?): String {
+    val value = raw?.trim().orEmpty()
+    value.toLongOrNull()?.let { epochMillis ->
+        return runCatching {
+            Instant.ofEpochMilli(epochMillis)
+                .atZone(ZoneId.systemDefault())
+                .format(ShiftJournalDayFormatter)
+        }.getOrDefault("Tänään")
+    }
+    if (value.length >= 10 && value[4] == '-' && value[7] == '-') {
+        val year = value.substring(0, 4)
+        val month = value.substring(5, 7)
+        val day = value.substring(8, 10)
+        return "$day.$month.$year"
+    }
+    return "Tänään"
+}
+
+private fun formatJournalTime(raw: String?): String {
+    val value = raw?.trim().orEmpty()
+    value.toLongOrNull()?.let { epochMillis ->
+        return runCatching {
+            Instant.ofEpochMilli(epochMillis)
+                .atZone(ZoneId.systemDefault())
+                .format(ShiftJournalTimeFormatter)
+        }.getOrDefault("--:--")
+    }
+    val tIndex = value.indexOf('T')
+    if (tIndex >= 0 && value.length >= tIndex + 6) {
+        return value.substring(tIndex + 1, tIndex + 6)
+    }
+    val timeMatch = Regex("\\b\\d{1,2}:\\d{2}\\b").find(value)
+    return timeMatch?.value ?: "--:--"
+}
+
+private fun formatScheduleDate(date: LocalDate): String = date.format(ShiftJournalDayFormatter)
+
+private fun formatPulseWindowTime(value: LocalDateTime): String = value.format(ShiftJournalTimeFormatter)
+
+private fun plannedShiftTimeRange(shift: PlannedStaffShift): String {
+    return "${formatPulseWindowTime(shift.startsAt)}-${formatPulseWindowTime(shift.endsAt)}"
+}
+
+private fun ShiftScheduleDay.hasPublishedScheduleTruth(): Boolean {
+    return publicationStatus == ShiftSchedulePublicationStatus.PUBLISHED ||
+        publicationStatus == ShiftSchedulePublicationStatus.CLOSED
+}
+
+private fun PlannedStaffShift.overlaps(windowStart: LocalDateTime, windowEnd: LocalDateTime): Boolean {
+    return startsAt.isBefore(windowEnd) && endsAt.isAfter(windowStart)
+}
+
+private fun pulseFraction(value: LocalDateTime, windowStart: LocalDateTime, windowEnd: LocalDateTime): Float {
+    val totalMillis = Duration.between(windowStart, windowEnd).toMillis().coerceAtLeast(1L)
+    val offsetMillis = Duration.between(windowStart, value).toMillis()
+    return (offsetMillis.toFloat() / totalMillis.toFloat()).coerceIn(0f, 1f)
+}
+
+private fun formatDuration(minutes: Double): String {
+    val safeMinutes = minutes.coerceAtLeast(0.0)
+    val hours = (safeMinutes / 60).toInt()
+    val mins = (safeMinutes % 60).toInt()
+    return if (hours > 0) "${hours}h ${mins}min" else "${mins}min"
+}
+
+private enum class PulseStatusKind {
+    PRESENT,
+    UPCOMING,
+    LATE,
+    ABSENT,
+    COMPLETED,
+}
+
+private data class PulseStatusVisual(
+    val kind: PulseStatusKind,
+    val label: String,
+    val tint: Color,
+    val marker: String,
+)
+
+private fun pulseStatusForAttendance(entry: AttendanceEntry): PulseStatusVisual {
+    val normalized = entry.status.trim().lowercase(Locale.ROOT)
+    val start = formatJournalTime(entry.startedAt).takeIf { it != "--:--" }
+    return when (normalized) {
+        "active", "present", "clocked_in", "paikalla" -> PulseStatusVisual(PulseStatusKind.PRESENT, "Paikalla", ShiftSuccess, "!")
+        "scheduled", "upcoming", "incoming", "tulossa" -> PulseStatusVisual(
+            PulseStatusKind.UPCOMING,
+            start?.let { "Tulossa $it" } ?: "Tulossa",
+            ShiftUpcoming,
+            "◷",
+        )
+        "late", "myöhässä", "missing" -> PulseStatusVisual(PulseStatusKind.LATE, "Myöhässä", ShiftDanger, "!")
+        "absent", "away", "off", "poissa", "no_show" -> PulseStatusVisual(PulseStatusKind.ABSENT, "Poissa", ShiftAbsent, "×")
+        "completed", "done", "valmis" -> PulseStatusVisual(PulseStatusKind.COMPLETED, "Valmis", ShiftTextMuted, "✓")
+        "on_break", "break", "tauolla" -> PulseStatusVisual(PulseStatusKind.PRESENT, "Tauolla", ShiftWarning, "Ⅱ")
+        else -> PulseStatusVisual(PulseStatusKind.PRESENT, statusLabelForAttendance(entry), ShiftSuccess, "•")
     }
 }
 
-@Composable
-private fun ShiftListRow(shift: PosShift) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-    ) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            KeyValueRow("Avattiin", formatShiftOpenedAt(shift.openedAtEpochMillis))
-            KeyValueRow("Pohjakassa", CentsFormatter.format(shift.openingFloatCents))
-            KeyValueRow("Tila", formatShiftStatus(shift.status.name))
-        }
+private fun plannedPulseStatus(
+    shift: PlannedStaffShift,
+    attendance: WorktimeAttendanceSnapshot,
+    now: LocalDateTime,
+): PulseStatusVisual {
+    val normalized = shift.status?.trim()?.lowercase(Locale.ROOT).orEmpty()
+    if (normalized in setOf("absent", "away", "off", "poissa", "no_show", "cancelled", "canceled")) {
+        return PulseStatusVisual(PulseStatusKind.ABSENT, "Poissa", ShiftAbsent, "×")
+    }
+
+    val isOnSite = attendance.currentlyOnSite.any { entry ->
+        entry.staffId == shift.staffId ||
+            (entry.staffId.isBlank() && entry.staffName.equals(shift.staffName, ignoreCase = true))
+    }
+
+    return when {
+        isOnSite -> PulseStatusVisual(PulseStatusKind.PRESENT, "Paikalla", ShiftSuccess, "!")
+        now.isBefore(shift.startsAt) -> PulseStatusVisual(PulseStatusKind.UPCOMING, "Tulossa", ShiftUpcoming, "▷")
+        now.isBefore(shift.endsAt) -> PulseStatusVisual(PulseStatusKind.LATE, "Myöhässä", ShiftDanger, "!")
+        else -> PulseStatusVisual(PulseStatusKind.ABSENT, "Poissa", ShiftAbsent, "×")
     }
 }
 
-@Composable
-private fun AttendanceRow(entry: AttendanceEntry) {
-    val hours = (entry.durationMinutes / 60).toInt()
-    val mins = (entry.durationMinutes % 60).toInt()
-    val duration = if (hours > 0) "${hours}h ${mins}min" else "${mins}min"
-    val statusLabel = when (entry.status) {
-        "active" -> "töissä"
-        "on_break" -> "tauolla"
-        "completed" -> "valmis"
+private fun statusLabelForAttendance(entry: AttendanceEntry): String {
+    val normalized = entry.status.trim().lowercase(Locale.ROOT)
+    return when (normalized) {
+        "active", "present", "clocked_in", "paikalla" -> "Paikalla"
+        "scheduled", "upcoming", "incoming", "tulossa" -> "Tulossa"
+        "late", "myöhässä", "missing" -> "Myöhässä"
+        "absent", "away", "off", "poissa", "no_show" -> "Poissa"
+        "on_break", "break", "tauolla" -> "Tauolla"
+        "completed", "done", "valmis" -> "Valmis"
         else -> entry.status
     }
-    KeyValueRow(entry.staffName, "$statusLabel · $duration")
+}
+
+private fun statusColorForAttendance(entry: AttendanceEntry): Color {
+    val normalized = entry.status.trim().lowercase(Locale.ROOT)
+    return when (normalized) {
+        "active", "present", "clocked_in", "paikalla" -> ShiftSuccess
+        "scheduled", "upcoming", "incoming", "tulossa" -> ShiftUpcoming
+        "late", "myöhässä", "missing" -> ShiftDanger
+        "absent", "away", "off", "poissa", "no_show" -> ShiftAbsent
+        "on_break", "break", "tauolla" -> ShiftWarning
+        "completed", "done", "valmis" -> ShiftTextMuted
+        else -> ShiftCyan
+    }
 }
