@@ -27,8 +27,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Dashboard
-import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -56,6 +56,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.viewinterop.AndroidView
@@ -114,6 +115,8 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import com.airos.pos.core.ui.NumericPinPad
 import kotlinx.coroutines.withContext
 import java.time.Duration
@@ -123,6 +126,7 @@ import java.time.LocalDateTime
 import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import androidx.compose.ui.unit.IntOffset
 
 private val AppShellBackground = Color(0xFF060C12)
 private val AppShellRailColor = Color(0xFF09121A)
@@ -341,24 +345,6 @@ fun AirosPosApp(
 ) {
     val session by appContainer.authRepository.activeSession.collectAsState()
     val shellNow = rememberCurrentMinute()
-
-    // Auto clock-in: when a new sign-in happens (session transitions null → non-null),
-    // clock the newly signed-in staff in without requiring a separate action.
-    // drop(1) skips the initial StateFlow emission so app restarts with a persisted
-    // session do not re-clock-in staff who were already clocked in.
-    LaunchedEffect(Unit) {
-        var prevId: String? = appContainer.authRepository.activeSession.value?.sessionId
-        appContainer.authRepository.activeSession.drop(1).collect { newSession ->
-            val newId = newSession?.sessionId
-            if (newId != null && prevId == null) {
-                appContainer.worktimeAttendanceRepository.clockIn(
-                    newSession.staffId,
-                    newSession.displayName,
-                )
-            }
-            prevId = newId
-        }
-    }
 
     if (session == null) {
         val authViewModel: AuthViewModel = viewModel(factory = AuthViewModel.factory(appContainer.authRepository))
@@ -660,6 +646,16 @@ private fun SignedInApp(
     }
     val quickSelectStaff by quickSelectStaffFlow.collectAsState(initial = emptyList())
 
+    fun requestSignOut() {
+        signOutPin = ""
+        signOutPinError = null
+        sellerSwitchDialogVisible = false
+        sellerSwitchSelectedStaff = null
+        sellerSwitchPin = ""
+        sellerSwitchPinError = null
+        signOutDialogVisible = true
+    }
+
     // NFC fast-path: current staff's badge confirms sign-out identity without PIN entry.
     LaunchedEffect(signOutDialogVisible, currentStaffId) {
         if (!signOutDialogVisible) return@LaunchedEffect
@@ -677,10 +673,8 @@ private fun SignedInApp(
         }
     }
 
-    // Rule 6 + Rule 7: NFC badge while already signed in.
-    // Same person → restrained acknowledgement, no action.
-    // Different person → seller switch: sign out current user (NO clockOut — work session continues),
-    //   sign in new user. Auto-clock-in fires from AirosPosApp LaunchedEffect if not already clocked in.
+    // NFC badge while already signed in changes the active seller only.
+    // It must not clock anyone in or out of worktime.
     val sellerSwitchContext = LocalContext.current
     LaunchedEffect(currentStaffId) {
         NfcProbe.status.drop(1).collect { status ->
@@ -691,8 +685,14 @@ private fun SignedInApp(
                 Toast.makeText(sellerSwitchContext, "Already signed in as ${match.displayName}", Toast.LENGTH_SHORT).show()
             } else {
                 scope.launch {
-                    appContainer.authRepository.signOut()
-                    appContainer.authRepository.signInWithNfc(match.staffId)
+                    when (val result = appContainer.authRepository.signInWithNfc(match.staffId)) {
+                        is PosResult.Success -> {
+                            Toast.makeText(sellerSwitchContext, "Seller: ${match.displayName}", Toast.LENGTH_SHORT).show()
+                        }
+                        is PosResult.Failure -> {
+                            Toast.makeText(sellerSwitchContext, result.message, Toast.LENGTH_SHORT).show()
+                        }
+                    }
                 }
             }
         }
@@ -754,19 +754,12 @@ private fun SignedInApp(
             navController = navController,
             currentStaffName = currentStaffName,
             onSellerSwitchRequested = {
-                // Rule 8: sign-out dialog has priority — never open seller switch while it is active.
                 if (!signOutDialogVisible) {
                     sellerSwitchSelectedStaff = null
                     sellerSwitchPin = ""
                     sellerSwitchPinError = null
                     sellerSwitchDialogVisible = true
                 }
-            },
-            onSignOut = {
-                signOutPin = ""
-                signOutPinError = null
-                sellerSwitchDialogVisible = false  // Rule 8: sign-out takes priority
-                signOutDialogVisible = true
             },
             isQuickSaleDirty = quickSaleHasLines,
             onNavigationBlocked = { destination ->
@@ -2190,14 +2183,24 @@ private fun SignedInApp(
         )
     }
 
+    val sellerSwitchPopupOffset = with(LocalDensity.current) {
+        IntOffset((RAIL_WIDTH + 16.dp).roundToPx(), (-14).dp.roundToPx())
+    }
+
     if (sellerSwitchDialogVisible) {
-        Dialog(onDismissRequest = {
-            sellerSwitchDialogVisible = false
-            sellerSwitchSelectedStaff = null
-            sellerSwitchPin = ""
-            sellerSwitchPinError = null
-        }) {
+        Popup(
+            alignment = Alignment.BottomStart,
+            offset = sellerSwitchPopupOffset,
+            onDismissRequest = {
+                sellerSwitchDialogVisible = false
+                sellerSwitchSelectedStaff = null
+                sellerSwitchPin = ""
+                sellerSwitchPinError = null
+            },
+            properties = PopupProperties(focusable = true),
+        ) {
             Surface(
+                modifier = Modifier.width(360.dp),
                 shape = RoundedCornerShape(16.dp),
                 color = AppShellPanelColor,
             ) {
@@ -2240,6 +2243,16 @@ private fun SignedInApp(
                                 }
                             }
                         }
+                        Button(
+                            onClick = { requestSignOut() },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = AppShellButtonMutedColor,
+                                contentColor = AppShellTextSecondary,
+                            ),
+                        ) {
+                            Text("Sign out")
+                        }
                     } else {
                         val selectedStaff = sellerSwitchSelectedStaff!!
                         Text(
@@ -2280,13 +2293,11 @@ private fun SignedInApp(
                                                             Toast.LENGTH_SHORT,
                                                         ).show()
                                                     } else {
-                                                        // signInWithPin already replaced the active session
-                                                        // without going through null, so auto-clock-in
-                                                        // (null→non-null guard) did not fire. Call it explicitly.
-                                                        appContainer.worktimeAttendanceRepository.clockIn(
-                                                            selectedStaff.id,
-                                                            selectedStaff.displayName,
-                                                        )
+                                                        Toast.makeText(
+                                                            sellerSwitchContext,
+                                                            "Seller: ${selectedStaff.displayName}",
+                                                            Toast.LENGTH_SHORT,
+                                                        ).show()
                                                     }
                                                 }
                                                 is PosResult.Failure -> {
@@ -2311,6 +2322,12 @@ private fun SignedInApp(
                                 sellerSwitchPin = ""
                                 sellerSwitchPinError = null
                             },
+                        )
+                        Text(
+                            text = "Sign out",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = AppShellTextMuted,
+                            modifier = Modifier.clickable { requestSignOut() },
                         )
                     }
                 }
@@ -2491,7 +2508,6 @@ private fun AppRail(
     navController: NavHostController,
     currentStaffName: String,
     onSellerSwitchRequested: () -> Unit,
-    onSignOut: () -> Unit,
     isQuickSaleDirty: Boolean = false,
     onNavigationBlocked: ((String) -> Unit)? = null,
     onNavigateToMenu: (() -> Unit)? = null,
@@ -2594,12 +2610,12 @@ private fun AppRail(
             }
 
             RailButton(
-                label = strings[CashierStringKey.RailSignOut],
-                icon = Icons.Filled.ExitToApp,
-                iconContainerColor = Color(0xFF3C2630),
-                iconTint = Color(0xFFFFC6D4),
+                label = "MYYJÄ",
+                icon = Icons.Filled.Person,
+                iconContainerColor = Color(0xFF243A2F),
+                iconTint = Color(0xFFB7F3C8),
                 selected = false,
-                onClick = onSignOut,
+                onClick = onSellerSwitchRequested,
             )
         }
     }

@@ -40,10 +40,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -291,11 +295,12 @@ fun ShiftScreen(
             CashShiftCard(
                 state = state,
                 currentStaffId = currentStaffId,
+                currentStaffName = currentStaffName,
                 onCountedCashChanged = onCountedCashChanged,
                 onOpenShift = onOpenShift,
                 onCloseShift = onCloseShift,
                 modifier = Modifier
-                    .weight(0.78f)
+                    .weight(1.05f)
                     .fillMaxHeight(),
             )
         }
@@ -338,6 +343,7 @@ private fun ShiftHeader() {
 private fun CashShiftCard(
     state: ShiftUiState,
     currentStaffId: String?,
+    currentStaffName: String?,
     onCountedCashChanged: (String) -> Unit,
     onOpenShift: (String) -> Unit,
     onCloseShift: () -> Unit,
@@ -346,6 +352,21 @@ private fun CashShiftCard(
     val currentShift = state.currentShift
     val isOpen = currentShift != null
     var cashCounterOpen by remember(isOpen) { mutableStateOf(false) }
+    var replaceCountedCashOnNextInput by remember(isOpen) { mutableStateOf(false) }
+    val openedByLabel = remember(currentShift, currentStaffId, currentStaffName) {
+        when {
+            currentShift == null -> ""
+            currentShift.openedByStaffId == currentStaffId && !currentStaffName.isNullOrBlank() -> currentStaffName
+            else -> currentShift.openedByStaffId
+        }
+    }
+
+    fun openCountedCashPad() {
+        if (!isOpen) return
+        replaceCountedCashOnNextInput = true
+        cashCounterOpen = true
+    }
+    val cashPopupOffsetY = with(LocalDensity.current) { 68.dp.roundToPx() }
 
     ShiftCard(
         title = "Kassavuoro",
@@ -356,126 +377,144 @@ private fun CashShiftCard(
     ) {
         state.message?.let { ShiftStatusBanner(text = it, tint = ShiftDanger) }
 
-        Row(
+        Column(
             modifier = Modifier.fillMaxSize(),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Column(
-                modifier = Modifier
-                    .weight(0.78f)
-                    .fillMaxHeight(),
-                verticalArrangement = Arrangement.spacedBy(9.dp),
-            ) {
-                if (isOpen) {
-                    ShiftKeyValueRow("Avaaja", currentShift?.openedByStaffId.orEmpty())
-                    ShiftKeyValueRow("Pohjakassa", CentsFormatter.format(currentShift!!.openingFloatCents), highlight = true)
-                    ShiftKeyValueRow("Odotettu käteinen", CentsFormatter.format(currentShift.expectedCashCents), highlight = true)
-                    ShiftKeyValueRow(
-                        label = "Laskettu käteinen",
-                        value = displayMoneyInput(state.countedCashInput),
-                        highlight = state.countedCashInput.isNotBlank(),
-                    )
-                    Text(
-                        text = "Sulje kassavuoro laskemalla käteinen ja vahvistamalla sulku.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ShiftTextMuted,
-                    )
-                } else {
-                    Text(
-                        text = "Pohjakassa",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = ShiftTextMuted,
-                    )
-                    Text(
-                        text = displayMoneyInput(state.openingFloatInput),
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = ShiftGold,
-                    )
-                    Text(
-                        text = "Pohjakassa luetaan POS-asetuksista. Avaa kassavuoro valitulle käyttäjälle.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ShiftTextMuted,
-                    )
-                }
-
-                Spacer(modifier = Modifier.weight(1f))
-
-                Button(
-                    onClick = {
-                        if (isOpen) {
-                            onCloseShift()
-                        } else {
-                            currentStaffId?.let(onOpenShift)
-                        }
-                    },
-                    enabled = !state.busy && (isOpen || currentStaffId != null),
+            if (currentShift != null) {
+                ShiftKeyValueRow("Avaaja", openedByLabel)
+                Row(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isOpen) ShiftGold.copy(alpha = 0.82f) else ShiftCyan.copy(alpha = 0.82f),
-                        contentColor = Color(0xFF071109),
-                        disabledContainerColor = ShiftPanelRaisedColor,
-                        disabledContentColor = ShiftTextMuted,
-                    ),
-                    shape = RoundedCornerShape(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text(
-                        text = if (isOpen) "Sulje vuoro" else "Avaa vuoro",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
+                    CashSummaryMetric(
+                        label = "Pohjakassa",
+                        value = CentsFormatter.format(currentShift.openingFloatCents),
+                        modifier = Modifier.weight(1f),
+                    )
+                    CashSummaryMetric(
+                        label = "Odotettu",
+                        value = CentsFormatter.format(currentShift.expectedCashCents),
+                        modifier = Modifier.weight(1f),
                     )
                 }
+
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    CashAmountDisplay(
+                        value = state.countedCashInput,
+                        label = "Laskettu käteinen",
+                        onClick = ::openCountedCashPad,
+                    )
+                    if (cashCounterOpen) {
+                        Popup(
+                            alignment = Alignment.TopEnd,
+                            offset = IntOffset(0, cashPopupOffsetY),
+                            onDismissRequest = { cashCounterOpen = false },
+                            properties = PopupProperties(focusable = true),
+                        ) {
+                            Surface(
+                                modifier = Modifier.width(266.dp),
+                                shape = RoundedCornerShape(20.dp),
+                                color = ShiftPanelRaisedColor,
+                                border = BorderStroke(1.dp, ShiftBorderColor),
+                                contentColor = ShiftTextPrimary,
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Text(
+                                        text = "Laskettu käteinen",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = ShiftTextMuted,
+                                    )
+                                    NumericMoneyPad(
+                                        onDigit = { digit ->
+                                            val nextValue = if (replaceCountedCashOnNextInput) {
+                                                digit
+                                            } else {
+                                                appendShiftMoneyDigit(state.countedCashInput, digit)
+                                            }
+                                            replaceCountedCashOnNextInput = false
+                                            onCountedCashChanged(nextValue)
+                                        },
+                                        onDecimal = {
+                                            val nextValue = if (replaceCountedCashOnNextInput) {
+                                                "0,"
+                                            } else {
+                                                appendShiftMoneyDecimal(state.countedCashInput)
+                                            }
+                                            replaceCountedCashOnNextInput = false
+                                            onCountedCashChanged(nextValue)
+                                        },
+                                        onBackspace = {
+                                            replaceCountedCashOnNextInput = false
+                                            onCountedCashChanged(removeShiftMoneyChar(state.countedCashInput))
+                                        },
+                                        keyHeight = 42.dp,
+                                        keyColor = ShiftKeyColor,
+                                        keyContentColor = ShiftKeyContentColor,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                Text(
+                    text = "Sulje kassavuoro, kun laskettu käteinen vastaa kassalaskentaa.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ShiftTextMuted,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            } else {
+                Text(
+                    text = "Pohjakassa",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = ShiftTextMuted,
+                )
+                Text(
+                    text = displayMoneyInput(state.openingFloatInput),
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = ShiftGold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = "Pohjakassa luetaan POS-asetuksista. Avaa kassavuoro valitulle käyttäjälle.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ShiftTextMuted,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
 
-            Column(
-                modifier = Modifier
-                    .weight(0.80f)
-                    .fillMaxHeight(),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                CashAmountDisplay(
-                    value = if (isOpen) state.countedCashInput else state.openingFloatInput,
-                    label = if (isOpen) "Laskettu käteinen" else "Pohjakassa",
-                )
+            Spacer(modifier = Modifier.weight(1f))
 
-                if (isOpen && cashCounterOpen) {
-                    NumericMoneyPad(
-                        onDigit = { digit ->
-                            onCountedCashChanged(appendShiftMoneyDigit(state.countedCashInput, digit))
-                        },
-                        onDecimal = {
-                            onCountedCashChanged(appendShiftMoneyDecimal(state.countedCashInput))
-                        },
-                        onBackspace = {
-                            onCountedCashChanged(removeShiftMoneyChar(state.countedCashInput))
-                        },
-                        keyHeight = 30.dp,
-                        keyColor = ShiftKeyColor,
-                        keyContentColor = ShiftKeyContentColor,
-                    )
-                    ShiftMiniActionButton(
-                        text = "Valmis",
-                        onClick = { cashCounterOpen = false },
-                        tint = ShiftCyan,
-                    )
-                } else {
+            Button(
+                onClick = {
                     if (isOpen) {
-                        ShiftMiniActionButton(
-                            text = "Laske käteinen",
-                            onClick = { cashCounterOpen = true },
-                            tint = ShiftCyan,
-                        )
+                        onCloseShift()
+                    } else {
+                        currentStaffId?.let(onOpenShift)
                     }
-                    Text(
-                        text = if (isOpen) {
-                            "Näppäimistö avataan vain käteisen laskentaa varten."
-                        } else {
-                            "Pohjakassan muokkaus tehdään POS-asetuksissa."
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = ShiftTextMuted,
-                    )
-                }
+                },
+                enabled = !state.busy && (isOpen || currentStaffId != null),
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isOpen) ShiftGold.copy(alpha = 0.82f) else ShiftCyan.copy(alpha = 0.82f),
+                    contentColor = Color(0xFF071109),
+                    disabledContainerColor = ShiftPanelRaisedColor,
+                    disabledContentColor = ShiftTextMuted,
+                ),
+                shape = RoundedCornerShape(16.dp),
+            ) {
+                Text(
+                    text = if (isOpen) "Sulje vuoro" else "Avaa vuoro",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                )
             }
         }
     }
@@ -885,13 +924,57 @@ private fun ShiftMiniActionButton(
 }
 
 @Composable
+private fun CashSummaryMetric(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        shape = ShiftInnerShape,
+        color = ShiftPanelDeepColor.copy(alpha = 0.78f),
+        border = BorderStroke(1.dp, ShiftBorderColor),
+        contentColor = ShiftTextPrimary,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = ShiftTextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = value,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = ShiftGold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
 private fun CashAmountDisplay(
     value: String,
     label: String,
     modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
 ) {
+    val surfaceModifier = if (onClick != null) {
+        modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+    } else {
+        modifier.fillMaxWidth()
+    }
     Surface(
-        modifier = modifier.fillMaxWidth(),
+        modifier = surfaceModifier,
         shape = ShiftInnerShape,
         color = ShiftPanelDeepColor,
         border = BorderStroke(1.dp, ShiftBorderColor),
@@ -912,6 +995,8 @@ private fun CashAmountDisplay(
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 color = ShiftGold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }
@@ -1265,6 +1350,9 @@ private fun ShiftKeyValueRow(label: String, value: String, highlight: Boolean = 
     ) {
         Text(
             text = label,
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 8.dp),
             style = MaterialTheme.typography.bodySmall,
             color = ShiftTextMuted,
             maxLines = 1,

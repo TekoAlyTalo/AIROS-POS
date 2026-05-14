@@ -112,8 +112,8 @@ class BackendShiftScheduleRepository(
         val root = JSONObject(body)
         return ShiftScheduleSnapshot(
             restaurantKey = root.optString("restaurant_key", restaurantKeyProvider().trim().ifBlank { "ravintola_default" }),
-            dateFrom = parseLocalDate(root.optString("date_from")),
-            dateTo = parseLocalDate(root.optString("date_to")),
+            dateFrom = parseLocalDate(root.requiredString("date_from")),
+            dateTo = parseLocalDate(root.requiredString("date_to")),
             days = parseDays(root.optJSONArray("days")),
         )
     }
@@ -122,8 +122,10 @@ class BackendShiftScheduleRepository(
         if (array == null) return emptyList()
         return (0 until array.length()).mapNotNull { index ->
             val item = array.optJSONObject(index) ?: return@mapNotNull null
+            item.acceptOptionalTimestamp("published_at")
+            item.acceptOptionalTimestamp("closed_at")
             ShiftScheduleDay(
-                date = parseLocalDate(item.optString("date")),
+                date = parseLocalDate(item.requiredString("business_date", "date")),
                 publicationStatus = parsePublicationStatus(
                     item.optString("publication_status").ifBlank { item.optString("status") },
                 ),
@@ -142,8 +144,8 @@ class BackendShiftScheduleRepository(
                 id = item.optInt("id", 0),
                 staffId = item.optString("staff_id"),
                 staffName = item.optString("staff_name"),
-                startsAt = parseLocalDateTime(item.optString("starts_at")),
-                endsAt = parseLocalDateTime(item.optString("ends_at")),
+                startsAt = parseLocalDateTime(item.requiredString("starts_at")),
+                endsAt = parseLocalDateTime(item.requiredString("ends_at")),
                 role = item.optNullableString("role"),
                 status = item.optNullableString("status"),
                 source = item.optNullableString("source")
@@ -163,6 +165,12 @@ class BackendShiftScheduleRepository(
         return LocalDate.parse(raw.trim())
     }
 
+    private fun parseOptionalLocalDateTime(raw: String?): LocalDateTime? {
+        val value = raw?.trim().orEmpty()
+        if (value.isBlank()) return null
+        return parseLocalDateTime(value)
+    }
+
     private fun parseLocalDateTime(raw: String): LocalDateTime {
         val value = raw.trim()
         return runCatching {
@@ -173,6 +181,17 @@ class BackendShiftScheduleRepository(
     }
 
     private fun urlEncode(value: String): String = URLEncoder.encode(value, StandardCharsets.UTF_8.name())
+
+    private fun JSONObject.requiredString(vararg names: String): String {
+        names.forEach { name ->
+            optNullableString(name)?.let { return it }
+        }
+        throw IllegalArgumentException("Missing required shift schedule field: ${names.joinToString(" or ")}")
+    }
+
+    private fun JSONObject.acceptOptionalTimestamp(name: String) {
+        parseOptionalLocalDateTime(optNullableString(name))
+    }
 }
 
 private fun extractScheduleDetail(body: String): String {
