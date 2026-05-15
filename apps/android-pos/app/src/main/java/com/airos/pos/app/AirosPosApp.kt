@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.SharedPreferences
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.net.Uri
@@ -100,6 +101,7 @@ import com.airos.pos.feature.scanner.ScannerViewModel
 import com.airos.pos.feature.settings.SettingsScreen
 import com.airos.pos.feature.settings.SettingsViewModel
 import com.airos.pos.feature.shift.DeviceDiagnosticsScreen
+import com.airos.pos.feature.shift.JournalNote
 import com.airos.pos.feature.shift.ShiftScreen
 import com.airos.pos.feature.shift.ShiftViewModel
 import com.airos.pos.feature.tablemap.TableAcknowledgeActionKind
@@ -119,6 +121,8 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.airos.pos.core.ui.NumericPinPad
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
@@ -253,13 +257,6 @@ private val mainRailDestinations = listOf(
         icon = Icons.Filled.ReceiptLong,
         iconContainerColor = Color(0xFF243A2F),
         iconTint = Color(0xFFB7F3C8),
-    ),
-    RailDestination(
-        route = Routes.Shift,
-        labelKey = CashierStringKey.RailShift,
-        icon = Icons.Filled.Tune,
-        iconContainerColor = Color(0xFF3B2E23),
-        iconTint = Color(0xFFFFD8A8),
     ),
     RailDestination(
         route = Routes.Settings,
@@ -646,6 +643,10 @@ private fun SignedInApp(
     }
     val quickSelectStaff by quickSelectStaffFlow.collectAsState(initial = emptyList())
 
+    val context = LocalContext.current
+    val shiftJournalPrefs = remember { context.getSharedPreferences("shift_journal_notes", 0) }
+    var journalNotes by remember { mutableStateOf(loadJournalNotesFromPrefs(shiftJournalPrefs)) }
+
     fun requestSignOut() {
         signOutPin = ""
         signOutPinError = null
@@ -979,6 +980,17 @@ private fun SignedInApp(
                             signOutPin = ""
                             signOutPinError = null
                             signOutDialogVisible = true
+                        },
+                        journalNotes = journalNotes,
+                        onNoteAdded = { text ->
+                            val note = JournalNote(
+                                text = text,
+                                authorName = currentStaffName.ifBlank { "Tuntematon" },
+                                timestampMillis = System.currentTimeMillis(),
+                            )
+                            val updated = journalNotes + note
+                            journalNotes = updated
+                            saveJournalNotesToPrefs(shiftJournalPrefs, updated)
                         },
                     )
 
@@ -2609,14 +2621,105 @@ private fun AppRail(
                 }
             }
 
+            var staffControlPanelOpen by rememberSaveable { mutableStateOf(false) }
+            val staffControlPopupOffset = with(LocalDensity.current) {
+                IntOffset((RAIL_WIDTH + 16.dp).roundToPx(), (-10).dp.roundToPx())
+            }
+
             RailButton(
-                label = "MYYJÄ",
+                label = "HENKILÖ",
                 icon = Icons.Filled.Person,
                 iconContainerColor = Color(0xFF243A2F),
                 iconTint = Color(0xFFB7F3C8),
-                selected = false,
-                onClick = onSellerSwitchRequested,
+                selected = staffControlPanelOpen || isRailDestinationSelected(currentRoute, Routes.Shift),
+                onClick = { staffControlPanelOpen = true },
             )
+
+            if (staffControlPanelOpen) {
+                Popup(
+                    alignment = Alignment.BottomStart,
+                    offset = staffControlPopupOffset,
+                    onDismissRequest = { staffControlPanelOpen = false },
+                    properties = PopupProperties(focusable = true),
+                ) {
+                    StaffControlPanel(
+                        currentStaffName = currentStaffName,
+                        onSwitchSeller = {
+                            staffControlPanelOpen = false
+                            onSellerSwitchRequested()
+                        },
+                        onOpenShift = {
+                            staffControlPanelOpen = false
+                            val alreadySelected = isRailDestinationSelected(currentRoute, Routes.Shift)
+                            if (isQuickSaleDirty && !alreadySelected) {
+                                onNavigationBlocked?.invoke(Routes.Shift)
+                            } else if (!alreadySelected) {
+                                onWillNavigateAway?.invoke()
+                                navController.navigate(Routes.Shift) {
+                                    launchSingleTop = true
+                                }
+                            }
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StaffControlPanel(
+    currentStaffName: String,
+    onSwitchSeller: () -> Unit,
+    onOpenShift: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.width(300.dp),
+        shape = RoundedCornerShape(18.dp),
+        color = AppShellPanelColor,
+        border = androidx.compose.foundation.BorderStroke(1.dp, AppShellBorderColor),
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                text = "Henkilöstö",
+                style = MaterialTheme.typography.titleMedium,
+                color = AppShellTextPrimary,
+            )
+            Text(
+                text = "Aktiivinen myyjä",
+                style = MaterialTheme.typography.labelMedium,
+                color = AppShellTextMuted,
+            )
+            Text(
+                text = currentStaffName,
+                style = MaterialTheme.typography.titleSmall,
+                color = AppShellAccentText,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Button(
+                onClick = onSwitchSeller,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = AppShellButtonColor,
+                    contentColor = AppShellTextPrimary,
+                ),
+            ) {
+                Text("Vaihda myyjä")
+            }
+            Button(
+                onClick = onOpenShift,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = AppShellButtonMutedColor,
+                    contentColor = AppShellTextPrimary,
+                ),
+            ) {
+                Text("Avaa VUORO")
+            }
         }
     }
 }
@@ -2676,4 +2779,33 @@ private fun RailButton(
             )
         }
     }
+}
+
+private fun loadJournalNotesFromPrefs(prefs: SharedPreferences): List<JournalNote> {
+    val json = prefs.getString("notes_json", null) ?: return emptyList()
+    return runCatching {
+        val arr = JSONArray(json)
+        (0 until arr.length()).map { i ->
+            val obj = arr.getJSONObject(i)
+            JournalNote(
+                text = obj.getString("text"),
+                authorName = obj.getString("authorName"),
+                timestampMillis = obj.getLong("timestampMillis"),
+            )
+        }
+    }.getOrDefault(emptyList())
+}
+
+private fun saveJournalNotesToPrefs(prefs: SharedPreferences, notes: List<JournalNote>) {
+    val arr = JSONArray()
+    notes.forEach { note ->
+        arr.put(
+            JSONObject().apply {
+                put("text", note.text)
+                put("authorName", note.authorName)
+                put("timestampMillis", note.timestampMillis)
+            },
+        )
+    }
+    prefs.edit().putString("notes_json", arr.toString()).apply()
 }

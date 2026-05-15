@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -31,6 +32,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,14 +42,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupProperties
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -233,6 +231,8 @@ fun ShiftScreen(
     attendanceMessage: String? = null,
     onClockIn: () -> Unit = {},
     onClockOut: () -> Unit = {},
+    journalNotes: List<JournalNote> = emptyList(),
+    onNoteAdded: (String) -> Unit = {},
 ) {
     Column(
         modifier = Modifier
@@ -246,18 +246,9 @@ fun ShiftScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(0.58f),
+                .weight(1f),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            ShiftSchedulePulseCard(
-                schedule = schedule,
-                attendance = attendance,
-                loading = scheduleLoading,
-                message = scheduleMessage,
-                modifier = Modifier
-                    .weight(1.7f)
-                    .fillMaxHeight(),
-            )
             ShiftJournalCard(
                 state = state,
                 currentStaffName = currentStaffName,
@@ -265,47 +256,45 @@ fun ShiftScreen(
                 attendance = attendance,
                 attendanceNoticeMessage = attendanceNoticeMessage,
                 attendanceMessage = attendanceMessage,
-                modifier = Modifier
-                    .weight(0.9f)
-                    .fillMaxHeight(),
-            )
-        }
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(0.42f),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            OwnShiftsCard(
-                schedule = ownSchedule,
-                currentStaffId = currentStaffId,
-                loading = ownScheduleLoading,
-                message = ownScheduleMessage,
-                modifier = Modifier
-                    .weight(1.35f)
-                    .fillMaxHeight(),
-            )
-            OnSiteAttendanceCard(
-                attendance = attendance,
-                modifier = Modifier
-                    .weight(0.95f)
-                    .fillMaxHeight(),
-            )
-            CashShiftCard(
-                state = state,
-                currentStaffId = currentStaffId,
-                currentStaffName = currentStaffName,
-                onCountedCashChanged = onCountedCashChanged,
-                onOpenShift = onOpenShift,
-                onCloseShift = onCloseShift,
+                journalNotes = journalNotes,
+                onNoteAdded = onNoteAdded,
                 modifier = Modifier
                     .weight(1.05f)
                     .fillMaxHeight(),
             )
+
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight(),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                ShiftSchedulePulseCard(
+                    schedule = schedule,
+                    attendance = attendance,
+                    loading = scheduleLoading,
+                    message = scheduleMessage,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                )
+
+                CashShiftCard(
+                    state = state,
+                    currentStaffId = currentStaffId,
+                    currentStaffName = currentStaffName,
+                    onCountedCashChanged = onCountedCashChanged,
+                    onOpenShift = onOpenShift,
+                    onCloseShift = onCloseShift,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(0.65f),
+                )
+            }
         }
     }
 }
+
 
 @Composable
 private fun ShiftHeader() {
@@ -361,144 +350,117 @@ private fun CashShiftCard(
         }
     }
 
-    fun openCountedCashPad() {
-        if (!isOpen) return
-        replaceCountedCashOnNextInput = true
-        cashCounterOpen = true
-    }
-    val cashPopupOffsetY = with(LocalDensity.current) { 68.dp.roundToPx() }
-
     ShiftCard(
-        title = "Kassavuoro",
+        title = "Pohjakassa",
         icon = "▣",
         modifier = modifier,
         statusLabel = if (isOpen) "Avoin" else "Suljettu",
         statusColor = if (isOpen) ShiftSuccess else ShiftWarning,
     ) {
-        state.message?.let { ShiftStatusBanner(text = it, tint = ShiftDanger) }
+        Column(modifier = Modifier.fillMaxSize()) {
+            state.message?.let {
+                ShiftStatusBanner(text = it, tint = ShiftDanger)
+                Spacer(modifier = Modifier.height(8.dp))
+            }
 
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            if (currentShift != null) {
-                ShiftKeyValueRow("Avaaja", openedByLabel)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                if (currentShift != null) {
+                    ShiftKeyValueRow("Avaaja", openedByLabel)
                     CashSummaryMetric(
                         label = "Pohjakassa",
                         value = CentsFormatter.format(currentShift.openingFloatCents),
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.fillMaxWidth(),
                     )
-                    CashSummaryMetric(
-                        label = "Odotettu",
-                        value = CentsFormatter.format(currentShift.expectedCashCents),
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-
-                Box(modifier = Modifier.fillMaxWidth()) {
                     CashAmountDisplay(
                         value = state.countedCashInput,
                         label = "Laskettu käteinen",
-                        onClick = ::openCountedCashPad,
+                        onClick = {
+                            if (!cashCounterOpen) {
+                                replaceCountedCashOnNextInput = true
+                                cashCounterOpen = true
+                            }
+                        },
                     )
                     if (cashCounterOpen) {
-                        Popup(
-                            alignment = Alignment.TopEnd,
-                            offset = IntOffset(0, cashPopupOffsetY),
-                            onDismissRequest = { cashCounterOpen = false },
-                            properties = PopupProperties(focusable = true),
+                        NumericMoneyPad(
+                            onDigit = { digit ->
+                                val nextValue = if (replaceCountedCashOnNextInput) digit
+                                               else appendShiftMoneyDigit(state.countedCashInput, digit)
+                                replaceCountedCashOnNextInput = false
+                                onCountedCashChanged(nextValue)
+                            },
+                            onDecimal = {
+                                val nextValue = if (replaceCountedCashOnNextInput) "0,"
+                                               else appendShiftMoneyDecimal(state.countedCashInput)
+                                replaceCountedCashOnNextInput = false
+                                onCountedCashChanged(nextValue)
+                            },
+                            onBackspace = {
+                                replaceCountedCashOnNextInput = false
+                                onCountedCashChanged(removeShiftMoneyChar(state.countedCashInput))
+                            },
+                            keyHeight = 42.dp,
+                            keyColor = ShiftKeyColor,
+                            keyContentColor = ShiftKeyContentColor,
+                        )
+                        Button(
+                            onClick = { cashCounterOpen = false },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = ShiftCyanSoft.copy(alpha = 0.42f),
+                                contentColor = ShiftCyan,
+                            ),
+                            shape = RoundedCornerShape(14.dp),
                         ) {
-                            Surface(
-                                modifier = Modifier.width(266.dp),
-                                shape = RoundedCornerShape(20.dp),
-                                color = ShiftPanelRaisedColor,
-                                border = BorderStroke(1.dp, ShiftBorderColor),
-                                contentColor = ShiftTextPrimary,
-                            ) {
-                                Column(
-                                    modifier = Modifier.padding(12.dp),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                                ) {
-                                    Text(
-                                        text = "Laskettu käteinen",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = ShiftTextMuted,
-                                    )
-                                    NumericMoneyPad(
-                                        onDigit = { digit ->
-                                            val nextValue = if (replaceCountedCashOnNextInput) {
-                                                digit
-                                            } else {
-                                                appendShiftMoneyDigit(state.countedCashInput, digit)
-                                            }
-                                            replaceCountedCashOnNextInput = false
-                                            onCountedCashChanged(nextValue)
-                                        },
-                                        onDecimal = {
-                                            val nextValue = if (replaceCountedCashOnNextInput) {
-                                                "0,"
-                                            } else {
-                                                appendShiftMoneyDecimal(state.countedCashInput)
-                                            }
-                                            replaceCountedCashOnNextInput = false
-                                            onCountedCashChanged(nextValue)
-                                        },
-                                        onBackspace = {
-                                            replaceCountedCashOnNextInput = false
-                                            onCountedCashChanged(removeShiftMoneyChar(state.countedCashInput))
-                                        },
-                                        keyHeight = 42.dp,
-                                        keyColor = ShiftKeyColor,
-                                        keyContentColor = ShiftKeyContentColor,
-                                    )
-                                }
-                            }
+                            Text(
+                                text = "Hyväksy summa",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                            )
                         }
                     }
+                    Text(
+                        text = "Sulje pohjakassa, kun laskettu käteinen vastaa kassalaskentaa.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ShiftTextMuted,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                } else {
+                    Text(
+                        text = "Pohjakassa",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = ShiftTextMuted,
+                    )
+                    Text(
+                        text = displayMoneyInput(state.openingFloatInput),
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = ShiftGold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = "Pohjakassa luetaan POS-asetuksista. Avaa pohjakassa valitulle käyttäjälle.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ShiftTextMuted,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
-                Text(
-                    text = "Sulje kassavuoro, kun laskettu käteinen vastaa kassalaskentaa.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = ShiftTextMuted,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            } else {
-                Text(
-                    text = "Pohjakassa",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = ShiftTextMuted,
-                )
-                Text(
-                    text = displayMoneyInput(state.openingFloatInput),
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = ShiftGold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = "Pohjakassa luetaan POS-asetuksista. Avaa kassavuoro valitulle käyttäjälle.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = ShiftTextMuted,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
             }
 
-            Spacer(modifier = Modifier.weight(1f))
+            Spacer(modifier = Modifier.height(10.dp))
 
             Button(
                 onClick = {
-                    if (isOpen) {
-                        onCloseShift()
-                    } else {
-                        currentStaffId?.let(onOpenShift)
-                    }
+                    if (isOpen) onCloseShift()
+                    else currentStaffId?.let(onOpenShift)
                 },
                 enabled = !state.busy && (isOpen || currentStaffId != null),
                 modifier = Modifier.fillMaxWidth(),
@@ -564,9 +526,21 @@ private fun ShiftSchedulePulseCard(
         modifier = modifier,
     ) {
         val now = LocalDateTime.now()
-        val windowStart = now.minusHours(4).truncatedTo(ChronoUnit.HOURS)
-        val windowEnd = windowStart.plusHours(8)
+        val todayDate = now.toLocalDate()
         val publishedDays = schedule?.days.orEmpty().filter { it.hasPublishedScheduleTruth() }
+        val todayShifts = publishedDays
+            .filter { it.date == todayDate || it.date == todayDate.minusDays(1) }
+            .flatMap { it.plannedShifts }
+        val windowStart = if (todayShifts.isEmpty()) {
+            now.minusHours(4).truncatedTo(ChronoUnit.HOURS)
+        } else {
+            minOf(todayShifts.minOf { it.startsAt }, now.minusMinutes(30)).truncatedTo(ChronoUnit.HOURS)
+        }
+        val windowEnd = if (todayShifts.isEmpty()) {
+            windowStart.plusHours(8)
+        } else {
+            maxOf(todayShifts.maxOf { it.endsAt }, now.plusMinutes(30))
+        }
         val visibleShifts = publishedDays
             .flatMap { it.plannedShifts }
             .filter { it.overlaps(windowStart, windowEnd) }
@@ -706,6 +680,8 @@ private fun ShiftJournalCard(
     attendance: WorktimeAttendanceSnapshot,
     attendanceNoticeMessage: String?,
     attendanceMessage: String?,
+    journalNotes: List<JournalNote> = emptyList(),
+    onNoteAdded: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     ShiftCard(
@@ -719,7 +695,7 @@ private fun ShiftJournalCard(
                     JournalEvent(
                         marker = "✓",
                         tint = ShiftSuccess,
-                        title = "Kassavuoro avoinna",
+                        title = "Pohjakassa avoinna",
                         detail = "Pohjakassa ${CentsFormatter.format(shift.openingFloatCents)}",
                         timestamp = shift.openedAtEpochMillis.toString(),
                     ),
@@ -766,25 +742,102 @@ private fun ShiftJournalCard(
             attendanceMessage?.let {
                 add(JournalEvent("!", ShiftDanger, "Työaikavirhe", it))
             }
+            journalNotes.forEach { note ->
+                add(
+                    JournalEvent(
+                        marker = "✎",
+                        tint = ShiftGold,
+                        title = note.text,
+                        detail = "${note.authorName} · ${formatJournalTime(note.timestampMillis.toString())}",
+                        timestamp = note.timestampMillis.toString(),
+                    ),
+                )
+            }
         }
 
-        if (events.isEmpty()) {
-            ShiftEmptyText("Ei työvuoromerkintöjä.")
-        } else {
+        var noteInput by remember { mutableStateOf("") }
+        val journalScrollState = rememberScrollState()
+        LaunchedEffect(events.size, journalScrollState.maxValue) {
+            journalScrollState.scrollTo(journalScrollState.maxValue)
+        }
+
+        Column(modifier = Modifier.fillMaxSize()) {
             Column(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState()),
+                    .weight(1f)
+                    .verticalScroll(journalScrollState),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                var lastDay: String? = null
-                events.forEach { event ->
-                    val day = formatJournalDay(event.timestamp)
-                    if (day != lastDay) {
-                        ShiftDayBoundary(label = day)
-                        lastDay = day
+                if (events.isEmpty()) {
+                    ShiftEmptyText("Ei työvuoromerkintöjä.")
+                } else {
+                    var lastDay: String? = null
+                    events.forEach { event ->
+                        val day = formatJournalDay(event.timestamp)
+                        if (day != lastDay) {
+                            ShiftDayBoundary(label = day)
+                            lastDay = day
+                        }
+                        JournalRow(event)
                     }
-                    JournalRow(event)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(ShiftPanelDeepColor, RoundedCornerShape(14.dp))
+                    .border(BorderStroke(1.dp, ShiftBorderColor), RoundedCornerShape(14.dp))
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                BasicTextField(
+                    value = noteInput,
+                    onValueChange = { noteInput = it },
+                    modifier = Modifier.weight(1f),
+                    textStyle = MaterialTheme.typography.bodySmall.copy(color = ShiftTextPrimary),
+                    singleLine = true,
+                    decorationBox = { inner ->
+                        Box {
+                            if (noteInput.isBlank()) {
+                                Text(
+                                    text = "Kirjoita muistiinpano…",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = ShiftTextMuted,
+                                )
+                            }
+                            inner()
+                        }
+                    },
+                )
+                Surface(
+                    modifier = Modifier
+                        .heightIn(min = 30.dp)
+                        .clickable(enabled = noteInput.isNotBlank()) {
+                            if (noteInput.isNotBlank()) {
+                                onNoteAdded(noteInput.trim())
+                                noteInput = ""
+                            }
+                        },
+                    shape = RoundedCornerShape(10.dp),
+                    color = ShiftCyan.copy(alpha = if (noteInput.isNotBlank()) 0.18f else 0.06f),
+                    border = BorderStroke(1.dp, ShiftCyan.copy(alpha = if (noteInput.isNotBlank()) 0.34f else 0.10f)),
+                    contentColor = ShiftCyan,
+                ) {
+                    Box(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "Lisää",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = ShiftCyan.copy(alpha = if (noteInput.isNotBlank()) 1f else 0.38f),
+                        )
+                    }
                 }
             }
         }
@@ -1405,6 +1458,12 @@ private fun ShiftEmptyText(text: String) {
     }
 }
 
+data class JournalNote(
+    val text: String,
+    val authorName: String,
+    val timestampMillis: Long,
+)
+
 private data class JournalEvent(
     val marker: String,
     val tint: Color,
@@ -1423,7 +1482,7 @@ private fun formatShiftStatus(status: String): String {
 
 private fun appendShiftMoneyDigit(current: String, digit: String): String {
     val s = current.replace('.', ',').trim()
-    if (s.isBlank() || s == "50,00") return digit
+    if (s.isBlank()) return digit
     return if (s.contains(',')) {
         val dec = s.substringAfter(',')
         if (dec.length >= 2) s else s + digit
