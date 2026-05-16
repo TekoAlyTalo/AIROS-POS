@@ -2,6 +2,9 @@ package com.airos.pos.domain
 
 import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.model.AuthSession
+import com.airos.pos.core.model.CashCountResult
+import com.airos.pos.core.model.CashEvent
+import com.airos.pos.core.model.CashLedgerState
 import com.airos.pos.core.model.FloorMap
 import com.airos.pos.core.model.KitchenOrder
 import com.airos.pos.core.model.ManagerOverrideGrant
@@ -62,6 +65,69 @@ interface ShiftScheduleRepository {
         dateFrom: LocalDate,
         dateTo: LocalDate,
     ): PosResult<ShiftScheduleSnapshot>
+}
+
+interface CashLedgerRepository {
+    fun observeState(drawerId: String = com.airos.pos.core.model.CashDrawer.DEFAULT_DRAWER_ID): Flow<CashLedgerState>
+    suspend fun recordCashOpened(
+        drawerId: String,
+        amountCents: Int,
+        staffId: String,
+        staffName: String?,
+        source: String,
+    ): PosResult<CashEvent>
+    suspend fun recordCashCount(
+        drawerId: String,
+        amountCents: Int,
+        staffId: String,
+        staffName: String?,
+        note: String? = null,
+    ): PosResult<CashCountResult>
+    suspend fun recordCashSale(
+        drawerId: String,
+        amountCents: Int,
+        sourceEventId: String,
+        receiptNumber: String?,
+        staffId: String?,
+        staffName: String?,
+    ): PosResult<CashEvent>
+    suspend fun recordCashRefund(
+        drawerId: String,
+        amountCents: Int,
+        sourceEventId: String,
+        staffId: String?,
+        staffName: String?,
+    ): PosResult<CashEvent>
+    suspend fun recordCashAdded(
+        drawerId: String,
+        amountCents: Int,
+        staffId: String,
+        staffName: String?,
+        reason: String?,
+        sourceEventId: String? = null,
+    ): PosResult<CashEvent>
+    suspend fun recordCashRemoved(
+        drawerId: String,
+        amountCents: Int,
+        staffId: String,
+        staffName: String?,
+        reason: String?,
+        sourceEventId: String? = null,
+    ): PosResult<CashEvent>
+    suspend fun recordCashClosed(
+        drawerId: String,
+        amountCents: Int?,
+        staffId: String,
+        staffName: String?,
+        countedAtClose: Boolean,
+        note: String?,
+    ): PosResult<CashEvent>
+    suspend fun recordTruthMissing(
+        drawerId: String,
+        staffId: String?,
+        staffName: String?,
+        reason: String,
+    ): PosResult<CashEvent>
 }
 
 interface TableRepository {

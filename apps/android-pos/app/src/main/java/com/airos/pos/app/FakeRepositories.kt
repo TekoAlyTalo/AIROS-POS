@@ -6,6 +6,7 @@ import com.airos.pos.core.common.CentsFormatter
 import com.airos.pos.core.datastore.TerminalPreferencesStore
 import com.airos.pos.core.datastore.StaffUiPreferencesStore
 import com.airos.pos.core.model.AuthSession
+import com.airos.pos.core.model.CashDrawer
 import com.airos.pos.core.model.FloorMap
 import com.airos.pos.core.model.KitchenOrder
 import com.airos.pos.core.model.KitchenTicketDocument
@@ -42,6 +43,7 @@ import com.airos.pos.core.model.TicketStatus
 import com.airos.pos.domain.AirosPosLedgerHttpClient
 import com.airos.pos.domain.AirosPosLedgerMapper
 import com.airos.pos.domain.AuthRepository
+import com.airos.pos.domain.CashLedgerRepository
 import com.airos.pos.domain.KitchenRepository
 import com.airos.pos.domain.MenuRepository
 import com.airos.pos.domain.MenuSyncResult
@@ -459,6 +461,7 @@ class FakePaymentRepository(
     private val cashierAuthMethodSnapshotProvider: (() -> String?)? = null,
     private val restaurantReceiptSettingsClient: RestaurantReceiptSettingsClient? = null,
     private val saleSyncOutboxRepository: SalesLedgerOutboxRepository? = null,
+    private val cashLedgerRepository: CashLedgerRepository? = null,
 ) : PaymentRepository {
     private companion object {
         const val TAG = "AIROS_LEDGER"
@@ -628,10 +631,10 @@ class FakePaymentRepository(
         }
 
         var receiptHandoffPayload: ReceiptHandoffPayload? = null
+        val sourcePosEventId = UUID.randomUUID().toString()
         val receiptDocument = when {
             ledgerHttpClient != null && saleSyncOutboxRepository != null -> {
                 val ledgerBaseUrl = ledgerBackendBaseUrlProvider?.invoke().orEmpty()
-                val sourcePosEventId = UUID.randomUUID().toString()
                 val ledgerPaymentResult = TablePaymentResult(
                     ticketId = ticketId,
                     tableId = resolvedTableId,
@@ -770,6 +773,24 @@ class FakePaymentRepository(
             action = "finalize_table_payment",
             payloadJson = """{"tableId":"${resolvedTableId ?: ""}","totalDueCents":$totalDueCents,"totalPaidCents":$totalPaidCents,"discountCents":$discountCents}""",
         )
+
+        val retainedCashCents = (paymentRecords
+            .filter { it.method == PaymentMethod.CASH }
+            .sumOf { it.amountCents } - changeCents).coerceAtLeast(0)
+        if (retainedCashCents > 0) {
+            when (val cashResult = cashLedgerRepository?.recordCashSale(
+                drawerId = CashDrawer.DEFAULT_DRAWER_ID,
+                amountCents = retainedCashCents,
+                sourceEventId = sourcePosEventId,
+                receiptNumber = receiptNumber,
+                staffId = cashierStaffId,
+                staffName = cashierName,
+            )) {
+                is PosResult.Failure -> Log.e(TAG, "finalizeTablePayment: cash ledger event failed receipt=$receiptNumber reason=${cashResult.message}")
+                is PosResult.Success -> Log.i(TAG, "finalizeTablePayment: cash ledger event recorded receipt=$receiptNumber amountCents=$retainedCashCents")
+                null -> Log.w(TAG, "finalizeTablePayment: cash ledger repository missing; cash event not recorded receipt=$receiptNumber")
+            }
+        }
 
         return PosResult.Success(
             TablePaymentResult(

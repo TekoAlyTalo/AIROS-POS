@@ -498,6 +498,79 @@ data class PosShift(
     val closedAtEpochMillis: Long? = null,
 )
 
+enum class CashDrawerStatus {
+    OPEN,
+    CLOSED,
+}
+
+data class CashDrawer(
+    val id: String,
+    val label: String,
+    val status: CashDrawerStatus,
+    val openedAtEpochMillis: Long? = null,
+    val closedAtEpochMillis: Long? = null,
+) {
+    companion object {
+        const val DEFAULT_DRAWER_ID = "default-cash-drawer"
+        const val DEFAULT_DRAWER_LABEL = "Pääkassa"
+    }
+}
+
+enum class CashEventType {
+    CASH_OPENED,
+    CASH_COUNT_RECORDED,
+    CASH_SALE_RECEIVED,
+    CASH_REFUND_PAID,
+    CASH_ADDED,
+    CASH_REMOVED,
+    CASH_CLOSED,
+    CASH_TRUTH_MISSING,
+}
+
+data class CashEvent(
+    val id: String,
+    val drawerId: String,
+    val type: CashEventType,
+    val amountCents: Int?,
+    val deltaCents: Int,
+    val staffId: String?,
+    val staffName: String?,
+    val sourceType: String?,
+    val sourceId: String?,
+    val idempotencyKey: String?,
+    val note: String?,
+    val occurredAtEpochMillis: Long,
+    val createdAtEpochMillis: Long,
+)
+
+enum class CashExpectedState {
+    AVAILABLE,
+    MISSING_TRUTH,
+}
+
+data class CashCountResult(
+    val event: CashEvent,
+    val countedCashCents: Int,
+)
+
+data class CashLedgerState(
+    val drawer: CashDrawer = CashDrawer(
+        id = CashDrawer.DEFAULT_DRAWER_ID,
+        label = CashDrawer.DEFAULT_DRAWER_LABEL,
+        status = CashDrawerStatus.CLOSED,
+    ),
+    val expectedState: CashExpectedState = CashExpectedState.MISSING_TRUTH,
+    val expectedCashCents: Int? = null,
+    val latestExplicitCashCents: Int? = null,
+    val latestExplicitCashEventId: String? = null,
+    val latestExplicitCashAtEpochMillis: Long? = null,
+    val latestCountedCashCents: Int? = null,
+    val latestCountedAtEpochMillis: Long? = null,
+    val latestCountedByStaffName: String? = null,
+    val lastEventAtEpochMillis: Long? = null,
+    val warningMessage: String? = "Kassassa pitäisi olla ei ole laskettavissa ennen kassalaskentaa.",
+)
+
 data class AttendanceEntry(
     val staffId: String,
     val staffName: String,

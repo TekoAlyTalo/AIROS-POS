@@ -9,6 +9,8 @@ import androidx.room.Upsert
 import com.airos.pos.core.database.entity.AttendanceActiveSessionLocalEntity
 import com.airos.pos.core.database.entity.AttendanceEventLocalEntity
 import com.airos.pos.core.database.entity.AttendanceSyncMetadataLocalEntity
+import com.airos.pos.core.database.entity.CashDrawerLocalEntity
+import com.airos.pos.core.database.entity.CashEventLocalEntity
 import com.airos.pos.core.database.entity.MenuItemLocalEntity
 import com.airos.pos.core.database.entity.OpenSaleEntity
 import com.airos.pos.core.database.entity.OpenSaleLineEntity
@@ -74,6 +76,30 @@ interface ShiftDao {
 
     @Upsert
     suspend fun upsert(item: ShiftLocalEntity)
+}
+
+@Dao
+interface CashLedgerDao {
+    @Query("SELECT * FROM cash_drawers WHERE id = :drawerId LIMIT 1")
+    fun observeDrawer(drawerId: String): Flow<CashDrawerLocalEntity?>
+
+    @Query("SELECT * FROM cash_drawers WHERE id = :drawerId LIMIT 1")
+    suspend fun loadDrawer(drawerId: String): CashDrawerLocalEntity?
+
+    @Upsert
+    suspend fun upsertDrawer(entity: CashDrawerLocalEntity)
+
+    @Query("SELECT * FROM cash_events WHERE drawerId = :drawerId ORDER BY occurredAtEpochMillis ASC, createdAtEpochMillis ASC")
+    fun observeEvents(drawerId: String): Flow<List<CashEventLocalEntity>>
+
+    @Query("SELECT * FROM cash_events WHERE drawerId = :drawerId ORDER BY occurredAtEpochMillis DESC, createdAtEpochMillis DESC LIMIT :limit")
+    fun observeRecentEvents(drawerId: String, limit: Int = 100): Flow<List<CashEventLocalEntity>>
+
+    @Query("SELECT * FROM cash_events WHERE idempotencyKey = :idempotencyKey LIMIT 1")
+    suspend fun loadEventByIdempotencyKey(idempotencyKey: String): CashEventLocalEntity?
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertEvent(entity: CashEventLocalEntity): Long
 }
 
 @Dao

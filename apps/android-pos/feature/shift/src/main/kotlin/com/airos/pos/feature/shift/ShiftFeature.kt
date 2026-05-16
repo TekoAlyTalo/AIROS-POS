@@ -59,6 +59,9 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.airos.pos.core.common.CentsFormatter
 import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.model.AttendanceEntry
+import com.airos.pos.core.model.CashDrawer
+import com.airos.pos.core.model.CashExpectedState
+import com.airos.pos.core.model.CashLedgerState
 import com.airos.pos.core.model.PlannedStaffShift
 import com.airos.pos.core.model.PosShift
 import com.airos.pos.core.model.ShiftScheduleDay
@@ -67,6 +70,7 @@ import com.airos.pos.core.model.ShiftScheduleSnapshot
 import com.airos.pos.core.model.ShiftStatus
 import com.airos.pos.core.model.WorktimeAttendanceSnapshot
 import com.airos.pos.core.ui.NumericMoneyPad
+import com.airos.pos.domain.CashLedgerRepository
 import com.airos.pos.domain.ShiftRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -111,23 +115,42 @@ data class ShiftUiState(
     val currentShift: PosShift? = null,
     val openingFloatInput: String = "50,00",
     val countedCashInput: String = "",
+    val cashLedgerState: CashLedgerState = CashLedgerState(),
     val busy: Boolean = false,
     val message: String? = null,
+    val journalEventId: Long = 0,
+    val journalEventText: String? = null,
 )
 
 class ShiftViewModel(
     private val shiftRepository: ShiftRepository,
-    defaultOpeningFloatCents: Int = 5000,
+    private val cashLedgerRepository: CashLedgerRepository,
+    private val defaultOpeningFloatCents: Int = 5000,
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(
         ShiftUiState(openingFloatInput = centsToEuroInput(defaultOpeningFloatCents)),
     )
     val uiState: StateFlow<ShiftUiState> = mutableState.asStateFlow()
+    private var truthMissingIssueRecorded = false
 
     init {
         viewModelScope.launch {
             shiftRepository.observeCurrentShift().collect { shift ->
-                mutableState.update { it.copy(currentShift = shift, busy = false) }
+                mutableState.update { it.copy(currentShift = shift?.takeIf { current -> current.status == ShiftStatus.OPEN }, busy = false) }
+            }
+        }
+        viewModelScope.launch {
+            cashLedgerRepository.observeState(CashDrawer.DEFAULT_DRAWER_ID).collect { ledgerState ->
+                mutableState.update { it.copy(cashLedgerState = ledgerState) }
+                if (ledgerState.expectedState == CashExpectedState.MISSING_TRUTH && !truthMissingIssueRecorded) {
+                    truthMissingIssueRecorded = true
+                    cashLedgerRepository.recordTruthMissing(
+                        drawerId = CashDrawer.DEFAULT_DRAWER_ID,
+                        staffId = null,
+                        staffName = null,
+                        reason = ledgerState.warningMessage ?: "Cash truth missing in POS VUORO.",
+                    )
+                }
             }
         }
     }
@@ -140,22 +163,43 @@ class ShiftViewModel(
         mutableState.update { it.copy(countedCashInput = value, message = null) }
     }
 
-    fun openShift(staffId: String) {
-        val cents = euroInputToCents(mutableState.value.openingFloatInput)
-        if (cents == null) {
-            mutableState.update { it.copy(message = "Pohjakassa: syötä kelvollinen euromäärä, esimerkiksi 50,00.") }
-            return
-        }
+    fun openShift(staffId: String, staffName: String?) {
         viewModelScope.launch {
             mutableState.update { it.copy(busy = true, message = null) }
-            when (val result = shiftRepository.openShift(cents, staffId)) {
-                is PosResult.Success -> mutableState.update { it.copy(currentShift = result.value, busy = false) }
-                is PosResult.Failure -> mutableState.update { it.copy(message = result.message, busy = false) }
+            val state = mutableState.value
+            val openingCents = state.cashLedgerState.expectedCashCents ?: defaultOpeningFloatCents
+            val openingSource = if (state.cashLedgerState.expectedCashCents != null) {
+                "EXPECTED_CASH"
+            } else {
+                "CONFIGURED_DEFAULT_OPENING_FLOAT"
+            }
+            when (val openResult = shiftRepository.openShift(openingCents, staffId)) {
+                is PosResult.Failure -> mutableState.update { it.copy(message = openResult.message, busy = false) }
+                is PosResult.Success -> {
+                    when (val cashResult = cashLedgerRepository.recordCashOpened(
+                        drawerId = CashDrawer.DEFAULT_DRAWER_ID,
+                        amountCents = openingCents,
+                        staffId = staffId,
+                        staffName = staffName,
+                        source = openingSource,
+                    )) {
+                        is PosResult.Success -> mutableState.update {
+                            it.copy(
+                                currentShift = openResult.value,
+                                openingFloatInput = centsToEuroInput(openingCents),
+                                busy = false,
+                                journalEventId = it.journalEventId + 1,
+                                journalEventText = "Ravintola avattu · Pohjakassa ${CentsFormatter.format(openingCents)}",
+                            )
+                        }
+                        is PosResult.Failure -> mutableState.update { it.copy(message = cashResult.message, busy = false) }
+                    }
+                }
             }
         }
     }
 
-    fun closeShift() {
+    fun recordCashCount(staffId: String, staffName: String?) {
         val cents = euroInputToCents(mutableState.value.countedCashInput)
         if (cents == null) {
             mutableState.update { it.copy(message = "Laskettu käteinen: syötä kelvollinen euromäärä, esimerkiksi 123,45.") }
@@ -163,9 +207,103 @@ class ShiftViewModel(
         }
         viewModelScope.launch {
             mutableState.update { it.copy(busy = true, message = null) }
-            when (val result = shiftRepository.closeShift(cents)) {
-                is PosResult.Success -> mutableState.update { it.copy(currentShift = result.value, busy = false) }
+            when (val result = cashLedgerRepository.recordCashCount(
+                drawerId = CashDrawer.DEFAULT_DRAWER_ID,
+                amountCents = cents,
+                staffId = staffId,
+                staffName = staffName,
+            )) {
+                is PosResult.Success -> mutableState.update {
+                    it.copy(
+                        countedCashInput = centsToEuroInput(cents),
+                        busy = false,
+                        journalEventId = it.journalEventId + 1,
+                        journalEventText = "Kassa laskettu · ${CentsFormatter.format(cents)}",
+                    )
+                }
                 is PosResult.Failure -> mutableState.update { it.copy(message = result.message, busy = false) }
+            }
+        }
+    }
+
+    fun closeShiftWithCount(staffId: String, staffName: String?) {
+        val cents = euroInputToCents(mutableState.value.countedCashInput)
+        if (cents == null) {
+            mutableState.update { it.copy(message = "Laskettu käteinen: syötä kelvollinen euromäärä, esimerkiksi 123,45.") }
+            return
+        }
+        viewModelScope.launch {
+            mutableState.update { it.copy(busy = true, message = null) }
+            val countResult = cashLedgerRepository.recordCashCount(
+                drawerId = CashDrawer.DEFAULT_DRAWER_ID,
+                amountCents = cents,
+                staffId = staffId,
+                staffName = staffName,
+                note = "Counted at restaurant close.",
+            )
+            if (countResult is PosResult.Failure) {
+                mutableState.update { it.copy(message = countResult.message, busy = false) }
+                return@launch
+            }
+            when (val closeResult = shiftRepository.closeShift(cents)) {
+                is PosResult.Failure -> mutableState.update { it.copy(message = closeResult.message, busy = false) }
+                is PosResult.Success -> {
+                    when (val cashClose = cashLedgerRepository.recordCashClosed(
+                        drawerId = CashDrawer.DEFAULT_DRAWER_ID,
+                        amountCents = cents,
+                        staffId = staffId,
+                        staffName = staffName,
+                        countedAtClose = true,
+                        note = "Restaurant closed with fresh cash count.",
+                    )) {
+                        is PosResult.Success -> mutableState.update {
+                            it.copy(
+                                currentShift = null,
+                                countedCashInput = centsToEuroInput(cents),
+                                busy = false,
+                                journalEventId = it.journalEventId + 1,
+                                journalEventText = "Ravintola suljettu · Kassa laskettu: ${CentsFormatter.format(cents)}",
+                            )
+                        }
+                        is PosResult.Failure -> mutableState.update { it.copy(message = cashClose.message, busy = false) }
+                    }
+                }
+            }
+        }
+    }
+
+    fun closeShiftUsingLatestTruth(staffId: String, staffName: String?) {
+        val amountCents = mutableState.value.cashLedgerState.latestExplicitCashCents
+        if (amountCents == null) {
+            mutableState.update {
+                it.copy(message = "Kassaa ei voi sulkea ilman kassalaskentaa tai viimeisintä vahvistettua kassasummaa.")
+            }
+            return
+        }
+        viewModelScope.launch {
+            mutableState.update { it.copy(busy = true, message = null) }
+            when (val closeResult = shiftRepository.closeShift(amountCents)) {
+                is PosResult.Failure -> mutableState.update { it.copy(message = closeResult.message, busy = false) }
+                is PosResult.Success -> {
+                    when (val cashClose = cashLedgerRepository.recordCashClosed(
+                        drawerId = CashDrawer.DEFAULT_DRAWER_ID,
+                        amountCents = amountCents,
+                        staffId = staffId,
+                        staffName = staffName,
+                        countedAtClose = false,
+                        note = "Restaurant closed without new cash count; latest explicit cash truth used.",
+                    )) {
+                        is PosResult.Success -> mutableState.update {
+                            it.copy(
+                                currentShift = null,
+                                busy = false,
+                                journalEventId = it.journalEventId + 1,
+                                journalEventText = "Ravintola suljettu · Kassaa ei laskettu · Käytetty viimeisintä kassasummaa ${CentsFormatter.format(amountCents)}",
+                            )
+                        }
+                        is PosResult.Failure -> mutableState.update { it.copy(message = cashClose.message, busy = false) }
+                    }
+                }
             }
         }
     }
@@ -173,9 +311,10 @@ class ShiftViewModel(
     companion object {
         fun factory(
             shiftRepository: ShiftRepository,
+            cashLedgerRepository: CashLedgerRepository,
             defaultOpeningFloatCents: Int = 5000,
         ): ViewModelProvider.Factory = viewModelFactory {
-            initializer { ShiftViewModel(shiftRepository, defaultOpeningFloatCents) }
+            initializer { ShiftViewModel(shiftRepository, cashLedgerRepository, defaultOpeningFloatCents) }
         }
 
         /**
@@ -214,14 +353,21 @@ class ShiftViewModel(
     }
 }
 
+private enum class CashWorkspaceMode {
+    COUNT,
+    CLOSE,
+}
+
 @Composable
 fun ShiftScreen(
     state: ShiftUiState,
     currentStaffId: String?,
     currentStaffName: String? = null,
     onCountedCashChanged: (String) -> Unit,
-    onOpenShift: (String) -> Unit,
-    onCloseShift: () -> Unit,
+    onOpenShift: (String, String?) -> Unit,
+    onRecordCashCount: (String, String?) -> Unit,
+    onCloseShiftWithCount: (String, String?) -> Unit,
+    onCloseShiftUsingLatestTruth: (String, String?) -> Unit,
     attendance: WorktimeAttendanceSnapshot = WorktimeAttendanceSnapshot(),
     isClockedIn: Boolean = false,
     myAttendanceEntry: AttendanceEntry? = null,
@@ -240,10 +386,19 @@ fun ShiftScreen(
     journalNotes: List<JournalNote> = emptyList(),
     onNoteAdded: (String) -> Unit = {},
 ) {
-    var cashCounterOpen by remember(state.currentShift?.id) { mutableStateOf(false) }
+    var cashWorkspaceMode by remember(state.currentShift?.id) { mutableStateOf<CashWorkspaceMode?>(null) }
+    val activeStaffName = currentStaffName?.takeIf { it.isNotBlank() } ?: "Tuntematon"
     var pendingCashOpenJournalText by remember { mutableStateOf<String?>(null) }
     var pendingCashCloseShiftId by remember { mutableStateOf<String?>(null) }
     var pendingCashCloseJournalText by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(state.journalEventId) {
+        val text = state.journalEventText
+        if (state.journalEventId > 0 && !text.isNullOrBlank()) {
+            onNoteAdded(text)
+            cashWorkspaceMode = null
+        }
+    }
 
     LaunchedEffect(
         pendingCashOpenJournalText,
@@ -258,7 +413,7 @@ fun ShiftScreen(
             pendingCashOpenJournalText = null
             return@LaunchedEffect
         }
-        if (state.currentShift?.status == ShiftStatus.OPEN) {
+        if (false && state.currentShift?.status == ShiftStatus.OPEN) {
             onNoteAdded(journalText)
             pendingCashOpenJournalText = null
         }
@@ -281,7 +436,7 @@ fun ShiftScreen(
             return@LaunchedEffect
         }
         val stillOpenSameShift = state.currentShift?.id == shiftId && state.currentShift.status == ShiftStatus.OPEN
-        if (!stillOpenSameShift) {
+        if (false && !stillOpenSameShift) {
             onNoteAdded(journalText)
             pendingCashCloseShiftId = null
             pendingCashCloseJournalText = null
@@ -293,11 +448,11 @@ fun ShiftScreen(
         pendingCashOpenJournalText = openingFloatCents?.let {
             "Ravintola avattu · Pohjakassa ${CentsFormatter.format(it)}"
         }
-        onOpenShift(staffId)
+        onOpenShift(staffId, activeStaffName)
     }
 
     fun requestCloseRestaurant() {
-        cashCounterOpen = false
+        cashWorkspaceMode = null
         val currentShift = state.currentShift
         val countedCashCents = ShiftViewModel.euroInputToCents(state.countedCashInput)
         if (currentShift != null && countedCashCents != null) {
@@ -307,7 +462,7 @@ fun ShiftScreen(
             pendingCashCloseShiftId = null
             pendingCashCloseJournalText = null
         }
-        onCloseShift()
+        currentStaffId?.let { staffId -> onCloseShiftWithCount(staffId, activeStaffName) }
     }
 
     Column(
@@ -363,17 +518,15 @@ fun ShiftScreen(
                         state = state,
                         currentStaffId = currentStaffId,
                         currentStaffName = currentStaffName,
-                        cashCounterOpen = cashCounterOpen,
-                        onCashCounterOpenChanged = { cashCounterOpen = it },
+                        onCashWorkspaceModeChanged = { cashWorkspaceMode = it },
                         onOpenShift = ::requestOpenRestaurant,
-                        onCloseShift = ::requestCloseRestaurant,
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(0.65f),
                     )
                 }
 
-                if (cashCounterOpen && state.currentShift != null) {
+                if (cashWorkspaceMode != null) {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
@@ -383,15 +536,18 @@ fun ShiftScreen(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .background(Color.Black.copy(alpha = 0.34f))
-                                .clickable(onClick = { cashCounterOpen = false }),
+                                .clickable(onClick = { cashWorkspaceMode = null }),
                         )
-                        CashShiftEditorOverlay(
+                        CashLedgerWorkspaceOverlay(
+                            mode = cashWorkspaceMode ?: CashWorkspaceMode.COUNT,
                             state = state,
                             currentStaffId = currentStaffId,
-                            currentStaffName = currentStaffName,
-                            onDismiss = { cashCounterOpen = false },
+                            currentStaffName = activeStaffName,
+                            onDismiss = { cashWorkspaceMode = null },
                             onCountedCashChanged = onCountedCashChanged,
-                            onCloseShift = ::requestCloseRestaurant,
+                            onRecordCashCount = { staffId -> onRecordCashCount(staffId, activeStaffName) },
+                            onCloseWithCount = { staffId -> onCloseShiftWithCount(staffId, activeStaffName) },
+                            onCloseWithoutNewCount = { staffId -> onCloseShiftUsingLatestTruth(staffId, activeStaffName) },
                             modifier = Modifier
                                 .align(Alignment.Center)
                                 .fillMaxWidth(0.96f)
@@ -442,17 +598,16 @@ private fun CashShiftCard(
     state: ShiftUiState,
     currentStaffId: String?,
     currentStaffName: String?,
-    cashCounterOpen: Boolean,
-    onCashCounterOpenChanged: (Boolean) -> Unit,
+    onCashWorkspaceModeChanged: (CashWorkspaceMode) -> Unit,
     onOpenShift: (String) -> Unit,
-    onCloseShift: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val currentShift = state.currentShift
     val isOpen = currentShift != null
+    val ledger = state.cashLedgerState
     val openedByLabel = remember(currentShift, currentStaffId, currentStaffName) {
         when {
-            currentShift == null -> ""
+            currentShift == null -> "-"
             currentShift.openedByStaffId == currentStaffId && !currentStaffName.isNullOrBlank() -> currentStaffName
             else -> currentShift.openedByStaffId
         }
@@ -471,94 +626,114 @@ private fun CashShiftCard(
         statusLabel = if (isOpen) "Avoin" else "Suljettu",
         statusColor = if (isOpen) ShiftSuccess else ShiftWarning,
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             Column(
-                modifier = Modifier
-                    .weight(1f),
+                modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                if (currentShift != null) {
+                if (isOpen) {
                     ShiftKeyValueRow("Avaaja", openedByLabel)
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     CashSummaryMetric(
                         label = "Pohjakassa",
-                        value = CentsFormatter.format(currentShift.openingFloatCents),
-                        modifier = Modifier.fillMaxWidth(),
+                        value = cashOpeningFloatText(state),
+                        modifier = Modifier.weight(1f),
                         compact = true,
                     )
-                    CashAmountDisplay(
-                        value = state.countedCashInput,
-                        label = "Laskettu käteinen",
+                    CashSummaryMetric(
+                        label = "Kassassa pitäisi olla",
+                        value = cashExpectedText(ledger),
+                        modifier = Modifier.weight(1f),
                         compact = true,
-                        onClick = {
-                            if (cashCounterOpen) {
-                                onCashCounterOpenChanged(false)
-                            } else {
-                                onCashCounterOpenChanged(true)
-                            }
-                        },
                     )
-                } else {
-                    Text(
-                        text = "Pohjakassa",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = ShiftTextMuted,
-                    )
-                    Text(
-                        text = displayMoneyInput(state.openingFloatInput),
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = ShiftGold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                }
+                CashSummaryMetric(
+                    label = "Viimeisin kassalaskenta",
+                    value = latestCashCountText(ledger),
+                    modifier = Modifier.fillMaxWidth(),
+                    compact = true,
+                )
+                if (ledger.expectedState == CashExpectedState.MISSING_TRUTH) {
+                    ShiftStatusBanner(
+                        text = ledger.warningMessage ?: "Kassassa pitäisi olla ei ole laskettavissa. Laske kassa.",
+                        tint = ShiftDanger,
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
-
-            Button(
-                onClick = {
-                    if (isOpen) onCloseShift()
-                    else currentStaffId?.let(onOpenShift)
-                },
-                enabled = !state.busy && (isOpen || currentStaffId != null),
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isOpen) ShiftGold.copy(alpha = 0.82f) else ShiftCyan.copy(alpha = 0.82f),
-                    contentColor = Color(0xFF071109),
-                    disabledContainerColor = ShiftPanelRaisedColor,
-                    disabledContentColor = ShiftTextMuted,
-                ),
-                shape = RoundedCornerShape(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(
-                    text = if (isOpen) "Sulje ravintola" else "Avaa ravintola",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                )
+                Button(
+                    onClick = { onCashWorkspaceModeChanged(CashWorkspaceMode.COUNT) },
+                    enabled = !state.busy && currentStaffId != null,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ShiftCyan.copy(alpha = 0.82f),
+                        contentColor = Color(0xFF071109),
+                        disabledContainerColor = ShiftPanelRaisedColor,
+                        disabledContentColor = ShiftTextMuted,
+                    ),
+                    shape = RoundedCornerShape(16.dp),
+                ) {
+                    Text(
+                        text = "Laske kassa",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+                Button(
+                    onClick = {
+                        if (isOpen) {
+                            onCashWorkspaceModeChanged(CashWorkspaceMode.CLOSE)
+                        } else {
+                            currentStaffId?.let(onOpenShift)
+                        }
+                    },
+                    enabled = !state.busy && currentStaffId != null,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isOpen) ShiftGold.copy(alpha = 0.82f) else ShiftSuccess.copy(alpha = 0.82f),
+                        contentColor = Color(0xFF071109),
+                        disabledContainerColor = ShiftPanelRaisedColor,
+                        disabledContentColor = ShiftTextMuted,
+                    ),
+                    shape = RoundedCornerShape(16.dp),
+                ) {
+                    Text(
+                        text = if (isOpen) "Sulje ravintola" else "Avaa ravintola",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
             }
         }
     }
 }
 
 @Composable
-private fun CashShiftEditorOverlay(
+private fun CashLedgerWorkspaceOverlay(
+    mode: CashWorkspaceMode,
     state: ShiftUiState,
     currentStaffId: String?,
     currentStaffName: String?,
     onDismiss: () -> Unit,
     onCountedCashChanged: (String) -> Unit,
-    onCloseShift: () -> Unit,
+    onRecordCashCount: (String) -> Unit,
+    onCloseWithCount: (String) -> Unit,
+    onCloseWithoutNewCount: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val currentShift = state.currentShift ?: return
-    var replaceCountedCashOnNextInput by remember(currentShift.id) { mutableStateOf(true) }
-    val openedByLabel = remember(currentShift, currentStaffId, currentStaffName) {
-        when {
-            currentShift.openedByStaffId == currentStaffId && !currentStaffName.isNullOrBlank() -> currentStaffName
-            else -> currentShift.openedByStaffId
-        }
-    }
+    val ledger = state.cashLedgerState
+    var replaceCountedCashOnNextInput by remember(mode) { mutableStateOf(true) }
 
     Surface(
         modifier = modifier.clickable(
@@ -584,13 +759,13 @@ private fun CashShiftEditorOverlay(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Pohjakassa",
+                        text = if (mode == CashWorkspaceMode.CLOSE) "Sulje ravintola" else "Kassalaskenta",
                         style = MaterialTheme.typography.titleMedium,
                         color = ShiftTextPrimary,
                         fontWeight = FontWeight.Bold,
                     )
                     Text(
-                        text = "Avaaja $openedByLabel",
+                        text = currentStaffName?.takeIf { it.isNotBlank() } ?: "Aktiivinen myyjä puuttuu",
                         style = MaterialTheme.typography.labelSmall,
                         color = ShiftTextMuted,
                         maxLines = 1,
@@ -607,7 +782,7 @@ private fun CashShiftEditorOverlay(
                     contentColor = ShiftTextPrimary,
                 ) {
                     Box(
-                        modifier = Modifier.padding(horizontal = 14.dp),
+                        modifier = Modifier.padding(horizontal = 16.dp),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
@@ -621,15 +796,39 @@ private fun CashShiftEditorOverlay(
                 }
             }
 
+            state.message?.takeIf { it.isNotBlank() }?.let { message ->
+                ShiftStatusBanner(text = message, tint = ShiftWarning)
+            }
+            if (ledger.expectedState == CashExpectedState.MISSING_TRUTH) {
+                ShiftStatusBanner(
+                    text = ledger.warningMessage ?: "Kassassa pitäisi olla ei ole laskettavissa. Laske kassa.",
+                    tint = ShiftDanger,
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                CashSummaryMetric(
+                    label = "Pohjakassa",
+                    value = cashOpeningFloatText(state),
+                    modifier = Modifier.weight(1f),
+                )
+                CashSummaryMetric(
+                    label = "Kassassa pitäisi olla",
+                    value = cashExpectedText(ledger),
+                    modifier = Modifier.weight(1f),
+                )
+            }
             CashSummaryMetric(
-                label = "Pohjakassa",
-                value = CentsFormatter.format(currentShift.openingFloatCents),
+                label = "Viimeisin kassalaskenta",
+                value = latestCashCountText(ledger),
                 modifier = Modifier.fillMaxWidth(),
             )
             CashAmountDisplay(
                 value = state.countedCashInput,
                 label = "Laskettu käteinen",
-                onClick = onDismiss,
             )
             NumericMoneyPad(
                 onDigit = { digit ->
@@ -654,19 +853,53 @@ private fun CashShiftEditorOverlay(
                     replaceCountedCashOnNextInput = false
                     onCountedCashChanged(removeShiftMoneyChar(state.countedCashInput))
                 },
-                keyHeight = 46.dp,
+                keyHeight = 48.dp,
                 keyColor = ShiftKeyColor,
                 keyContentColor = ShiftKeyContentColor,
             )
 
             Spacer(modifier = Modifier.weight(1f))
 
+            if (mode == CashWorkspaceMode.CLOSE && ledger.latestExplicitCashCents != null) {
+                Button(
+                    onClick = { currentStaffId?.let(onCloseWithoutNewCount) },
+                    enabled = !state.busy && currentStaffId != null,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ShiftPanelDeepColor,
+                        contentColor = ShiftTextSecondary,
+                        disabledContainerColor = ShiftPanelDeepColor,
+                        disabledContentColor = ShiftTextMuted,
+                    ),
+                    shape = RoundedCornerShape(16.dp),
+                ) {
+                    Text(
+                        text = "Sulje ilman uutta laskentaa",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            } else if (mode == CashWorkspaceMode.CLOSE && ledger.latestExplicitCashCents == null) {
+                ShiftStatusBanner(
+                    text = "Sulkeminen vaatii kassalaskennan, koska vahvistettua kassasummaa ei ole.",
+                    tint = ShiftDanger,
+                )
+            }
+
             Button(
-                onClick = onCloseShift,
-                enabled = !state.busy,
+                onClick = {
+                    currentStaffId?.let { staffId ->
+                        if (mode == CashWorkspaceMode.CLOSE) {
+                            onCloseWithCount(staffId)
+                        } else {
+                            onRecordCashCount(staffId)
+                        }
+                    }
+                },
+                enabled = !state.busy && currentStaffId != null,
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = ShiftGold.copy(alpha = 0.86f),
+                    containerColor = if (mode == CashWorkspaceMode.CLOSE) ShiftGold.copy(alpha = 0.86f) else ShiftCyan.copy(alpha = 0.86f),
                     contentColor = Color(0xFF071109),
                     disabledContainerColor = ShiftPanelDeepColor,
                     disabledContentColor = ShiftTextMuted,
@@ -674,13 +907,31 @@ private fun CashShiftEditorOverlay(
                 shape = RoundedCornerShape(16.dp),
             ) {
                 Text(
-                    text = "Sulje ravintola",
+                    text = if (mode == CashWorkspaceMode.CLOSE) "Kirjaa laskenta ja sulje" else "Kirjaa kassalaskenta",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
                 )
             }
         }
     }
+}
+
+private fun cashOpeningFloatText(state: ShiftUiState): String {
+    return state.currentShift?.openingFloatCents?.let(CentsFormatter::format)
+        ?: displayMoneyInput(state.openingFloatInput)
+}
+
+private fun cashExpectedText(ledger: CashLedgerState): String {
+    val expectedCashCents = ledger.expectedCashCents
+    return if (ledger.expectedState == CashExpectedState.AVAILABLE && expectedCashCents != null) {
+        CentsFormatter.format(expectedCashCents)
+    } else {
+        "Ei laskettavissa"
+    }
+}
+
+private fun latestCashCountText(ledger: CashLedgerState): String {
+    return ledger.latestCountedCashCents?.let(CentsFormatter::format) ?: "Ei kassalaskentaa"
 }
 
 @Composable

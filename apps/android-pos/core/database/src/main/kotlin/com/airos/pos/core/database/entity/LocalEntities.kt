@@ -77,6 +77,48 @@ data class ShiftLocalEntity(
     val closedAtEpochMillis: Long?,
 )
 
+@Entity(tableName = "cash_drawers")
+data class CashDrawerLocalEntity(
+    @PrimaryKey val id: String,
+    val label: String,
+    val status: String,
+    val openedAtEpochMillis: Long?,
+    val closedAtEpochMillis: Long?,
+    val latestExplicitCashCents: Int?,
+    val latestExplicitCashEventId: String?,
+    val latestExplicitCashAtEpochMillis: Long?,
+    val latestCountedCashCents: Int?,
+    val latestCountedAtEpochMillis: Long?,
+    val latestCountedByStaffId: String?,
+    val latestCountedByStaffName: String?,
+    val updatedAtEpochMillis: Long,
+)
+
+@Entity(
+    tableName = "cash_events",
+    indices = [
+        Index(value = ["drawerId", "occurredAtEpochMillis"]),
+        Index(value = ["type", "occurredAtEpochMillis"]),
+        Index(value = ["idempotencyKey"], unique = true),
+        Index(value = ["sourceType", "sourceId"]),
+    ],
+)
+data class CashEventLocalEntity(
+    @PrimaryKey val id: String,
+    val drawerId: String,
+    val type: String,
+    val amountCents: Int?,
+    val deltaCents: Int,
+    val staffId: String?,
+    val staffName: String?,
+    val sourceType: String?,
+    val sourceId: String?,
+    val idempotencyKey: String?,
+    val note: String?,
+    val occurredAtEpochMillis: Long,
+    val createdAtEpochMillis: Long,
+)
+
 @Entity(tableName = "sync_queue")
 data class SyncQueueLocalEntity(
     @PrimaryKey val id: String,

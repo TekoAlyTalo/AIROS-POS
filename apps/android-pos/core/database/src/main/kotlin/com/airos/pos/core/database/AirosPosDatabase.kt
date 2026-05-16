@@ -9,6 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.airos.pos.core.database.dao.AttendanceDao
 import com.airos.pos.core.database.dao.BackendMenuCacheDao
 import com.airos.pos.core.database.dao.CachedFloorMapDao
+import com.airos.pos.core.database.dao.CashLedgerDao
 import com.airos.pos.core.database.dao.MenuItemDao
 import com.airos.pos.core.database.dao.NfcIdentityDao
 import com.airos.pos.core.database.dao.OpenSaleDao
@@ -23,6 +24,8 @@ import com.airos.pos.core.database.entity.CachedFloorMapTableEntity
 import com.airos.pos.core.database.entity.AttendanceActiveSessionLocalEntity
 import com.airos.pos.core.database.entity.AttendanceEventLocalEntity
 import com.airos.pos.core.database.entity.AttendanceSyncMetadataLocalEntity
+import com.airos.pos.core.database.entity.CashDrawerLocalEntity
+import com.airos.pos.core.database.entity.CashEventLocalEntity
 import com.airos.pos.core.database.entity.MenuCacheMetadataEntity
 import com.airos.pos.core.database.entity.MenuItemLocalEntity
 import com.airos.pos.core.database.entity.NfcIdentityEnrollmentEntity
@@ -61,8 +64,10 @@ import com.airos.pos.core.database.entity.TicketLocalEntity
         AttendanceSyncMetadataLocalEntity::class,
         SalesLedgerOutboxLocalEntity::class,
         CachedFloorMapTableEntity::class,
+        CashDrawerLocalEntity::class,
+        CashEventLocalEntity::class,
     ],
-    version = 12,
+    version = 13,
     exportSchema = false,
 )
 abstract class AirosPosDatabase : RoomDatabase() {
@@ -78,6 +83,7 @@ abstract class AirosPosDatabase : RoomDatabase() {
     abstract fun attendanceDao(): AttendanceDao
     abstract fun salesLedgerOutboxDao(): SalesLedgerOutboxDao
     abstract fun cachedFloorMapDao(): CachedFloorMapDao
+    abstract fun cashLedgerDao(): CashLedgerDao
 
     companion object {
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -480,6 +486,75 @@ abstract class AirosPosDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `cash_drawers` (
+                        `id` TEXT NOT NULL,
+                        `label` TEXT NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `openedAtEpochMillis` INTEGER,
+                        `closedAtEpochMillis` INTEGER,
+                        `latestExplicitCashCents` INTEGER,
+                        `latestExplicitCashEventId` TEXT,
+                        `latestExplicitCashAtEpochMillis` INTEGER,
+                        `latestCountedCashCents` INTEGER,
+                        `latestCountedAtEpochMillis` INTEGER,
+                        `latestCountedByStaffId` TEXT,
+                        `latestCountedByStaffName` TEXT,
+                        `updatedAtEpochMillis` INTEGER NOT NULL,
+                        PRIMARY KEY(`id`)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `cash_events` (
+                        `id` TEXT NOT NULL,
+                        `drawerId` TEXT NOT NULL,
+                        `type` TEXT NOT NULL,
+                        `amountCents` INTEGER,
+                        `deltaCents` INTEGER NOT NULL,
+                        `staffId` TEXT,
+                        `staffName` TEXT,
+                        `sourceType` TEXT,
+                        `sourceId` TEXT,
+                        `idempotencyKey` TEXT,
+                        `note` TEXT,
+                        `occurredAtEpochMillis` INTEGER NOT NULL,
+                        `createdAtEpochMillis` INTEGER NOT NULL,
+                        PRIMARY KEY(`id`)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `index_cash_events_drawerId_occurredAtEpochMillis`
+                    ON `cash_events` (`drawerId`, `occurredAtEpochMillis`)
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `index_cash_events_type_occurredAtEpochMillis`
+                    ON `cash_events` (`type`, `occurredAtEpochMillis`)
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS `index_cash_events_idempotencyKey`
+                    ON `cash_events` (`idempotencyKey`)
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `index_cash_events_sourceType_sourceId`
+                    ON `cash_events` (`sourceType`, `sourceId`)
+                    """.trimIndent(),
+                )
+            }
+        }
+
         private val MIGRATION_9_10 = object : Migration(9, 10) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
@@ -529,6 +604,7 @@ abstract class AirosPosDatabase : RoomDatabase() {
                 MIGRATION_9_10,
                 MIGRATION_10_11,
                 MIGRATION_11_12,
+                MIGRATION_12_13,
             ).build()
         }
     }

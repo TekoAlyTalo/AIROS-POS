@@ -25,6 +25,7 @@ import com.airos.pos.device.scanner.SunmiScannerService
 import com.airos.pos.app.RoomOpenSaleRepository
 import com.airos.pos.domain.AirosPosLedgerHttpClient
 import com.airos.pos.domain.AuthRepository
+import com.airos.pos.domain.CashLedgerRepository
 import com.airos.pos.domain.DefaultAirosPosLedgerHttpClient
 import com.airos.pos.domain.KitchenRepository
 import com.airos.pos.domain.MenuRepository
@@ -57,6 +58,7 @@ interface AppContainer {
     val authRepository: AuthRepository
     val openSaleRepository: OpenSaleRepository
     val shiftRepository: ShiftRepository
+    val cashLedgerRepository: CashLedgerRepository
     val shiftScheduleRepository: ShiftScheduleRepository
     val tableRepository: TableRepository
     val menuRepository: MenuRepository
@@ -119,6 +121,7 @@ class DefaultAppContainer(
     override val nfcStaffResolver: NfcStaffResolver = RepositoryNfcStaffResolver(roomNfcIdentityRepository)
     override val openSaleRepository: OpenSaleRepository = RoomOpenSaleRepository(database.openSaleDao())
     override val shiftRepository: ShiftRepository = FakeShiftRepository(store, syncQueueRepository)
+    override val cashLedgerRepository: CashLedgerRepository = RoomCashLedgerRepository(database)
     override val shiftScheduleRepository: ShiftScheduleRepository = BackendShiftScheduleRepository(
         backendBaseUrlProvider = { currentLedgerBackendBaseUrl().orEmpty() },
         restaurantKeyProvider = { currentRestaurantKey() },
@@ -300,6 +303,7 @@ class DefaultAppContainer(
         cashierAuthMethodSnapshotProvider = { currentCashierAuthMethodSnapshot() },
         restaurantReceiptSettingsClient = restaurantReceiptSettingsClient,
         saleSyncOutboxRepository = salesLedgerOutboxRepository,
+        cashLedgerRepository = cashLedgerRepository,
     )
 
     init {

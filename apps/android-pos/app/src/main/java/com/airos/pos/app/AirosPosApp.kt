@@ -870,6 +870,7 @@ private fun SignedInApp(
                     val viewModel: ShiftViewModel = viewModel(
                         factory = ShiftViewModel.factory(
                             shiftRepository = appContainer.shiftRepository,
+                            cashLedgerRepository = appContainer.cashLedgerRepository,
                             defaultOpeningFloatCents = terminalSettings.defaultOpeningFloatCents,
                         ),
                     )
@@ -995,7 +996,9 @@ private fun SignedInApp(
                         currentStaffName = currentStaffName,
                         onCountedCashChanged = viewModel::updateCountedCash,
                         onOpenShift = viewModel::openShift,
-                        onCloseShift = viewModel::closeShift,
+                        onRecordCashCount = viewModel::recordCashCount,
+                        onCloseShiftWithCount = viewModel::closeShiftWithCount,
+                        onCloseShiftUsingLatestTruth = viewModel::closeShiftUsingLatestTruth,
                         attendance = effectiveAttendance,
                         isClockedIn = isClockedIn,
                         myAttendanceEntry = myEntry,
