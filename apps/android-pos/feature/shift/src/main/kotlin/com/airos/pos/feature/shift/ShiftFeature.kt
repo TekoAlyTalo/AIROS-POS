@@ -1,10 +1,12 @@
 package com.airos.pos.feature.shift
 
+import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -42,10 +44,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -59,6 +64,7 @@ import com.airos.pos.core.model.PosShift
 import com.airos.pos.core.model.ShiftScheduleDay
 import com.airos.pos.core.model.ShiftSchedulePublicationStatus
 import com.airos.pos.core.model.ShiftScheduleSnapshot
+import com.airos.pos.core.model.ShiftStatus
 import com.airos.pos.core.model.WorktimeAttendanceSnapshot
 import com.airos.pos.core.ui.NumericMoneyPad
 import com.airos.pos.domain.ShiftRepository
@@ -127,11 +133,11 @@ class ShiftViewModel(
     }
 
     fun updateOpeningFloat(value: String) {
-        mutableState.update { it.copy(openingFloatInput = value) }
+        mutableState.update { it.copy(openingFloatInput = value, message = null) }
     }
 
     fun updateCountedCash(value: String) {
-        mutableState.update { it.copy(countedCashInput = value) }
+        mutableState.update { it.copy(countedCashInput = value, message = null) }
     }
 
     fun openShift(staffId: String) {
@@ -234,6 +240,76 @@ fun ShiftScreen(
     journalNotes: List<JournalNote> = emptyList(),
     onNoteAdded: (String) -> Unit = {},
 ) {
+    var cashCounterOpen by remember(state.currentShift?.id) { mutableStateOf(false) }
+    var pendingCashOpenJournalText by remember { mutableStateOf<String?>(null) }
+    var pendingCashCloseShiftId by remember { mutableStateOf<String?>(null) }
+    var pendingCashCloseJournalText by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(
+        pendingCashOpenJournalText,
+        state.busy,
+        state.message,
+        state.currentShift?.id,
+        state.currentShift?.status,
+    ) {
+        val journalText = pendingCashOpenJournalText ?: return@LaunchedEffect
+        if (state.busy) return@LaunchedEffect
+        if (state.message != null) {
+            pendingCashOpenJournalText = null
+            return@LaunchedEffect
+        }
+        if (state.currentShift?.status == ShiftStatus.OPEN) {
+            onNoteAdded(journalText)
+            pendingCashOpenJournalText = null
+        }
+    }
+
+    LaunchedEffect(
+        pendingCashCloseShiftId,
+        pendingCashCloseJournalText,
+        state.busy,
+        state.message,
+        state.currentShift?.id,
+        state.currentShift?.status,
+    ) {
+        val shiftId = pendingCashCloseShiftId ?: return@LaunchedEffect
+        val journalText = pendingCashCloseJournalText ?: return@LaunchedEffect
+        if (state.busy) return@LaunchedEffect
+        if (state.message != null) {
+            pendingCashCloseShiftId = null
+            pendingCashCloseJournalText = null
+            return@LaunchedEffect
+        }
+        val stillOpenSameShift = state.currentShift?.id == shiftId && state.currentShift.status == ShiftStatus.OPEN
+        if (!stillOpenSameShift) {
+            onNoteAdded(journalText)
+            pendingCashCloseShiftId = null
+            pendingCashCloseJournalText = null
+        }
+    }
+
+    fun requestOpenRestaurant(staffId: String) {
+        val openingFloatCents = ShiftViewModel.euroInputToCents(state.openingFloatInput)
+        pendingCashOpenJournalText = openingFloatCents?.let {
+            "Ravintola avattu · Pohjakassa ${CentsFormatter.format(it)}"
+        }
+        onOpenShift(staffId)
+    }
+
+    fun requestCloseRestaurant() {
+        cashCounterOpen = false
+        val currentShift = state.currentShift
+        val countedCashCents = ShiftViewModel.euroInputToCents(state.countedCashInput)
+        if (currentShift != null && countedCashCents != null) {
+            pendingCashCloseShiftId = currentShift.id
+            pendingCashCloseJournalText = "Ravintola suljettu · Kassa laskettu: ${CentsFormatter.format(countedCashCents)}"
+        } else {
+            pendingCashCloseShiftId = null
+            pendingCashCloseJournalText = null
+        }
+        onCloseShift()
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -263,33 +339,66 @@ fun ShiftScreen(
                     .fillMaxHeight(),
             )
 
-            Column(
+            Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight(),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                ShiftSchedulePulseCard(
-                    schedule = schedule,
-                    attendance = attendance,
-                    loading = scheduleLoading,
-                    message = scheduleMessage,
+                Column(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                )
+                        .fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    ShiftSchedulePulseCard(
+                        schedule = schedule,
+                        attendance = attendance,
+                        loading = scheduleLoading,
+                        message = scheduleMessage,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                    )
 
-                CashShiftCard(
-                    state = state,
-                    currentStaffId = currentStaffId,
-                    currentStaffName = currentStaffName,
-                    onCountedCashChanged = onCountedCashChanged,
-                    onOpenShift = onOpenShift,
-                    onCloseShift = onCloseShift,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(0.65f),
-                )
+                    CashShiftCard(
+                        state = state,
+                        currentStaffId = currentStaffId,
+                        currentStaffName = currentStaffName,
+                        cashCounterOpen = cashCounterOpen,
+                        onCashCounterOpenChanged = { cashCounterOpen = it },
+                        onOpenShift = ::requestOpenRestaurant,
+                        onCloseShift = ::requestCloseRestaurant,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(0.65f),
+                    )
+                }
+
+                if (cashCounterOpen && state.currentShift != null) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .zIndex(2f),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.34f))
+                                .clickable(onClick = { cashCounterOpen = false }),
+                        )
+                        CashShiftEditorOverlay(
+                            state = state,
+                            currentStaffId = currentStaffId,
+                            currentStaffName = currentStaffName,
+                            onDismiss = { cashCounterOpen = false },
+                            onCountedCashChanged = onCountedCashChanged,
+                            onCloseShift = ::requestCloseRestaurant,
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .fillMaxWidth(0.96f)
+                                .fillMaxHeight(0.98f),
+                        )
+                    }
+                }
             }
         }
     }
@@ -320,7 +429,7 @@ private fun ShiftHeader() {
                 )
             }
             Text(
-                text = "Hallitse kassavuoroa, työaikaa ja henkilöstöä.",
+                text = "Hallitse pohjakassaa, työaikaa ja henkilöstöä.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = ShiftTextMuted,
             )
@@ -333,20 +442,25 @@ private fun CashShiftCard(
     state: ShiftUiState,
     currentStaffId: String?,
     currentStaffName: String?,
-    onCountedCashChanged: (String) -> Unit,
+    cashCounterOpen: Boolean,
+    onCashCounterOpenChanged: (Boolean) -> Unit,
     onOpenShift: (String) -> Unit,
     onCloseShift: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val currentShift = state.currentShift
     val isOpen = currentShift != null
-    var cashCounterOpen by remember(isOpen) { mutableStateOf(false) }
-    var replaceCountedCashOnNextInput by remember(isOpen) { mutableStateOf(false) }
     val openedByLabel = remember(currentShift, currentStaffId, currentStaffName) {
         when {
             currentShift == null -> ""
             currentShift.openedByStaffId == currentStaffId && !currentStaffName.isNullOrBlank() -> currentStaffName
             else -> currentShift.openedByStaffId
+        }
+    }
+    val feedbackContext = LocalContext.current
+    LaunchedEffect(state.message) {
+        state.message?.takeIf { it.isNotBlank() }?.let { message ->
+            Toast.makeText(feedbackContext, message, Toast.LENGTH_LONG).show()
         }
     }
 
@@ -358,16 +472,10 @@ private fun CashShiftCard(
         statusColor = if (isOpen) ShiftSuccess else ShiftWarning,
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            state.message?.let {
-                ShiftStatusBanner(text = it, tint = ShiftDanger)
-                Spacer(modifier = Modifier.height(8.dp))
-            }
-
             Column(
                 modifier = Modifier
-                    .weight(1f)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                    .weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 if (currentShift != null) {
                     ShiftKeyValueRow("Avaaja", openedByLabel)
@@ -375,61 +483,19 @@ private fun CashShiftCard(
                         label = "Pohjakassa",
                         value = CentsFormatter.format(currentShift.openingFloatCents),
                         modifier = Modifier.fillMaxWidth(),
+                        compact = true,
                     )
                     CashAmountDisplay(
                         value = state.countedCashInput,
                         label = "Laskettu käteinen",
+                        compact = true,
                         onClick = {
-                            if (!cashCounterOpen) {
-                                replaceCountedCashOnNextInput = true
-                                cashCounterOpen = true
+                            if (cashCounterOpen) {
+                                onCashCounterOpenChanged(false)
+                            } else {
+                                onCashCounterOpenChanged(true)
                             }
                         },
-                    )
-                    if (cashCounterOpen) {
-                        NumericMoneyPad(
-                            onDigit = { digit ->
-                                val nextValue = if (replaceCountedCashOnNextInput) digit
-                                               else appendShiftMoneyDigit(state.countedCashInput, digit)
-                                replaceCountedCashOnNextInput = false
-                                onCountedCashChanged(nextValue)
-                            },
-                            onDecimal = {
-                                val nextValue = if (replaceCountedCashOnNextInput) "0,"
-                                               else appendShiftMoneyDecimal(state.countedCashInput)
-                                replaceCountedCashOnNextInput = false
-                                onCountedCashChanged(nextValue)
-                            },
-                            onBackspace = {
-                                replaceCountedCashOnNextInput = false
-                                onCountedCashChanged(removeShiftMoneyChar(state.countedCashInput))
-                            },
-                            keyHeight = 42.dp,
-                            keyColor = ShiftKeyColor,
-                            keyContentColor = ShiftKeyContentColor,
-                        )
-                        Button(
-                            onClick = { cashCounterOpen = false },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = ShiftCyanSoft.copy(alpha = 0.42f),
-                                contentColor = ShiftCyan,
-                            ),
-                            shape = RoundedCornerShape(14.dp),
-                        ) {
-                            Text(
-                                text = "Hyväksy summa",
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                        }
-                    }
-                    Text(
-                        text = "Sulje pohjakassa, kun laskettu käteinen vastaa kassalaskentaa.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ShiftTextMuted,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
                     )
                 } else {
                     Text(
@@ -443,13 +509,6 @@ private fun CashShiftCard(
                         fontWeight = FontWeight.Bold,
                         color = ShiftGold,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = "Pohjakassa luetaan POS-asetuksista. Avaa pohjakassa valitulle käyttäjälle.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ShiftTextMuted,
-                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
@@ -473,7 +532,149 @@ private fun CashShiftCard(
                 shape = RoundedCornerShape(16.dp),
             ) {
                 Text(
-                    text = if (isOpen) "Sulje vuoro" else "Avaa vuoro",
+                    text = if (isOpen) "Sulje ravintola" else "Avaa ravintola",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CashShiftEditorOverlay(
+    state: ShiftUiState,
+    currentStaffId: String?,
+    currentStaffName: String?,
+    onDismiss: () -> Unit,
+    onCountedCashChanged: (String) -> Unit,
+    onCloseShift: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val currentShift = state.currentShift ?: return
+    var replaceCountedCashOnNextInput by remember(currentShift.id) { mutableStateOf(true) }
+    val openedByLabel = remember(currentShift, currentStaffId, currentStaffName) {
+        when {
+            currentShift.openedByStaffId == currentStaffId && !currentStaffName.isNullOrBlank() -> currentStaffName
+            else -> currentShift.openedByStaffId
+        }
+    }
+
+    Surface(
+        modifier = modifier.clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null,
+            onClick = {},
+        ),
+        shape = RoundedCornerShape(24.dp),
+        color = ShiftPanelRaisedColor,
+        contentColor = ShiftTextPrimary,
+        border = BorderStroke(1.dp, ShiftBorderWarmColor),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Pohjakassa",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = ShiftTextPrimary,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        text = "Avaaja $openedByLabel",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ShiftTextMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Surface(
+                    modifier = Modifier
+                        .height(38.dp)
+                        .clickable(onClick = onDismiss),
+                    shape = RoundedCornerShape(999.dp),
+                    color = ShiftCyanSoft.copy(alpha = 0.38f),
+                    border = BorderStroke(1.dp, ShiftCyan.copy(alpha = 0.5f)),
+                    contentColor = ShiftTextPrimary,
+                ) {
+                    Box(
+                        modifier = Modifier.padding(horizontal = 14.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "Piilota",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = ShiftTextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
+
+            CashSummaryMetric(
+                label = "Pohjakassa",
+                value = CentsFormatter.format(currentShift.openingFloatCents),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            CashAmountDisplay(
+                value = state.countedCashInput,
+                label = "Laskettu käteinen",
+                onClick = onDismiss,
+            )
+            NumericMoneyPad(
+                onDigit = { digit ->
+                    val nextValue = if (replaceCountedCashOnNextInput) {
+                        digit
+                    } else {
+                        appendShiftMoneyDigit(state.countedCashInput, digit)
+                    }
+                    replaceCountedCashOnNextInput = false
+                    onCountedCashChanged(nextValue)
+                },
+                onDecimal = {
+                    val nextValue = if (replaceCountedCashOnNextInput) {
+                        "0,"
+                    } else {
+                        appendShiftMoneyDecimal(state.countedCashInput)
+                    }
+                    replaceCountedCashOnNextInput = false
+                    onCountedCashChanged(nextValue)
+                },
+                onBackspace = {
+                    replaceCountedCashOnNextInput = false
+                    onCountedCashChanged(removeShiftMoneyChar(state.countedCashInput))
+                },
+                keyHeight = 46.dp,
+                keyColor = ShiftKeyColor,
+                keyContentColor = ShiftKeyContentColor,
+            )
+
+            Spacer(modifier = Modifier.weight(1f))
+
+            Button(
+                onClick = onCloseShift,
+                enabled = !state.busy,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = ShiftGold.copy(alpha = 0.86f),
+                    contentColor = Color(0xFF071109),
+                    disabledContainerColor = ShiftPanelDeepColor,
+                    disabledContentColor = ShiftTextMuted,
+                ),
+                shape = RoundedCornerShape(16.dp),
+            ) {
+                Text(
+                    text = "Sulje ravintola",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
                 )
@@ -526,25 +727,26 @@ private fun ShiftSchedulePulseCard(
         modifier = modifier,
     ) {
         val now = LocalDateTime.now()
+        var pulseZoom by remember { mutableStateOf(1f) }
         val todayDate = now.toLocalDate()
         val publishedDays = schedule?.days.orEmpty().filter { it.hasPublishedScheduleTruth() }
-        val todayShifts = publishedDays
-            .filter { it.date == todayDate || it.date == todayDate.minusDays(1) }
-            .flatMap { it.plannedShifts }
-        val windowStart = if (todayShifts.isEmpty()) {
-            now.minusHours(4).truncatedTo(ChronoUnit.HOURS)
-        } else {
-            minOf(todayShifts.minOf { it.startsAt }, now.minusMinutes(30)).truncatedTo(ChronoUnit.HOURS)
-        }
-        val windowEnd = if (todayShifts.isEmpty()) {
-            windowStart.plusHours(8)
-        } else {
-            maxOf(todayShifts.maxOf { it.endsAt }, now.plusMinutes(30))
-        }
-        val visibleShifts = publishedDays
-            .flatMap { it.plannedShifts }
-            .filter { it.overlaps(windowStart, windowEnd) }
+        val selectedDay = publishedDays
+            .firstOrNull { it.date == todayDate && it.plannedShifts.isNotEmpty() }
+            ?: publishedDays.firstOrNull { it.plannedShifts.isNotEmpty() }
+        val visibleShifts = selectedDay
+            ?.plannedShifts
+            .orEmpty()
+            .distinctBy { it.id }
             .sortedWith(compareBy<PlannedStaffShift> { it.startsAt }.thenBy { it.staffName })
+        val windowStart = visibleShifts
+            .minOfOrNull { it.startsAt }
+            ?.truncatedTo(ChronoUnit.HOURS)
+            ?: now.minusHours(4).truncatedTo(ChronoUnit.HOURS)
+        val windowEnd = visibleShifts
+            .maxOfOrNull { it.endsAt }
+            ?.roundUpToHour()
+            ?.takeIf { it.isAfter(windowStart) }
+            ?: windowStart.plusHours(1)
 
         Column(
             modifier = Modifier.fillMaxSize(),
@@ -558,13 +760,31 @@ private fun ShiftSchedulePulseCard(
                 )
                 schedule == null -> ShiftEmptyText("Työvuorosuunnitelma ei ole saatavilla.")
                 publishedDays.isEmpty() -> ShiftEmptyText("Aikavälillä ei ole julkaistua työvuorosuunnitelmaa.")
-                visibleShifts.isEmpty() -> ShiftEmptyText("Julkaistuilla päivillä ei ole suunniteltuja vuoroja tässä 8 tunnin ikkunassa.")
+                visibleShifts.isEmpty() -> ShiftEmptyText("Julkaistuilla päivillä ei ole suunniteltuja vuoroja.")
                 else -> {
-                    Text(
-                        text = "${formatPulseWindowTime(windowStart)}-${formatPulseWindowTime(windowEnd)}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = ShiftTextMuted,
+                    val timelineWidth = pulseTimelineWidth(
+                        windowStart = windowStart,
+                        windowEnd = windowEnd,
+                        zoom = pulseZoom,
                     )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "${formatPulseWindowTime(windowStart)}-${formatPulseWindowTime(windowEnd)}",
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = ShiftTextMuted,
+                        )
+                        PulseZoomControls(
+                            zoom = pulseZoom,
+                            onZoomOut = { pulseZoom = (pulseZoom - PulseZoomStep).coerceAtLeast(PulseZoomMin) },
+                            onReset = { pulseZoom = 1f },
+                            onZoomIn = { pulseZoom = (pulseZoom + PulseZoomStep).coerceAtMost(PulseZoomMax) },
+                        )
+                    }
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -572,10 +792,14 @@ private fun ShiftSchedulePulseCard(
                             .horizontalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        PulseTimelineHeader(windowStart = windowStart)
+                        PulseTimelineHeader(
+                            windowStart = windowStart,
+                            windowEnd = windowEnd,
+                            timelineWidth = timelineWidth,
+                        )
                         Column(
                             modifier = Modifier
-                                .width(PulseTimelineWidth)
+                                .width(timelineWidth)
                                 .verticalScroll(rememberScrollState()),
                         ) {
                             visibleShifts.forEachIndexed { index, shift ->
@@ -585,6 +809,7 @@ private fun ShiftSchedulePulseCard(
                                     now = now,
                                     windowStart = windowStart,
                                     windowEnd = windowEnd,
+                                    timelineWidth = timelineWidth,
                                 )
                                 if (index != visibleShifts.lastIndex) {
                                     Box(
@@ -981,6 +1206,7 @@ private fun CashSummaryMetric(
     label: String,
     value: String,
     modifier: Modifier = Modifier,
+    compact: Boolean = false,
 ) {
     Surface(
         modifier = modifier,
@@ -990,8 +1216,8 @@ private fun CashSummaryMetric(
         contentColor = ShiftTextPrimary,
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = if (compact) 5.dp else 8.dp),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 1.dp else 2.dp),
         ) {
             Text(
                 text = label,
@@ -1002,7 +1228,7 @@ private fun CashSummaryMetric(
             )
             Text(
                 text = value,
-                style = MaterialTheme.typography.titleSmall,
+                style = if (compact) MaterialTheme.typography.bodyLarge else MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold,
                 color = ShiftGold,
                 maxLines = 1,
@@ -1017,6 +1243,7 @@ private fun CashAmountDisplay(
     value: String,
     label: String,
     modifier: Modifier = Modifier,
+    compact: Boolean = false,
     onClick: (() -> Unit)? = null,
 ) {
     val surfaceModifier = if (onClick != null) {
@@ -1034,8 +1261,8 @@ private fun CashAmountDisplay(
         contentColor = ShiftTextPrimary,
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = if (compact) 5.dp else 8.dp),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 1.dp else 2.dp),
         ) {
             Text(
                 text = label,
@@ -1045,7 +1272,7 @@ private fun CashAmountDisplay(
             Text(
                 text = displayMoneyInput(value),
                 modifier = Modifier.fillMaxWidth(),
-                style = MaterialTheme.typography.titleLarge,
+                style = if (compact) MaterialTheme.typography.titleMedium else MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 color = ShiftGold,
                 maxLines = 1,
@@ -1128,26 +1355,102 @@ private fun AttendanceCompactRow(entry: AttendanceEntry) {
     }
 }
 
-private val PulseTickFractions = listOf(0f, 0.25f, 0.50f, 0.75f, 1f)
-private val PulseTimelineWidth = 860.dp
+private const val PulseZoomMin = 0.75f
+private const val PulseZoomMax = 2.5f
+private const val PulseZoomStep = 0.25f
+private val PulseTimelineMinimumChartWidth = 684.dp
+private val PulseTimelineWidthPerHour = 96.dp
 private val PulseLeftColumnWidth = 176.dp
+private val PulseTickLabelWidth = 48.dp
+private val PulseTickLabelHalfWidth = 24.dp
+
+private fun pulseTimelineWidth(windowStart: LocalDateTime, windowEnd: LocalDateTime, zoom: Float): Dp {
+    val hours = Duration.between(windowStart, windowEnd).toMinutes().coerceAtLeast(60L) / 60f
+    val chartWidth = PulseTimelineWidthPerHour * hours
+    val baseChartWidth = if (chartWidth > PulseTimelineMinimumChartWidth) chartWidth else PulseTimelineMinimumChartWidth
+    return PulseLeftColumnWidth + (baseChartWidth * zoom.coerceIn(PulseZoomMin, PulseZoomMax))
+}
+
+private fun pulseTickTimes(windowStart: LocalDateTime, windowEnd: LocalDateTime): List<LocalDateTime> {
+    val ticks = mutableListOf<LocalDateTime>()
+    var cursor = windowStart.truncatedTo(ChronoUnit.HOURS)
+    while (!cursor.isAfter(windowEnd)) {
+        ticks += cursor
+        cursor = cursor.plusHours(1)
+    }
+    return ticks.distinct()
+}
 
 @Composable
-private fun PulseTimelineHeader(windowStart: LocalDateTime) {
+private fun PulseZoomControls(
+    zoom: Float,
+    onZoomOut: () -> Unit,
+    onReset: () -> Unit,
+    onZoomIn: () -> Unit,
+) {
     Row(
-        modifier = Modifier.width(PulseTimelineWidth),
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        PulseZoomButton(label = "-", enabled = zoom > PulseZoomMin, onClick = onZoomOut)
+        PulseZoomButton(label = "${(zoom * 100).toInt()}%", enabled = true, onClick = onReset)
+        PulseZoomButton(label = "+", enabled = zoom < PulseZoomMax, onClick = onZoomIn)
+    }
+}
+
+@Composable
+private fun PulseZoomButton(
+    label: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .height(28.dp)
+            .width(if (label.length > 1) 54.dp else 32.dp)
+            .clickable(enabled = enabled, onClick = onClick),
+        shape = RoundedCornerShape(10.dp),
+        color = if (enabled) ShiftPanelDeepColor else ShiftPanelDeepColor.copy(alpha = 0.45f),
+        border = BorderStroke(1.dp, ShiftBorderColor),
+        contentColor = if (enabled) ShiftTextPrimary else ShiftTextMuted,
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (enabled) ShiftTextPrimary else ShiftTextMuted,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PulseTimelineHeader(
+    windowStart: LocalDateTime,
+    windowEnd: LocalDateTime,
+    timelineWidth: Dp,
+) {
+    val tickTimes = pulseTickTimes(windowStart, windowEnd)
+    Row(
+        modifier = Modifier.width(timelineWidth),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Spacer(modifier = Modifier.width(PulseLeftColumnWidth))
-        Row(
-            modifier = Modifier.weight(1f),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+        BoxWithConstraints(
+            modifier = Modifier
+                .weight(1f)
+                .height(18.dp),
         ) {
-            PulseTickFractions.forEach { fraction ->
-                val label = formatPulseWindowTime(windowStart.plusMinutes((8 * 60 * fraction).toLong()))
+            tickTimes.forEach { tickTime ->
+                val fraction = pulseFraction(tickTime, windowStart, windowEnd)
                 Text(
-                    text = label,
+                    text = formatPulseWindowTime(tickTime),
+                    modifier = Modifier
+                        .offset(x = (maxWidth * fraction) - PulseTickLabelHalfWidth)
+                        .width(PulseTickLabelWidth),
                     style = MaterialTheme.typography.labelSmall,
                     color = ShiftTextMuted,
                     textAlign = TextAlign.Center,
@@ -1165,6 +1468,7 @@ private fun PulseTimelineShiftRow(
     now: LocalDateTime,
     windowStart: LocalDateTime,
     windowEnd: LocalDateTime,
+    timelineWidth: Dp,
 ) {
     val pulseStatus = plannedPulseStatus(shift = shift, attendance = attendance, now = now)
     val startFraction = pulseFraction(shift.startsAt, windowStart, windowEnd).coerceIn(0f, 1f)
@@ -1175,7 +1479,7 @@ private fun PulseTimelineShiftRow(
 
     Row(
         modifier = Modifier
-            .width(PulseTimelineWidth)
+            .width(timelineWidth)
             .height(56.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1217,13 +1521,14 @@ private fun PulseTimelineShiftRow(
                 .fillMaxHeight(),
             contentAlignment = Alignment.CenterStart,
         ) {
-            PulseTickFractions.forEach { fraction ->
+            pulseTickTimes(windowStart, windowEnd).forEach { tickTime ->
+                val fraction = pulseFraction(tickTime, windowStart, windowEnd)
                 Box(
                     modifier = Modifier
                         .offset(x = maxWidth * fraction)
                         .fillMaxHeight()
                         .width(1.dp)
-                    .background(ShiftLineColor),
+                        .background(ShiftLineColor),
                 )
             }
             if (nowFraction in 0f..1f) {
@@ -1540,6 +1845,11 @@ private fun formatJournalTime(raw: String?): String {
 private fun formatScheduleDate(date: LocalDate): String = date.format(ShiftJournalDayFormatter)
 
 private fun formatPulseWindowTime(value: LocalDateTime): String = value.format(ShiftJournalTimeFormatter)
+
+private fun LocalDateTime.roundUpToHour(): LocalDateTime {
+    val roundedDown = truncatedTo(ChronoUnit.HOURS)
+    return if (this == roundedDown) roundedDown else roundedDown.plusHours(1)
+}
 
 private fun plannedShiftTimeRange(shift: PlannedStaffShift): String {
     return "${formatPulseWindowTime(shift.startsAt)}-${formatPulseWindowTime(shift.endsAt)}"

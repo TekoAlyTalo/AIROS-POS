@@ -646,6 +646,13 @@ private fun SignedInApp(
     val context = LocalContext.current
     val shiftJournalPrefs = remember { context.getSharedPreferences("shift_journal_notes", 0) }
     var journalNotes by remember { mutableStateOf(loadJournalNotesFromPrefs(shiftJournalPrefs)) }
+    val staffPanelAttendanceFlow = remember(appContainer.worktimeAttendanceRepository, currentStaffId) {
+        appContainer.worktimeAttendanceRepository.observeCurrentUserState(currentStaffId)
+    }
+    val staffPanelAttendanceState by staffPanelAttendanceFlow.collectAsState(
+        initial = WorktimeEffectiveAttendanceState(),
+    )
+    var staffPanelAttendanceBusy by remember { mutableStateOf(false) }
 
     fun requestSignOut() {
         signOutPin = ""
@@ -766,6 +773,46 @@ private fun SignedInApp(
             onNavigationBlocked = { destination ->
                 pendingNavDestination = destination
                 showQuickSaleLeaveDialog = true
+            },
+            isCurrentStaffClockedIn = staffPanelAttendanceState.activeSession != null,
+            attendanceActionBusy = staffPanelAttendanceBusy,
+            onClockInRequested = {
+                if (!staffPanelAttendanceBusy) {
+                    scope.launch {
+                        staffPanelAttendanceBusy = true
+                        try {
+                            when (val result = appContainer.worktimeAttendanceRepository.clockIn(currentStaffId, currentStaffName)) {
+                                is PosResult.Success -> {
+                                    Toast.makeText(context, "Työvuoro aloitettu", Toast.LENGTH_SHORT).show()
+                                }
+                                is PosResult.Failure -> {
+                                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        } finally {
+                            staffPanelAttendanceBusy = false
+                        }
+                    }
+                }
+            },
+            onClockOutRequested = {
+                if (!staffPanelAttendanceBusy) {
+                    scope.launch {
+                        staffPanelAttendanceBusy = true
+                        try {
+                            when (val result = appContainer.worktimeAttendanceRepository.clockOut(currentStaffId, currentStaffName)) {
+                                is PosResult.Success -> {
+                                    Toast.makeText(context, "Työvuoro lopetettu", Toast.LENGTH_SHORT).show()
+                                }
+                                is PosResult.Failure -> {
+                                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        } finally {
+                            staffPanelAttendanceBusy = false
+                        }
+                    }
+                }
             },
             onNavigateToMenu = {
                 val ctx = activeSaleContext
@@ -2522,6 +2569,10 @@ private fun AppRail(
     onSellerSwitchRequested: () -> Unit,
     isQuickSaleDirty: Boolean = false,
     onNavigationBlocked: ((String) -> Unit)? = null,
+    isCurrentStaffClockedIn: Boolean = false,
+    attendanceActionBusy: Boolean = false,
+    onClockInRequested: (() -> Unit)? = null,
+    onClockOutRequested: (() -> Unit)? = null,
     onNavigateToMenu: (() -> Unit)? = null,
     onWillNavigateAway: (() -> Unit)? = null,
 ) {
@@ -2644,6 +2695,8 @@ private fun AppRail(
                 ) {
                     StaffControlPanel(
                         currentStaffName = currentStaffName,
+                        isCurrentStaffClockedIn = isCurrentStaffClockedIn,
+                        attendanceActionBusy = attendanceActionBusy,
                         onSwitchSeller = {
                             staffControlPanelOpen = false
                             onSellerSwitchRequested()
@@ -2660,6 +2713,8 @@ private fun AppRail(
                                 }
                             }
                         },
+                        onClockIn = onClockInRequested,
+                        onClockOut = onClockOutRequested,
                     )
                 }
             }
@@ -2670,8 +2725,12 @@ private fun AppRail(
 @Composable
 private fun StaffControlPanel(
     currentStaffName: String,
+    isCurrentStaffClockedIn: Boolean,
+    attendanceActionBusy: Boolean,
     onSwitchSeller: () -> Unit,
     onOpenShift: () -> Unit,
+    onClockIn: (() -> Unit)? = null,
+    onClockOut: (() -> Unit)? = null,
 ) {
     Surface(
         modifier = Modifier.width(300.dp),
@@ -2709,6 +2768,20 @@ private fun StaffControlPanel(
                 ),
             ) {
                 Text("Vaihda myyjä")
+            }
+            val attendanceAction = if (isCurrentStaffClockedIn) onClockOut else onClockIn
+            if (attendanceAction != null) {
+                Button(
+                    onClick = attendanceAction,
+                    enabled = !attendanceActionBusy,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = AppShellButtonMutedColor,
+                        contentColor = AppShellTextPrimary,
+                    ),
+                ) {
+                    Text(if (isCurrentStaffClockedIn) "Lopeta työvuoro" else "Aloita työvuoro")
+                }
             }
             Button(
                 onClick = onOpenShift,
