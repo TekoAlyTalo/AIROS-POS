@@ -982,22 +982,17 @@ private fun ShiftSchedulePulseCard(
         val todayDate = now.toLocalDate()
         val publishedDays = schedule?.days.orEmpty().filter { it.hasPublishedScheduleTruth() }
         val selectedDay = publishedDays
-            .firstOrNull { it.date == todayDate && it.plannedShifts.isNotEmpty() }
+            .firstOrNull { it.date == todayDate }
             ?: publishedDays.firstOrNull { it.plannedShifts.isNotEmpty() }
+            ?: publishedDays.firstOrNull()
+        val operationalDay = selectedDay?.operationalDay
+        val operationalWindowStart = operationalDay?.opensAt
+        val operationalWindowEnd = operationalDay?.closesAt
         val visibleShifts = selectedDay
             ?.plannedShifts
             .orEmpty()
             .distinctBy { it.id }
             .sortedWith(compareBy<PlannedStaffShift> { it.startsAt }.thenBy { it.staffName })
-        val windowStart = visibleShifts
-            .minOfOrNull { it.startsAt }
-            ?.truncatedTo(ChronoUnit.HOURS)
-            ?: now.minusHours(4).truncatedTo(ChronoUnit.HOURS)
-        val windowEnd = visibleShifts
-            .maxOfOrNull { it.endsAt }
-            ?.roundUpToHour()
-            ?.takeIf { it.isAfter(windowStart) }
-            ?: windowStart.plusHours(1)
 
         Column(
             modifier = Modifier.fillMaxSize(),
@@ -1011,8 +1006,22 @@ private fun ShiftSchedulePulseCard(
                 )
                 schedule == null -> ShiftEmptyText("Työvuorosuunnitelma ei ole saatavilla.")
                 publishedDays.isEmpty() -> ShiftEmptyText("Aikavälillä ei ole julkaistua työvuorosuunnitelmaa.")
+                selectedDay == null -> ShiftEmptyText("Julkaistua työvuoropäivää ei ole valittavissa.")
+                operationalDay == null || !operationalDay.truthAvailable -> ShiftStatusBanner(
+                    text = "Ravintolan aukioloaikaa ei ole saatavilla.",
+                    tint = ShiftDanger,
+                )
+                operationalDay.isClosed -> ShiftEmptyText("Ravintola on suljettu valittuna päivänä.")
+                operationalWindowStart == null ||
+                    operationalWindowEnd == null ||
+                    !operationalWindowEnd.isAfter(operationalWindowStart) -> ShiftStatusBanner(
+                    text = "Ravintolan aukioloaikaa ei ole saatavilla.",
+                    tint = ShiftDanger,
+                )
                 visibleShifts.isEmpty() -> ShiftEmptyText("Julkaistuilla päivillä ei ole suunniteltuja vuoroja.")
                 else -> {
+                    val windowStart = operationalWindowStart
+                    val windowEnd = operationalWindowEnd
                     val timelineWidth = pulseTimelineWidth(
                         windowStart = windowStart,
                         windowEnd = windowEnd,
@@ -1722,9 +1731,21 @@ private fun PulseTimelineShiftRow(
     timelineWidth: Dp,
 ) {
     val pulseStatus = plannedPulseStatus(shift = shift, attendance = attendance, now = now)
-    val startFraction = pulseFraction(shift.startsAt, windowStart, windowEnd).coerceIn(0f, 1f)
-    val endFraction = pulseFraction(shift.endsAt, windowStart, windowEnd).coerceIn(startFraction + 0.035f, 1f)
-    val barWidthFraction = (endFraction - startFraction).coerceIn(0.035f, 1f)
+    val overlapsWindow = shift.overlaps(windowStart, windowEnd)
+    val minimumBarWidthFraction = 0.035f
+    val startFraction = if (overlapsWindow) {
+        pulseFraction(if (shift.startsAt.isBefore(windowStart)) windowStart else shift.startsAt, windowStart, windowEnd)
+    } else if (shift.endsAt.isBefore(windowStart) || shift.endsAt == windowStart) {
+        0f
+    } else {
+        1f - minimumBarWidthFraction
+    }
+    val endFraction = if (overlapsWindow) {
+        pulseFraction(if (shift.endsAt.isAfter(windowEnd)) windowEnd else shift.endsAt, windowStart, windowEnd)
+    } else {
+        (startFraction + minimumBarWidthFraction).coerceAtMost(1f)
+    }
+    val barWidthFraction = (endFraction - startFraction).coerceIn(minimumBarWidthFraction, 1f)
     val timeRange = plannedShiftTimeRange(shift)
     val nowFraction = pulseFraction(now, windowStart, windowEnd)
 

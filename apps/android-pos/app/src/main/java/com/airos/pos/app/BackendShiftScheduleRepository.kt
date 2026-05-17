@@ -4,6 +4,7 @@ import android.util.Log
 import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.model.PlannedStaffShift
 import com.airos.pos.core.model.ShiftScheduleDay
+import com.airos.pos.core.model.ShiftScheduleOperationalDay
 import com.airos.pos.core.model.ShiftSchedulePublicationStatus
 import com.airos.pos.core.model.ShiftScheduleSnapshot
 import com.airos.pos.domain.ShiftScheduleRepository
@@ -129,11 +130,79 @@ class BackendShiftScheduleRepository(
                 publicationStatus = parsePublicationStatus(
                     item.optString("publication_status").ifBlank { item.optString("status") },
                 ),
+                operationalDay = parseOperationalDay(item.optJSONObject("operational_day")),
                 plannedShifts = parseShifts(
                     item.optJSONArray("planned_shifts") ?: item.optJSONArray("shifts"),
                 ),
             )
         }
+    }
+
+    private fun parseOperationalDay(item: JSONObject?): ShiftScheduleOperationalDay {
+        if (item == null) {
+            return missingOperationalDay("operational_day_missing")
+        }
+        return parseOperationalDayFields(
+            truthAvailable = item.optBoolean("truth_available", false),
+            opensRaw = item.optNullableString("opens_at"),
+            closesRaw = item.optNullableString("closes_at"),
+            isClosed = item.optBoolean("is_closed", false),
+            missingReason = item.optNullableString("missing_reason"),
+            source = item.optNullableString("source"),
+        )
+    }
+
+    internal fun parseOperationalDayFields(
+        truthAvailable: Boolean,
+        opensRaw: String?,
+        closesRaw: String?,
+        isClosed: Boolean,
+        missingReason: String?,
+        source: String?,
+    ): ShiftScheduleOperationalDay {
+        if (!truthAvailable) {
+            return missingOperationalDay(
+                reason = missingReason ?: "operating_hours_unavailable",
+                source = source,
+            )
+        }
+        if (isClosed) {
+            return ShiftScheduleOperationalDay(
+                truthAvailable = true,
+                isClosed = true,
+                source = source,
+            )
+        }
+
+        if (opensRaw == null || closesRaw == null) {
+            return missingOperationalDay("operating_hours_window_missing", source)
+        }
+
+        return runCatching {
+            val opensAt = parseLocalDateTime(opensRaw)
+            val closesAt = parseLocalDateTime(closesRaw)
+            if (!closesAt.isAfter(opensAt)) {
+                missingOperationalDay("operating_hours_window_invalid", source)
+            } else {
+                ShiftScheduleOperationalDay(
+                    truthAvailable = true,
+                    opensAt = opensAt,
+                    closesAt = closesAt,
+                    isClosed = false,
+                    source = source,
+                )
+            }
+        }.getOrElse {
+            missingOperationalDay("operating_hours_window_invalid", source)
+        }
+    }
+
+    private fun missingOperationalDay(reason: String, source: String? = null): ShiftScheduleOperationalDay {
+        return ShiftScheduleOperationalDay(
+            truthAvailable = false,
+            missingReason = reason,
+            source = source,
+        )
     }
 
     private fun parseShifts(array: JSONArray?): List<PlannedStaffShift> {

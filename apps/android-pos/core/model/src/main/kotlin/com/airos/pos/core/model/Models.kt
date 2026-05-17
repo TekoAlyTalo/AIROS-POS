@@ -602,9 +602,22 @@ data class PlannedStaffShift(
     val source: String? = null,
 )
 
+data class ShiftScheduleOperationalDay(
+    val truthAvailable: Boolean,
+    val opensAt: LocalDateTime? = null,
+    val closesAt: LocalDateTime? = null,
+    val isClosed: Boolean = false,
+    val missingReason: String? = null,
+    val source: String? = null,
+)
+
 data class ShiftScheduleDay(
     val date: LocalDate,
     val publicationStatus: ShiftSchedulePublicationStatus,
+    val operationalDay: ShiftScheduleOperationalDay = ShiftScheduleOperationalDay(
+        truthAvailable = false,
+        missingReason = "operational_day_missing",
+    ),
     val plannedShifts: List<PlannedStaffShift> = emptyList(),
 )
 
