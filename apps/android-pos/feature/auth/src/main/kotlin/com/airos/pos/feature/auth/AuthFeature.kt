@@ -473,7 +473,7 @@ fun AuthScreen(
         ) {
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
-                modifier = Modifier.height(420.dp),
+                modifier = Modifier.height(460.dp),
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
                 userScrollEnabled = false,
@@ -534,12 +534,9 @@ fun AuthScreen(
                 }
             }
 
-            OutlinedButton(
-                onClick = onShowManagerOverride,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text("Päällikön hyväksyntä")
-            }
+            // Manager override is a restricted-action authorization flow (refunds, void, etc.)
+            // and must not appear on the normal staff login screen. It is still reachable via
+            // AuthViewModel.showManagerOverrideDialog from action surfaces that require it.
 
             NumericPinPad(
                 onDigit = onDigit,
@@ -604,7 +601,7 @@ private fun StaffQuickSelectCard(
                     staff = staff,
                     painter = photoPainter(staff),
                     accentColor = accentColor,
-                    modifier = Modifier.size(54.dp),
+                    modifier = Modifier.size(72.dp),
                 )
                 Column(
                     modifier = Modifier.weight(1f),
@@ -671,7 +668,7 @@ private fun SelectedStaffSummary(
                 staff = selectedStaff,
                 painter = photoPainter(selectedStaff),
                 accentColor = accentColor,
-                modifier = Modifier.size(58.dp),
+                modifier = Modifier.size(80.dp),
             )
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(

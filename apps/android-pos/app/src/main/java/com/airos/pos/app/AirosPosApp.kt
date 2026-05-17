@@ -85,6 +85,7 @@ import com.airos.pos.core.model.WorktimeAttendanceSnapshot
 import com.airos.pos.core.model.ManagerOverrideReason
 import com.airos.pos.core.model.ScanEvent
 import com.airos.pos.core.model.ServiceSpotType
+import com.airos.pos.core.model.ShiftSchedulePublicationStatus
 import com.airos.pos.core.model.ShiftScheduleSnapshot
 import com.airos.pos.core.model.TerminalSettings
 import com.airos.pos.domain.MenuSyncResult
@@ -103,6 +104,7 @@ import com.airos.pos.feature.scanner.ScannerViewModel
 import com.airos.pos.feature.settings.SettingsScreen
 import com.airos.pos.feature.settings.SettingsViewModel
 import com.airos.pos.feature.shift.JournalNote
+import com.airos.pos.feature.shift.LastSeenAuthEvent
 import com.airos.pos.feature.shift.ShiftScreen
 import com.airos.pos.feature.shift.ShiftViewModel
 import com.airos.pos.feature.tablemap.TableAcknowledgeActionKind
@@ -661,6 +663,16 @@ private fun SignedInApp(
     val context = LocalContext.current
     val shiftJournalPrefs = remember { context.getSharedPreferences("shift_journal_notes", 0) }
     var journalNotes by remember { mutableStateOf(loadJournalNotesFromPrefs(shiftJournalPrefs)) }
+    // Factual authentication-event tracking. Local UI/session state only — this is NOT
+    // production audit truth; durable/backend storage of authentication events is future
+    // work. Persisted in SharedPreferences so a cold start during the same operational
+    // day still surfaces an earlier sign-in as "Viimeksi nähty". Deduped by sessionId so
+    // recomposition / state refresh cannot fabricate a new entry while the same sign-in
+    // is still current.
+    val lastSeenPrefs = remember { context.getSharedPreferences("shift_last_seen_auth", 0) }
+    var lastSeenEvents by remember {
+        mutableStateOf(loadLastSeenEventsFromPrefs(lastSeenPrefs))
+    }
     val staffPanelAttendanceFlow = remember(appContainer.worktimeAttendanceRepository, currentStaffId) {
         appContainer.worktimeAttendanceRepository.observeCurrentUserState(currentStaffId)
     }
@@ -713,7 +725,7 @@ private fun SignedInApp(
                 when (val result = appContainer.worktimeAttendanceRepository.clockIn(currentStaffId, currentStaffName)) {
                     is PosResult.Success -> {
                         addShiftJournalNote("$currentStaffName työvuorossa")
-                        Toast.makeText(context, "Työvuoro aloitettu", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Työaika aloitettu", Toast.LENGTH_SHORT).show()
                     }
                     is PosResult.Failure -> {
                         Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
@@ -733,7 +745,7 @@ private fun SignedInApp(
                 when (val result = appContainer.worktimeAttendanceRepository.clockOut(staffId, staffName)) {
                     is PosResult.Success -> {
                         addShiftJournalNote("$staffName lopetti työvuoron")
-                        Toast.makeText(context, "Työvuoro päätetty", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Työaika päätetty", Toast.LENGTH_SHORT).show()
                     }
                     is PosResult.Failure -> {
                         Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
@@ -758,7 +770,75 @@ private fun SignedInApp(
         signOutDialogVisible = true
     }
 
+    // Capture each successful authentication / recognition as a factual event:
+    //   1. Update the persistent last-seen map (one entry per staffId, latest wins).
+    //   2. Append one Vuoropäiväkirja note "<Name> tunnistautui kassalla".
+    // Dedup is by AuthSession.sessionId — the AuthRepository mints a fresh sessionId on
+    // every signIn call, so PIN, NFC, and seller-switch all produce a new id. Recomposition
+    // and StateFlow replay to new subscribers reuse the existing sessionId and therefore
+    // do not log a duplicate. The lastLoggedSessionId is persisted so a cold start with a
+    // restored session does not synthesise a fake re-authentication. This event is NOT
+    // worktime, NOT presence, NOT headcount — see PulseTimelineLastSeenRow for the visual
+    // contract.
+    LaunchedEffect(Unit) {
+        appContainer.authRepository.activeSession.collect { session ->
+            if (session == null) return@collect
+            val previouslyLogged = lastSeenPrefs.getString("last_logged_session_id", null)
+            if (previouslyLogged == session.sessionId) return@collect
+            val event = LastSeenAuthEvent(
+                staffId = session.staffId,
+                staffName = session.displayName,
+                timestampMillis = session.authenticatedAtEpochMillis,
+            )
+            val updated = lastSeenEvents
+                .filterNot { it.staffId == event.staffId } + event
+            lastSeenEvents = updated
+            saveLastSeenEventsToPrefs(lastSeenPrefs, updated)
+            lastSeenPrefs.edit().putString("last_logged_session_id", session.sessionId).apply()
+            addShiftJournalNote(
+                text = "${session.displayName} tunnistautui kassalla",
+                authorName = session.displayName,
+            )
+        }
+    }
+
+    // Auto worktime clock-in on authentication. Only fires when an authoritative planned
+    // shift for this staff exists and is currently within its grace window. We never
+    // invent a planned shift, never stretch the operational-day window, and never use the
+    // active-seller fact alone as attendance truth.
+    LaunchedEffect(currentStaffId) {
+        if (currentStaffId.isBlank()) return@LaunchedEffect
+        val today = LocalDate.now()
+        val now = LocalDateTime.now()
+        val scheduleResult = appContainer.shiftScheduleRepository.fetchPosSchedule(today, today)
+        val schedule = (scheduleResult as? PosResult.Success)?.value ?: return@LaunchedEffect
+        val graceMinutes = 30L
+        val match = schedule.days
+            .filter { day ->
+                day.publicationStatus == ShiftSchedulePublicationStatus.PUBLISHED ||
+                    day.publicationStatus == ShiftSchedulePublicationStatus.CLOSED
+            }
+            .flatMap { it.plannedShifts }
+            .firstOrNull { shift ->
+                shift.staffId == currentStaffId &&
+                    !now.isBefore(shift.startsAt.minusMinutes(graceMinutes)) &&
+                    now.isBefore(shift.endsAt)
+            }
+        if (match == null) return@LaunchedEffect
+        appContainer.worktimeAttendanceRepository.syncAndRefreshCurrentUser(currentStaffId, currentStaffName)
+        val currentState = appContainer.worktimeAttendanceRepository
+            .observeCurrentUserState(currentStaffId)
+            .first()
+        if (currentState.activeSession != null) return@LaunchedEffect
+        when (val result = appContainer.worktimeAttendanceRepository.clockIn(currentStaffId, currentStaffName)) {
+            is PosResult.Success -> addShiftJournalNote("$currentStaffName työvuorossa")
+            is PosResult.Failure -> Log.w("AIROS", "Auto clock-in failed: ${result.message}")
+        }
+    }
+
     // NFC fast-path: current staff's badge confirms sign-out identity without PIN entry.
+    // Active-seller logout only — worktime attendance is unaffected and ends only via the
+    // per-staff "Lopeta" row under the active worktime list.
     LaunchedEffect(signOutDialogVisible, currentStaffId) {
         if (!signOutDialogVisible) return@LaunchedEffect
         NfcProbe.status.drop(1).collect { status ->
@@ -767,7 +847,7 @@ private fun SignedInApp(
                 signOutDialogVisible = false
                 signOutPin = ""
                 signOutPinError = null
-                endWorktimeForStaff(currentStaffId, currentStaffName, signOutAfter = true)
+                appContainer.authRepository.signOut()
             }
         }
     }
@@ -865,12 +945,6 @@ private fun SignedInApp(
                 pendingNavDestination = destination
                 showQuickSaleLeaveDialog = true
             },
-            isCurrentStaffClockedIn = staffPanelAttendanceState.activeSession != null,
-            clockedInStaff = staffPanelClockedInStaff,
-            attendanceActionBusy = staffPanelAttendanceBusy,
-            onClockInRequested = ::startCurrentWorktime,
-            onClockOutRequested = { endWorktimeForStaff(currentStaffId, currentStaffName) },
-            onClockOutStaffRequested = { entry -> endWorktimeForStaff(entry.staffId, entry.staffName) },
             onNavigateToMenu = {
                 val ctx = activeSaleContext
                 if (ctx != null && (ctx.tableId != null || quickSaleHasLines)) {
@@ -1077,6 +1151,7 @@ private fun SignedInApp(
                         },
                         journalNotes = journalNotes,
                         onNoteAdded = { text -> addShiftJournalNote(text) },
+                        lastSeenEvents = lastSeenEvents,
                     )
 
                     }
@@ -2470,7 +2545,7 @@ private fun SignedInApp(
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
                     Text(
-                        text = "Confirm identity to sign out",
+                        text = "Vahvista kassasta uloskirjautuminen",
                         style = MaterialTheme.typography.titleMedium,
                         color = AppShellTextPrimary,
                     )
@@ -2500,10 +2575,13 @@ private fun SignedInApp(
                                     scope.launch {
                                         when (val authResult = appContainer.authRepository.signInWithPin(currentStaffId, updated)) {
                                             is PosResult.Success -> {
+                                                // Active-seller logout only; worktime attendance
+                                                // is preserved and must be ended via the per-staff
+                                                // targeted "Lopeta" row under the active worktime list.
                                                 signOutDialogVisible = false
                                                 signOutPin = ""
                                                 signOutPinError = null
-                                                endWorktimeForStaff(currentStaffId, currentStaffName, signOutAfter = true)
+                                                appContainer.authRepository.signOut()
                                             }
                                             is PosResult.Failure -> {
                                                 signOutPin = ""
@@ -2633,12 +2711,6 @@ private fun AppRail(
     onSellerSwitchRequested: () -> Unit,
     isQuickSaleDirty: Boolean = false,
     onNavigationBlocked: ((String) -> Unit)? = null,
-    isCurrentStaffClockedIn: Boolean = false,
-    clockedInStaff: List<AttendanceEntry> = emptyList(),
-    attendanceActionBusy: Boolean = false,
-    onClockInRequested: (() -> Unit)? = null,
-    onClockOutRequested: (() -> Unit)? = null,
-    onClockOutStaffRequested: ((AttendanceEntry) -> Unit)? = null,
     onNavigateToMenu: (() -> Unit)? = null,
     onWillNavigateAway: (() -> Unit)? = null,
 ) {
@@ -2744,7 +2816,7 @@ private fun AppRail(
             }
 
             RailButton(
-                label = "HENKILÖ",
+                label = "MYYJÄ",
                 icon = Icons.Filled.Person,
                 iconContainerColor = Color(0xFF243A2F),
                 iconTint = Color(0xFFB7F3C8),
@@ -2761,14 +2833,7 @@ private fun AppRail(
                 ) {
                     StaffControlPanel(
                         currentStaffName = currentStaffName,
-                        isCurrentStaffClockedIn = isCurrentStaffClockedIn,
-                        clockedInStaff = clockedInStaff,
-                        attendanceActionBusy = attendanceActionBusy,
-                        onSwitchSeller = {
-                            staffControlPanelOpen = false
-                            onSellerSwitchRequested()
-                        },
-                        onOpenShift = {
+                        onOpenCurrentSeller = {
                             staffControlPanelOpen = false
                             val alreadySelected = isRailDestinationSelected(currentRoute, Routes.Shift)
                             if (isQuickSaleDirty && !alreadySelected) {
@@ -2780,9 +2845,10 @@ private fun AppRail(
                                 }
                             }
                         },
-                        onClockIn = onClockInRequested,
-                        onClockOut = onClockOutRequested,
-                        onClockOutStaff = onClockOutStaffRequested,
+                        onAuthenticate = {
+                            staffControlPanelOpen = false
+                            onSellerSwitchRequested()
+                        },
                     )
                 }
             }
@@ -2793,17 +2859,11 @@ private fun AppRail(
 @Composable
 private fun StaffControlPanel(
     currentStaffName: String,
-    isCurrentStaffClockedIn: Boolean,
-    clockedInStaff: List<AttendanceEntry>,
-    attendanceActionBusy: Boolean,
-    onSwitchSeller: () -> Unit,
-    onOpenShift: () -> Unit,
-    onClockIn: (() -> Unit)? = null,
-    onClockOut: (() -> Unit)? = null,
-    onClockOutStaff: ((AttendanceEntry) -> Unit)? = null,
+    onOpenCurrentSeller: () -> Unit,
+    onAuthenticate: () -> Unit,
 ) {
     Surface(
-        modifier = Modifier.width(340.dp),
+        modifier = Modifier.width(260.dp),
         shape = RoundedCornerShape(18.dp),
         color = AppShellPanelColor,
         border = androidx.compose.foundation.BorderStroke(1.dp, AppShellBorderColor),
@@ -2813,90 +2873,25 @@ private fun StaffControlPanel(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
-                text = "Henkilöstö",
-                style = MaterialTheme.typography.titleMedium,
-                color = AppShellTextPrimary,
-            )
-            Text(
-                text = "Aktiivinen myyjä",
-                style = MaterialTheme.typography.labelMedium,
-                color = AppShellTextMuted,
-            )
-            Text(
                 text = currentStaffName,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onOpenCurrentSeller)
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
                 style = MaterialTheme.typography.titleSmall,
                 color = AppShellAccentText,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
             Button(
-                onClick = onSwitchSeller,
+                onClick = onAuthenticate,
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = AppShellButtonColor,
                     contentColor = AppShellTextPrimary,
                 ),
             ) {
-                Text("Vaihda myyjä")
-            }
-            val attendanceAction = if (isCurrentStaffClockedIn) onClockOut else onClockIn
-            if (attendanceAction != null) {
-                Button(
-                    onClick = attendanceAction,
-                    enabled = !attendanceActionBusy,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = AppShellButtonMutedColor,
-                        contentColor = AppShellTextPrimary,
-                    ),
-                ) {
-                    Text(if (isCurrentStaffClockedIn) "Lopeta työvuoro" else "Aloita työvuoro")
-                }
-            }
-            Text(
-                text = "Työvuorossa nyt",
-                style = MaterialTheme.typography.labelMedium,
-                color = AppShellTextMuted,
-            )
-            if (clockedInStaff.isEmpty()) {
-                Text(
-                    text = "Ei aktiivista työaikatietoa.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = AppShellTextSecondary,
-                )
-            } else {
-                if (clockedInStaff.size > 1) {
-                    Text(
-                        text = "Valitse työntekijä, jonka työvuoro päätetään",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = AppShellTextSecondary,
-                    )
-                }
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 190.dp)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    clockedInStaff.forEach { entry ->
-                        StaffClockedInRow(
-                            entry = entry,
-                            enabled = !attendanceActionBusy && onClockOutStaff != null,
-                            onClockOut = { onClockOutStaff?.invoke(entry) },
-                        )
-                    }
-                }
-            }
-            Button(
-                onClick = onOpenShift,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = AppShellButtonMutedColor,
-                    contentColor = AppShellTextPrimary,
-                ),
-            ) {
-                Text("Avaa VUORO")
+                Text("Tunnistaudu")
             }
         }
     }
@@ -3077,4 +3072,33 @@ private fun saveJournalNotesToPrefs(prefs: SharedPreferences, notes: List<Journa
         )
     }
     prefs.edit().putString("notes_json", arr.toString()).apply()
+}
+
+private fun loadLastSeenEventsFromPrefs(prefs: SharedPreferences): List<LastSeenAuthEvent> {
+    val json = prefs.getString("events_json", null) ?: return emptyList()
+    return runCatching {
+        val arr = JSONArray(json)
+        (0 until arr.length()).map { i ->
+            val obj = arr.getJSONObject(i)
+            LastSeenAuthEvent(
+                staffId = obj.getString("staffId"),
+                staffName = obj.getString("staffName"),
+                timestampMillis = obj.getLong("timestampMillis"),
+            )
+        }
+    }.getOrDefault(emptyList())
+}
+
+private fun saveLastSeenEventsToPrefs(prefs: SharedPreferences, events: List<LastSeenAuthEvent>) {
+    val arr = JSONArray()
+    events.forEach { event ->
+        arr.put(
+            JSONObject().apply {
+                put("staffId", event.staffId)
+                put("staffName", event.staffName)
+                put("timestampMillis", event.timestampMillis)
+            },
+        )
+    }
+    prefs.edit().putString("events_json", arr.toString()).apply()
 }
