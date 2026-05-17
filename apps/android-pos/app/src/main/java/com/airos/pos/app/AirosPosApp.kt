@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.List
@@ -54,6 +55,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -100,7 +102,6 @@ import com.airos.pos.feature.scanner.ScannerScreen
 import com.airos.pos.feature.scanner.ScannerViewModel
 import com.airos.pos.feature.settings.SettingsScreen
 import com.airos.pos.feature.settings.SettingsViewModel
-import com.airos.pos.feature.shift.DeviceDiagnosticsScreen
 import com.airos.pos.feature.shift.JournalNote
 import com.airos.pos.feature.shift.ShiftScreen
 import com.airos.pos.feature.shift.ShiftViewModel
@@ -407,6 +408,7 @@ fun AirosPosApp(
                 onClearManagerPin = authViewModel::clearManagerPin,
                 onConfirmManagerOverride = authViewModel::confirmManagerOverride,
                 onDismissManagerOverride = authViewModel::dismissManagerOverrideDialog,
+                staffPhotoPainter = { staff -> staffPhotoPainterFor(staff) },
             )
             ShellNowStamp(
                 now = shellNow,
@@ -579,6 +581,19 @@ private fun formatFinnishNowStamp(now: LocalDateTime): String {
 }
 
 @Composable
+private fun staffPhotoPainterFor(staff: StaffMember): Painter? {
+    return staffPhotoPainterForStaffId(staff.id)
+}
+
+@Composable
+private fun staffPhotoPainterForStaffId(staffId: String): Painter? {
+    return when (staffId) {
+        "demo-miikka-martsalo" -> painterResource(id = R.drawable.staff_miikka_martsalo)
+        else -> null
+    }
+}
+
+@Composable
 private fun rememberCurrentMinute(): LocalDateTime {
     var now by remember { mutableStateOf(LocalDateTime.now()) }
     LaunchedEffect(Unit) {
@@ -652,7 +667,86 @@ private fun SignedInApp(
     val staffPanelAttendanceState by staffPanelAttendanceFlow.collectAsState(
         initial = WorktimeEffectiveAttendanceState(),
     )
+    val staffPanelAttendanceSnapshotFlow = remember(appContainer.worktimeAttendanceRepository) {
+        appContainer.worktimeAttendanceRepository.observeAttendance()
+    }
+    val staffPanelAttendanceSnapshot by staffPanelAttendanceSnapshotFlow.collectAsState(
+        initial = WorktimeAttendanceSnapshot(),
+    )
     var staffPanelAttendanceBusy by remember { mutableStateOf(false) }
+    val staffPanelClockedInStaff = remember(
+        staffPanelAttendanceSnapshot,
+        staffPanelAttendanceState.activeSession,
+        currentStaffId,
+        currentStaffName,
+    ) {
+        val localCurrentEntry = staffPanelAttendanceState.activeSession?.toAttendanceEntry(
+            fallbackStaffName = currentStaffName,
+            fallbackDurationMinutes = 0.0,
+        )
+        val entries = if (localCurrentEntry != null &&
+            staffPanelAttendanceSnapshot.currentlyOnSite.none { it.staffId == currentStaffId }
+        ) {
+            listOf(localCurrentEntry) + staffPanelAttendanceSnapshot.currentlyOnSite
+        } else {
+            staffPanelAttendanceSnapshot.currentlyOnSite
+        }
+        entries.distinctBy { it.staffId }
+    }
+
+    fun addShiftJournalNote(text: String, authorName: String = currentStaffName.ifBlank { "Tuntematon" }) {
+        val note = JournalNote(
+            text = text,
+            authorName = authorName,
+            timestampMillis = System.currentTimeMillis(),
+        )
+        val updated = journalNotes + note
+        journalNotes = updated
+        saveJournalNotesToPrefs(shiftJournalPrefs, updated)
+    }
+
+    fun startCurrentWorktime() {
+        if (staffPanelAttendanceBusy) return
+        scope.launch {
+            staffPanelAttendanceBusy = true
+            try {
+                when (val result = appContainer.worktimeAttendanceRepository.clockIn(currentStaffId, currentStaffName)) {
+                    is PosResult.Success -> {
+                        addShiftJournalNote("$currentStaffName työvuorossa")
+                        Toast.makeText(context, "Työvuoro aloitettu", Toast.LENGTH_SHORT).show()
+                    }
+                    is PosResult.Failure -> {
+                        Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                    }
+                }
+            } finally {
+                staffPanelAttendanceBusy = false
+            }
+        }
+    }
+
+    fun endWorktimeForStaff(staffId: String, staffName: String, signOutAfter: Boolean = false) {
+        if (staffPanelAttendanceBusy) return
+        scope.launch {
+            staffPanelAttendanceBusy = true
+            try {
+                when (val result = appContainer.worktimeAttendanceRepository.clockOut(staffId, staffName)) {
+                    is PosResult.Success -> {
+                        addShiftJournalNote("$staffName lopetti työvuoron")
+                        Toast.makeText(context, "Työvuoro päätetty", Toast.LENGTH_SHORT).show()
+                    }
+                    is PosResult.Failure -> {
+                        Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                    }
+                }
+                if (signOutAfter && staffId == currentStaffId) {
+                    appContainer.authRepository.signOut()
+                }
+            } finally {
+                staffPanelAttendanceBusy = false
+            }
+        }
+    }
 
     fun requestSignOut() {
         signOutPin = ""
@@ -673,10 +767,7 @@ private fun SignedInApp(
                 signOutDialogVisible = false
                 signOutPin = ""
                 signOutPinError = null
-                scope.launch {
-                    appContainer.worktimeAttendanceRepository.clockOut(currentStaffId, currentStaffName)
-                    appContainer.authRepository.signOut()
-                }
+                endWorktimeForStaff(currentStaffId, currentStaffName, signOutAfter = true)
             }
         }
     }
@@ -775,45 +866,11 @@ private fun SignedInApp(
                 showQuickSaleLeaveDialog = true
             },
             isCurrentStaffClockedIn = staffPanelAttendanceState.activeSession != null,
+            clockedInStaff = staffPanelClockedInStaff,
             attendanceActionBusy = staffPanelAttendanceBusy,
-            onClockInRequested = {
-                if (!staffPanelAttendanceBusy) {
-                    scope.launch {
-                        staffPanelAttendanceBusy = true
-                        try {
-                            when (val result = appContainer.worktimeAttendanceRepository.clockIn(currentStaffId, currentStaffName)) {
-                                is PosResult.Success -> {
-                                    Toast.makeText(context, "Työvuoro aloitettu", Toast.LENGTH_SHORT).show()
-                                }
-                                is PosResult.Failure -> {
-                                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
-                                }
-                            }
-                        } finally {
-                            staffPanelAttendanceBusy = false
-                        }
-                    }
-                }
-            },
-            onClockOutRequested = {
-                if (!staffPanelAttendanceBusy) {
-                    scope.launch {
-                        staffPanelAttendanceBusy = true
-                        try {
-                            when (val result = appContainer.worktimeAttendanceRepository.clockOut(currentStaffId, currentStaffName)) {
-                                is PosResult.Success -> {
-                                    Toast.makeText(context, "Työvuoro lopetettu", Toast.LENGTH_SHORT).show()
-                                }
-                                is PosResult.Failure -> {
-                                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
-                                }
-                            }
-                        } finally {
-                            staffPanelAttendanceBusy = false
-                        }
-                    }
-                }
-            },
+            onClockInRequested = ::startCurrentWorktime,
+            onClockOutRequested = { endWorktimeForStaff(currentStaffId, currentStaffName) },
+            onClockOutStaffRequested = { entry -> endWorktimeForStaff(entry.staffId, entry.staffName) },
             onNavigateToMenu = {
                 val ctx = activeSaleContext
                 if (ctx != null && (ctx.tableId != null || quickSaleHasLines)) {
@@ -1012,36 +1069,14 @@ private fun SignedInApp(
                         attendanceBusy = attendanceBusy,
                         attendanceNoticeMessage = attendanceNoticeMessage,
                         attendanceMessage = attendanceSyncBlockedMessage ?: attendanceMessage,
-                        onClockIn = {
-                            attendanceScope.launch {
-                                attendanceBusy = true
-                                attendanceMessage = null
-                                try {
-                                    when (val result = attendanceRepository.clockIn(currentStaffId, currentStaffName)) {
-                                        is PosResult.Success -> attendanceMessage = null
-                                        is PosResult.Failure -> attendanceMessage = result.message
-                                    }
-                                } finally {
-                                    attendanceBusy = false
-                                }
-                            }
-                        },
+                        onClockIn = ::startCurrentWorktime,
                         onClockOut = {
                             signOutPin = ""
                             signOutPinError = null
                             signOutDialogVisible = true
                         },
                         journalNotes = journalNotes,
-                        onNoteAdded = { text ->
-                            val note = JournalNote(
-                                text = text,
-                                authorName = currentStaffName.ifBlank { "Tuntematon" },
-                                timestampMillis = System.currentTimeMillis(),
-                            )
-                            val updated = journalNotes + note
-                            journalNotes = updated
-                            saveJournalNotesToPrefs(shiftJournalPrefs, updated)
-                        },
+                        onNoteAdded = { text -> addShiftJournalNote(text) },
                     )
 
                     }
@@ -1160,7 +1195,14 @@ private fun SignedInApp(
                             isScannerProbeFailure = false
                         }
                     }
-                    DeviceDiagnosticsScreen(
+                    LaunchedEffect(Unit) {
+                        navController.navigate(Routes.Settings) {
+                            popUpTo(Routes.Diagnostics) {
+                                inclusive = true
+                            }
+                        }
+                    }
+                    /*
                         customerDisplayProbeStatus = customerDisplayProbeStatus,
                         isCustomerDisplayProbeFailure = isCustomerDisplayProbeFailure,
                         onRunCustomerDisplayProbe = {
@@ -1472,7 +1514,7 @@ private fun SignedInApp(
                         },
                         isNfcStaffResolutionUnknown =
                             nfcStatus.lastStaffResolution is NfcStaffResolution.Unknown,
-                    )
+                    */
                 }
 
                 composable(
@@ -2301,7 +2343,17 @@ private fun SignedInApp(
                                         contentColor = AppShellTextPrimary,
                                     ),
                                 ) {
-                                    Text(staff.displayName)
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        StaffMiniAvatar(
+                                            staffName = staff.displayName,
+                                            photoPainter = staffPhotoPainterFor(staff),
+                                            modifier = Modifier.size(30.dp),
+                                        )
+                                        Text(staff.displayName)
+                                    }
                                 }
                             }
                         }
@@ -2317,11 +2369,21 @@ private fun SignedInApp(
                         }
                     } else {
                         val selectedStaff = sellerSwitchSelectedStaff!!
-                        Text(
-                            text = selectedStaff.displayName,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = AppShellTextSecondary,
-                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            StaffMiniAvatar(
+                                staffName = selectedStaff.displayName,
+                                photoPainter = staffPhotoPainterFor(selectedStaff),
+                                modifier = Modifier.size(34.dp),
+                            )
+                            Text(
+                                text = selectedStaff.displayName,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = AppShellTextSecondary,
+                            )
+                        }
                         Text(
                             text = "●".repeat(sellerSwitchPin.length).padEnd(4, '○'),
                             style = MaterialTheme.typography.titleLarge,
@@ -2441,8 +2503,7 @@ private fun SignedInApp(
                                                 signOutDialogVisible = false
                                                 signOutPin = ""
                                                 signOutPinError = null
-                                                appContainer.worktimeAttendanceRepository.clockOut(currentStaffId, currentStaffName)
-                                                appContainer.authRepository.signOut()
+                                                endWorktimeForStaff(currentStaffId, currentStaffName, signOutAfter = true)
                                             }
                                             is PosResult.Failure -> {
                                                 signOutPin = ""
@@ -2573,9 +2634,11 @@ private fun AppRail(
     isQuickSaleDirty: Boolean = false,
     onNavigationBlocked: ((String) -> Unit)? = null,
     isCurrentStaffClockedIn: Boolean = false,
+    clockedInStaff: List<AttendanceEntry> = emptyList(),
     attendanceActionBusy: Boolean = false,
     onClockInRequested: (() -> Unit)? = null,
     onClockOutRequested: (() -> Unit)? = null,
+    onClockOutStaffRequested: ((AttendanceEntry) -> Unit)? = null,
     onNavigateToMenu: (() -> Unit)? = null,
     onWillNavigateAway: (() -> Unit)? = null,
 ) {
@@ -2699,6 +2762,7 @@ private fun AppRail(
                     StaffControlPanel(
                         currentStaffName = currentStaffName,
                         isCurrentStaffClockedIn = isCurrentStaffClockedIn,
+                        clockedInStaff = clockedInStaff,
                         attendanceActionBusy = attendanceActionBusy,
                         onSwitchSeller = {
                             staffControlPanelOpen = false
@@ -2718,6 +2782,7 @@ private fun AppRail(
                         },
                         onClockIn = onClockInRequested,
                         onClockOut = onClockOutRequested,
+                        onClockOutStaff = onClockOutStaffRequested,
                     )
                 }
             }
@@ -2729,14 +2794,16 @@ private fun AppRail(
 private fun StaffControlPanel(
     currentStaffName: String,
     isCurrentStaffClockedIn: Boolean,
+    clockedInStaff: List<AttendanceEntry>,
     attendanceActionBusy: Boolean,
     onSwitchSeller: () -> Unit,
     onOpenShift: () -> Unit,
     onClockIn: (() -> Unit)? = null,
     onClockOut: (() -> Unit)? = null,
+    onClockOutStaff: ((AttendanceEntry) -> Unit)? = null,
 ) {
     Surface(
-        modifier = Modifier.width(300.dp),
+        modifier = Modifier.width(340.dp),
         shape = RoundedCornerShape(18.dp),
         color = AppShellPanelColor,
         border = androidx.compose.foundation.BorderStroke(1.dp, AppShellBorderColor),
@@ -2786,6 +2853,41 @@ private fun StaffControlPanel(
                     Text(if (isCurrentStaffClockedIn) "Lopeta työvuoro" else "Aloita työvuoro")
                 }
             }
+            Text(
+                text = "Työvuorossa nyt",
+                style = MaterialTheme.typography.labelMedium,
+                color = AppShellTextMuted,
+            )
+            if (clockedInStaff.isEmpty()) {
+                Text(
+                    text = "Ei aktiivista työaikatietoa.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AppShellTextSecondary,
+                )
+            } else {
+                if (clockedInStaff.size > 1) {
+                    Text(
+                        text = "Valitse työntekijä, jonka työvuoro päätetään",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AppShellTextSecondary,
+                    )
+                }
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 190.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    clockedInStaff.forEach { entry ->
+                        StaffClockedInRow(
+                            entry = entry,
+                            enabled = !attendanceActionBusy && onClockOutStaff != null,
+                            onClockOut = { onClockOutStaff?.invoke(entry) },
+                        )
+                    }
+                }
+            }
             Button(
                 onClick = onOpenShift,
                 modifier = Modifier.fillMaxWidth(),
@@ -2798,6 +2900,97 @@ private fun StaffControlPanel(
             }
         }
     }
+}
+
+@Composable
+private fun StaffClockedInRow(
+    entry: AttendanceEntry,
+    enabled: Boolean,
+    onClockOut: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = AppShellButtonMutedColor,
+        border = androidx.compose.foundation.BorderStroke(1.dp, AppShellBorderColor),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            StaffMiniAvatar(
+                staffName = entry.staffName,
+                photoPainter = staffPhotoPainterForStaffId(entry.staffId),
+                modifier = Modifier.size(34.dp),
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = entry.staffName,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = AppShellTextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = "Työaikakirjaus aktiivinen",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AppShellTextMuted,
+                    maxLines = 1,
+                )
+            }
+            Button(
+                onClick = onClockOut,
+                enabled = enabled,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = AppShellButtonColor,
+                    contentColor = AppShellTextPrimary,
+                ),
+            ) {
+                Text("Lopeta")
+            }
+        }
+    }
+}
+
+@Composable
+private fun StaffMiniAvatar(
+    staffName: String,
+    photoPainter: Painter?,
+    modifier: Modifier = Modifier,
+) {
+    if (photoPainter != null) {
+        Image(
+            painter = photoPainter,
+            contentDescription = staffName,
+            modifier = modifier.clip(CircleShape),
+            contentScale = ContentScale.Crop,
+        )
+    } else {
+        Box(
+            modifier = modifier
+                .clip(CircleShape)
+                .background(AppShellButtonColor),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = staffInitials(staffName),
+                style = MaterialTheme.typography.labelMedium,
+                color = AppShellAccentText,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                textAlign = TextAlign.Center,
+            )
+        }
+    }
+}
+
+private fun staffInitials(displayName: String): String {
+    return displayName
+        .split(" ")
+        .mapNotNull { part -> part.firstOrNull()?.uppercaseChar()?.toString() }
+        .take(2)
+        .joinToString("")
+        .ifBlank { "AI" }
 }
 
 @Composable

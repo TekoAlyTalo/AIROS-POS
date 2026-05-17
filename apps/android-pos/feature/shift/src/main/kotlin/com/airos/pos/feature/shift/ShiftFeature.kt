@@ -2,6 +2,7 @@ package com.airos.pos.feature.shift
 
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -1022,11 +1023,12 @@ private fun ShiftSchedulePulseCard(
                 else -> {
                     val windowStart = operationalWindowStart
                     val windowEnd = operationalWindowEnd
-                    val timelineWidth = pulseTimelineWidth(
+                    val chartWidth = pulseChartWidth(
                         windowStart = windowStart,
                         windowEnd = windowEnd,
                         zoom = pulseZoom,
                     )
+                    val horizontalScrollState = rememberScrollState()
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1049,36 +1051,32 @@ private fun ShiftSchedulePulseCard(
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f)
-                            .horizontalScroll(rememberScrollState()),
+                            .verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         PulseTimelineHeader(
                             windowStart = windowStart,
                             windowEnd = windowEnd,
-                            timelineWidth = timelineWidth,
+                            chartWidth = chartWidth,
+                            horizontalScrollState = horizontalScrollState,
                         )
-                        Column(
-                            modifier = Modifier
-                                .width(timelineWidth)
-                                .verticalScroll(rememberScrollState()),
-                        ) {
-                            visibleShifts.forEachIndexed { index, shift ->
-                                PulseTimelineShiftRow(
-                                    shift = shift,
-                                    attendance = attendance,
-                                    now = now,
-                                    windowStart = windowStart,
-                                    windowEnd = windowEnd,
-                                    timelineWidth = timelineWidth,
+                        visibleShifts.forEachIndexed { index, shift ->
+                            PulseTimelineShiftRow(
+                                shift = shift,
+                                attendance = attendance,
+                                now = now,
+                                windowStart = windowStart,
+                                windowEnd = windowEnd,
+                                chartWidth = chartWidth,
+                                horizontalScrollState = horizontalScrollState,
+                            )
+                            if (index != visibleShifts.lastIndex) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(1.dp)
+                                        .background(ShiftLineColor),
                                 )
-                                if (index != visibleShifts.lastIndex) {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(1.dp)
-                                            .background(ShiftLineColor),
-                                    )
-                                }
                             }
                         }
                     }
@@ -1624,11 +1622,11 @@ private val PulseLeftColumnWidth = 176.dp
 private val PulseTickLabelWidth = 48.dp
 private val PulseTickLabelHalfWidth = 24.dp
 
-private fun pulseTimelineWidth(windowStart: LocalDateTime, windowEnd: LocalDateTime, zoom: Float): Dp {
+private fun pulseChartWidth(windowStart: LocalDateTime, windowEnd: LocalDateTime, zoom: Float): Dp {
     val hours = Duration.between(windowStart, windowEnd).toMinutes().coerceAtLeast(60L) / 60f
     val chartWidth = PulseTimelineWidthPerHour * hours
     val baseChartWidth = if (chartWidth > PulseTimelineMinimumChartWidth) chartWidth else PulseTimelineMinimumChartWidth
-    return PulseLeftColumnWidth + (baseChartWidth * zoom.coerceIn(PulseZoomMin, PulseZoomMax))
+    return baseChartWidth * zoom.coerceIn(PulseZoomMin, PulseZoomMax)
 }
 
 private fun pulseTickTimes(windowStart: LocalDateTime, windowEnd: LocalDateTime): List<LocalDateTime> {
@@ -1691,31 +1689,39 @@ private fun PulseZoomButton(
 private fun PulseTimelineHeader(
     windowStart: LocalDateTime,
     windowEnd: LocalDateTime,
-    timelineWidth: Dp,
+    chartWidth: Dp,
+    horizontalScrollState: ScrollState,
 ) {
     val tickTimes = pulseTickTimes(windowStart, windowEnd)
     Row(
-        modifier = Modifier.width(timelineWidth),
+        modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Spacer(modifier = Modifier.width(PulseLeftColumnWidth))
         BoxWithConstraints(
             modifier = Modifier
                 .weight(1f)
+                .horizontalScroll(horizontalScrollState)
                 .height(18.dp),
         ) {
-            tickTimes.forEach { tickTime ->
-                val fraction = pulseFraction(tickTime, windowStart, windowEnd)
-                Text(
-                    text = formatPulseWindowTime(tickTime),
-                    modifier = Modifier
-                        .offset(x = (maxWidth * fraction) - PulseTickLabelHalfWidth)
-                        .width(PulseTickLabelWidth),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = ShiftTextMuted,
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                )
+            BoxWithConstraints(
+                modifier = Modifier
+                    .width(chartWidth)
+                    .height(18.dp),
+            ) {
+                tickTimes.forEach { tickTime ->
+                    val fraction = pulseFraction(tickTime, windowStart, windowEnd)
+                    Text(
+                        text = formatPulseWindowTime(tickTime),
+                        modifier = Modifier
+                            .offset(x = (maxWidth * fraction) - PulseTickLabelHalfWidth)
+                            .width(PulseTickLabelWidth),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ShiftTextMuted,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                    )
+                }
             }
         }
     }
@@ -1728,7 +1734,8 @@ private fun PulseTimelineShiftRow(
     now: LocalDateTime,
     windowStart: LocalDateTime,
     windowEnd: LocalDateTime,
-    timelineWidth: Dp,
+    chartWidth: Dp,
+    horizontalScrollState: ScrollState,
 ) {
     val pulseStatus = plannedPulseStatus(shift = shift, attendance = attendance, now = now)
     val overlapsWindow = shift.overlaps(windowStart, windowEnd)
@@ -1751,7 +1758,7 @@ private fun PulseTimelineShiftRow(
 
     Row(
         modifier = Modifier
-            .width(timelineWidth)
+            .fillMaxWidth()
             .height(56.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1790,36 +1797,44 @@ private fun PulseTimelineShiftRow(
         BoxWithConstraints(
             modifier = Modifier
                 .weight(1f)
+                .horizontalScroll(horizontalScrollState)
                 .fillMaxHeight(),
             contentAlignment = Alignment.CenterStart,
         ) {
-            pulseTickTimes(windowStart, windowEnd).forEach { tickTime ->
-                val fraction = pulseFraction(tickTime, windowStart, windowEnd)
-                Box(
-                    modifier = Modifier
-                        .offset(x = maxWidth * fraction)
-                        .fillMaxHeight()
-                        .width(1.dp)
-                        .background(ShiftLineColor),
-                )
-            }
-            if (nowFraction in 0f..1f) {
-                Box(
-                    modifier = Modifier
-                        .offset(x = maxWidth * nowFraction)
-                        .width(2.dp)
-                        .fillMaxHeight()
-                        .background(ShiftGold.copy(alpha = 0.76f)),
-                )
-            }
-            Box(
+            BoxWithConstraints(
                 modifier = Modifier
-                    .offset(x = maxWidth * startFraction)
-                    .width(maxWidth * barWidthFraction)
-                    .height(22.dp)
-                    .clip(RoundedCornerShape(5.dp))
-                    .pulseBarModifier(pulseStatus),
-            )
+                    .width(chartWidth)
+                    .fillMaxHeight(),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                pulseTickTimes(windowStart, windowEnd).forEach { tickTime ->
+                    val fraction = pulseFraction(tickTime, windowStart, windowEnd)
+                    Box(
+                        modifier = Modifier
+                            .offset(x = maxWidth * fraction)
+                            .fillMaxHeight()
+                            .width(1.dp)
+                            .background(ShiftLineColor),
+                    )
+                }
+                if (nowFraction in 0f..1f) {
+                    Box(
+                        modifier = Modifier
+                            .offset(x = maxWidth * nowFraction)
+                            .width(2.dp)
+                            .fillMaxHeight()
+                            .background(ShiftGold.copy(alpha = 0.76f)),
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .offset(x = maxWidth * startFraction)
+                        .width(maxWidth * barWidthFraction)
+                        .height(22.dp)
+                        .clip(RoundedCornerShape(5.dp))
+                        .pulseBarModifier(pulseStatus),
+                )
+            }
         }
 
     }
@@ -2155,6 +2170,7 @@ private enum class PulseStatusKind {
     LATE,
     ABSENT,
     COMPLETED,
+    UNKNOWN,
 }
 
 private data class PulseStatusVisual(
@@ -2193,16 +2209,25 @@ private fun plannedPulseStatus(
         return PulseStatusVisual(PulseStatusKind.ABSENT, "Poissa", ShiftAbsent, "×")
     }
 
-    val isOnSite = attendance.currentlyOnSite.any { entry ->
-        entry.staffId == shift.staffId ||
-            (entry.staffId.isBlank() && entry.staffName.equals(shift.staffName, ignoreCase = true))
-    }
+    val isClockedIn = shift.staffId.isNotBlank() &&
+        attendance.currentlyOnSite.any { entry -> entry.staffId == shift.staffId }
+    val hasAmbiguousStaffIdentity = shift.staffId.isBlank() ||
+        attendance.currentlyOnSite.any { entry ->
+            entry.staffId.isNotBlank() &&
+                entry.staffId != shift.staffId &&
+                entry.staffName.equals(shift.staffName, ignoreCase = true)
+        }
+    val hasAttendanceTruth = attendance.currentlyOnSite.isNotEmpty() || attendance.clockedInToday.isNotEmpty()
+    val shiftIsCurrent = !now.isBefore(shift.startsAt) && now.isBefore(shift.endsAt)
 
     return when {
-        isOnSite -> PulseStatusVisual(PulseStatusKind.PRESENT, "Paikalla", ShiftSuccess, "!")
+        isClockedIn -> PulseStatusVisual(PulseStatusKind.PRESENT, "Paikalla", ShiftSuccess, "!")
         now.isBefore(shift.startsAt) -> PulseStatusVisual(PulseStatusKind.UPCOMING, "Tulossa", ShiftUpcoming, "▷")
-        now.isBefore(shift.endsAt) -> PulseStatusVisual(PulseStatusKind.LATE, "Myöhässä", ShiftDanger, "!")
-        else -> PulseStatusVisual(PulseStatusKind.ABSENT, "Poissa", ShiftAbsent, "×")
+        shiftIsCurrent && hasAttendanceTruth && !hasAmbiguousStaffIdentity -> {
+            PulseStatusVisual(PulseStatusKind.LATE, "Myöhässä", ShiftDanger, "!")
+        }
+        shiftIsCurrent -> PulseStatusVisual(PulseStatusKind.UNKNOWN, "Työaika tuntematon", ShiftTextMuted, "?")
+        else -> PulseStatusVisual(PulseStatusKind.COMPLETED, "Valmis", ShiftTextMuted, "✓")
     }
 }
 

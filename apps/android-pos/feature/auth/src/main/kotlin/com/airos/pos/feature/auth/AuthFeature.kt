@@ -3,8 +3,11 @@ package com.airos.pos.feature.auth
 import android.util.Log
 import android.graphics.Color.parseColor
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,9 +15,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -23,9 +28,14 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.ViewModel
@@ -446,6 +456,7 @@ fun AuthScreen(
     onClearManagerPin: () -> Unit,
     onConfirmManagerOverride: () -> Unit,
     onDismissManagerOverride: () -> Unit,
+    staffPhotoPainter: @Composable (StaffMember) -> Painter? = { null },
 ) {
     val selectedStaff = state.staff.firstOrNull { it.id == state.selectedStaffId }
 
@@ -472,6 +483,7 @@ fun AuthScreen(
                         staff = staff,
                         selected = staff.id == state.selectedStaffId,
                         onSelect = { onStaffSelected(staff.id) },
+                        photoPainter = staffPhotoPainter,
                     )
                 }
             }
@@ -485,7 +497,7 @@ fun AuthScreen(
             title = "Turvallinen kirjautuminen",
             modifier = Modifier.weight(0.95f),
         ) {
-            SelectedStaffSummary(selectedStaff = selectedStaff)
+            SelectedStaffSummary(selectedStaff = selectedStaff, photoPainter = staffPhotoPainter)
 
             Surface(
                 modifier = Modifier.fillMaxWidth(),
@@ -553,6 +565,7 @@ fun AuthScreen(
             onClearManagerPin = onClearManagerPin,
             onConfirmManagerOverride = onConfirmManagerOverride,
             onDismiss = onDismissManagerOverride,
+            staffPhotoPainter = staffPhotoPainter,
         )
     }
 }
@@ -562,6 +575,7 @@ private fun StaffQuickSelectCard(
     staff: StaffMember,
     selected: Boolean,
     onSelect: () -> Unit,
+    photoPainter: @Composable (StaffMember) -> Painter? = { null },
 ) {
     val accentColor = Color(parseColor(staff.quickColorHex).toLong())
 
@@ -579,20 +593,34 @@ private fun StaffQuickSelectCard(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(18.dp),
+                .padding(14.dp),
             verticalArrangement = Arrangement.SpaceBetween,
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    text = staff.displayName,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                StaffIdentityAvatar(
+                    staff = staff,
+                    painter = photoPainter(staff),
+                    accentColor = accentColor,
+                    modifier = Modifier.size(54.dp),
                 )
-                Text(
-                    text = formatStaffRole(staff.role),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = staff.displayName,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        text = formatStaffRole(staff.role),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             Text(
                 text = when {
@@ -609,7 +637,10 @@ private fun StaffQuickSelectCard(
 }
 
 @Composable
-private fun SelectedStaffSummary(selectedStaff: StaffMember?) {
+private fun SelectedStaffSummary(
+    selectedStaff: StaffMember?,
+    photoPainter: @Composable (StaffMember) -> Painter? = { null },
+) {
     if (selectedStaff == null) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
@@ -630,24 +661,66 @@ private fun SelectedStaffSummary(selectedStaff: StaffMember?) {
         shape = RoundedCornerShape(24.dp),
         color = MaterialTheme.colorScheme.surfaceVariant,
     ) {
-        Column(
+        Row(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            val accentColor = Color(parseColor(selectedStaff.quickColorHex).toLong())
+            StaffIdentityAvatar(
+                staff = selectedStaff,
+                painter = photoPainter(selectedStaff),
+                accentColor = accentColor,
+                modifier = Modifier.size(58.dp),
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = selectedStaff.displayName,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    text = "Rooli: ${formatStaffRole(selectedStaff.role)}",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = if (selectedStaff.isManager) "Oikeus: päällikkö" else "Oikeus: työntekijä",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StaffIdentityAvatar(
+    staff: StaffMember,
+    painter: Painter?,
+    accentColor: Color,
+    modifier: Modifier = Modifier,
+) {
+    if (painter != null) {
+        Image(
+            painter = painter,
+            contentDescription = staff.displayName,
+            modifier = modifier.clip(CircleShape),
+            contentScale = ContentScale.Crop,
+        )
+    } else {
+        Box(
+            modifier = modifier
+                .clip(CircleShape)
+                .background(accentColor.copy(alpha = 0.18f)),
+            contentAlignment = Alignment.Center,
         ) {
             Text(
-                text = selectedStaff.displayName,
-                style = MaterialTheme.typography.titleLarge,
+                text = staffInitials(staff.displayName),
+                style = MaterialTheme.typography.titleMedium,
+                color = accentColor,
                 fontWeight = FontWeight.Bold,
-            )
-            Text(
-                text = "Rooli: ${formatStaffRole(selectedStaff.role)}",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                text = if (selectedStaff.isManager) "Oikeus: päällikkö" else "Oikeus: työntekijä",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
             )
         }
     }
@@ -662,6 +735,7 @@ private fun ManagerOverrideDialog(
     onClearManagerPin: () -> Unit,
     onConfirmManagerOverride: () -> Unit,
     onDismiss: () -> Unit,
+    staffPhotoPainter: @Composable (StaffMember) -> Painter? = { null },
 ) {
     val selectedManager = state.managers.firstOrNull { it.id == state.selectedManagerId }
 
@@ -706,6 +780,7 @@ private fun ManagerOverrideDialog(
                                     staff = manager,
                                     selected = manager.id == state.selectedManagerId,
                                     onSelect = { onManagerSelected(manager.id) },
+                                    photoPainter = staffPhotoPainter,
                                 )
                             }
                         }
@@ -716,7 +791,7 @@ private fun ManagerOverrideDialog(
                         supportingText = "Valittu päällikkö hyväksyy toiminnon 4-numeroisella PIN-koodilla.",
                         modifier = Modifier.weight(1f),
                     ) {
-                        SelectedStaffSummary(selectedStaff = selectedManager)
+                        SelectedStaffSummary(selectedStaff = selectedManager, photoPainter = staffPhotoPainter)
 
                         Surface(
                             modifier = Modifier.fillMaxWidth(),
@@ -799,6 +874,15 @@ private fun formatStaffRole(role: StaffRole): String {
         StaffRole.KITCHEN -> "Keittiö"
         StaffRole.ADMIN -> "Ylläpito"
     }
+}
+
+private fun staffInitials(displayName: String): String {
+    return displayName
+        .split(" ")
+        .mapNotNull { part -> part.firstOrNull()?.uppercaseChar()?.toString() }
+        .take(2)
+        .joinToString("")
+        .ifBlank { "AI" }
 }
 
 private fun formatManagerOverrideReason(reason: ManagerOverrideReason): String {

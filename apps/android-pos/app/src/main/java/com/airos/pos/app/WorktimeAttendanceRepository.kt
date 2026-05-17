@@ -119,10 +119,19 @@ class WorktimeAttendanceRepository(
     suspend fun clockOut(staffId: String, staffName: String): PosResult<Unit> {
         val scope = currentScope()
         val sessionKey = scope.sessionKey(staffId)
-        val active = attendanceDao.loadActiveSession(sessionKey)
-        if (active != null) {
-            appendLocalEvent(scope, staffId, staffName, AttendanceActionClockOut)
+        var active = attendanceDao.loadActiveSession(sessionKey)
+        if (active == null) {
+            when (val refresh = refreshActiveSessionFromBackend(scope, staffId, staffName)) {
+                is PosResult.Success -> active = attendanceDao.loadActiveSession(sessionKey)
+                is PosResult.Failure -> {
+                    return PosResult.Failure("Työvuoroa ei voi päättää: aktiivista työaikatietoa ei löytynyt")
+                }
+            }
         }
+        if (active == null) {
+            return PosResult.Failure("Työvuoroa ei voi päättää: aktiivista työaikatietoa ei löytynyt")
+        }
+        appendLocalEvent(scope, staffId, staffName, AttendanceActionClockOut)
         syncPendingNow()
         return PosResult.Success(Unit)
     }
