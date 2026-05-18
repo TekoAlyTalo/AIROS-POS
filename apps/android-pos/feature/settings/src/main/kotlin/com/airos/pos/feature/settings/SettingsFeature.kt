@@ -16,6 +16,11 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -37,11 +42,16 @@ import com.airos.pos.domain.AuthRepository
 import com.airos.pos.domain.NfcIdentityRepository
 import com.airos.pos.domain.SettingsRepository
 import com.airos.pos.domain.SyncQueueRepository
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.net.HttpURLConnection
+import java.net.URI
+import java.net.URL
 
 data class SettingsNfcStaffRow(
     val staff: StaffMember,
@@ -146,7 +156,7 @@ class SettingsViewModel(
     }
 
     fun updateEdgeBaseUrlInput(value: String) {
-        mutableState.update { it.copy(edgeBaseUrlInput = value) }
+        mutableState.update { it.copy(edgeBaseUrlInput = value, message = null) }
     }
 
     fun updateRestaurantKeyInput(value: String) {
@@ -168,13 +178,24 @@ class SettingsViewModel(
             }
             return
         }
+        val normalizedBackendBaseUrl = normalizeBackendBaseUrlInput(mutableState.value.edgeBaseUrlInput)
+        if (normalizedBackendBaseUrl == null) {
+            mutableState.update {
+                it.copy(
+                    message = "Virheellinen backend-osoite.",
+                    messageIsError = true,
+                )
+            }
+            return
+        }
         viewModelScope.launch {
             settingsRepository.updateTerminalName(mutableState.value.terminalNameInput)
-            settingsRepository.updateEdgeBaseUrl(mutableState.value.edgeBaseUrlInput)
+            settingsRepository.updateEdgeBaseUrl(normalizedBackendBaseUrl)
             settingsRepository.updateRestaurantKey(mutableState.value.restaurantKeyInput)
             settingsRepository.updateDefaultOpeningFloatCents(floatCents)
             mutableState.update {
                 it.copy(
+                    edgeBaseUrlInput = normalizedBackendBaseUrl,
                     message = "Asetukset tallennettu paikallisesti.",
                     messageIsError = false,
                 )
@@ -449,6 +470,11 @@ fun SettingsScreen(
     lastNfcTagSummary: String?,
     lastNfcTagUid: String?,
 ) {
+    val scope = rememberCoroutineScope()
+    var backendConnectionMessage by remember { mutableStateOf<String?>(null) }
+    var backendConnectionIsError by remember { mutableStateOf(false) }
+    var backendConnectionBusy by remember { mutableStateOf(false) }
+
     PosPane(
         title = "Asetukset",
         supportingText = "Päätteen asetukset, laitetiedot, synkronoinnin tila ja paikalliset NFC-tunnisteet.",
@@ -477,12 +503,54 @@ fun SettingsScreen(
                 label = { Text("Päätteen nimi") },
                 modifier = Modifier.fillMaxWidth(),
             )
+
+            Text(
+                text = "Backend-yhteys",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = "Yksi osoite palvelee kassaa, pöytätietoa, myyntiä ja muita backend-kutsuja.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
             OutlinedTextField(
                 value = state.edgeBaseUrlInput,
-                onValueChange = onEdgeBaseUrlChanged,
-                label = { Text("Edge-palvelimen URL") },
+                onValueChange = { value ->
+                    backendConnectionMessage = null
+                    onEdgeBaseUrlChanged(value)
+                },
+                label = { Text("Backend-osoite") },
+                supportingText = { Text("Esim. 192.168.8.123:8000 tai http://192.168.8.123:8000") },
                 modifier = Modifier.fillMaxWidth(),
             )
+            backendConnectionMessage?.let { message ->
+                StatusBanner(
+                    text = message,
+                    tint = if (backendConnectionIsError) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
+                )
+            }
+            OutlinedButton(
+                onClick = {
+                    if (backendConnectionBusy) return@OutlinedButton
+                    backendConnectionBusy = true
+                    backendConnectionMessage = null
+                    scope.launch {
+                        val result = testBackendConnection(state.edgeBaseUrlInput)
+                        result.normalizedBaseUrl?.let(onEdgeBaseUrlChanged)
+                        backendConnectionMessage = result.message
+                        backendConnectionIsError = result.isError
+                        backendConnectionBusy = false
+                    }
+                },
+                enabled = !backendConnectionBusy,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (backendConnectionBusy) "Testataan yhteyttä..." else "Testaa yhteys")
+            }
+
             OutlinedTextField(
                 value = state.restaurantKeyInput,
                 onValueChange = onRestaurantKeyChanged,
@@ -742,6 +810,124 @@ private fun CustomerNfcEnrollmentCard(
                 Text("Poista asiakkaan tunniste")
             }
         }
+    }
+}
+
+private data class BackendConnectionTestResult(
+    val message: String,
+    val isError: Boolean,
+    val normalizedBaseUrl: String? = null,
+)
+
+private enum class BackendEndpointCheckResult {
+    OK,
+    BAD_RESPONSE,
+    UNREACHABLE,
+}
+
+private suspend fun testBackendConnection(rawBaseUrl: String): BackendConnectionTestResult = withContext(Dispatchers.IO) {
+    val normalizedBaseUrl = normalizeBackendBaseUrlInput(rawBaseUrl)
+        ?: return@withContext BackendConnectionTestResult(
+            message = "Virheellinen osoite",
+            isError = true,
+        )
+
+    val health = checkBackendEndpoint("$normalizedBaseUrl/health")
+    if (health != BackendEndpointCheckResult.OK) {
+        return@withContext BackendConnectionTestResult(
+            message = "Backend ei vastaa",
+            isError = true,
+            normalizedBaseUrl = normalizedBaseUrl,
+        )
+    }
+
+    val tableOverview = checkBackendEndpoint("$normalizedBaseUrl/tables/overview")
+    if (tableOverview != BackendEndpointCheckResult.OK) {
+        return@withContext BackendConnectionTestResult(
+            message = "Backend vastaa, mutta pöytätieto ei vastaa",
+            isError = true,
+            normalizedBaseUrl = normalizedBaseUrl,
+        )
+    }
+
+    BackendConnectionTestResult(
+        message = "Yhteys OK",
+        isError = false,
+        normalizedBaseUrl = normalizedBaseUrl,
+    )
+}
+
+private fun checkBackendEndpoint(urlString: String): BackendEndpointCheckResult {
+    var connection: HttpURLConnection? = null
+    return try {
+        connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 1_500
+            readTimeout = 2_000
+            doInput = true
+            useCaches = false
+            setRequestProperty("Accept", "application/json")
+        }
+        val statusCode = connection.responseCode
+        if (statusCode in 200..299) {
+            BackendEndpointCheckResult.OK
+        } else {
+            BackendEndpointCheckResult.BAD_RESPONSE
+        }
+    } catch (_: Throwable) {
+        BackendEndpointCheckResult.UNREACHABLE
+    } finally {
+        connection?.disconnect()
+    }
+}
+
+private const val LEGACY_EMULATOR_HOST = "10.0.2.2"
+private const val PHYSICAL_EDGE_HOST = "192.168.8.158"
+private const val DEFAULT_EDGE_PORT = 8000
+
+private fun normalizeBackendBaseUrlInput(value: String): String? {
+    val trimmed = value.trim().trimEnd('/')
+    if (trimmed.isBlank()) return null
+    if (trimmed.any { it.isWhitespace() }) return null
+
+    val withScheme = if (trimmed.startsWith("http://", ignoreCase = true) ||
+        trimmed.startsWith("https://", ignoreCase = true)
+    ) {
+        trimmed
+    } else {
+        "http://$trimmed"
+    }
+
+    return try {
+        val uri = URI(withScheme)
+        val scheme = uri.scheme?.lowercase()
+        if (scheme != "http" && scheme != "https") return null
+        var host = uri.host?.trim()?.takeIf { it.isNotBlank() } ?: return null
+        val port = when {
+            uri.port != -1 -> uri.port
+            host == LEGACY_EMULATOR_HOST -> DEFAULT_EDGE_PORT
+            else -> -1
+        }
+        if (port != -1 && port !in 1..65535) return null
+        if (host == LEGACY_EMULATOR_HOST) {
+            host = PHYSICAL_EDGE_HOST
+        }
+        val rawPath = uri.rawPath
+        if (!rawPath.isNullOrBlank() && rawPath != "/") return null
+        if (!uri.rawQuery.isNullOrBlank()) return null
+        if (!uri.rawFragment.isNullOrBlank()) return null
+
+        URI(
+            scheme,
+            null,
+            host,
+            port,
+            null,
+            null,
+            null,
+        ).toString()
+    } catch (_: Exception) {
+        null
     }
 }
 

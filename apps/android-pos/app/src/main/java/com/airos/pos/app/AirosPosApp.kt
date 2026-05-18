@@ -54,6 +54,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -115,8 +117,10 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
+import androidx.compose.ui.zIndex
 import com.airos.pos.core.ui.NumericPinPad
 import kotlinx.coroutines.withContext
 import java.time.Duration
@@ -162,6 +166,9 @@ private const val MenuPlaceResultSpotLabelKey = "menu_place_result_spot_label"
 private const val ReservationPlaceResultTableIdKey = "reservation_place_result_table_id"
 private const val ReservationPlaceResultTableLabelKey = "reservation_place_result_table_label"
 private const val MenuMaxOpenBillsWireUnbounded = -1
+private const val CashierLockDebugTag = "AIROS_LOCK_DEBUG"
+private const val AUTO_LOCK_TIMEOUT_MILLIS = 30_000L
+private const val CASHIER_LOCK_OVERLAY_Z_INDEX = 10_000f
 
 private object Routes {
     const val Auth = "auth"
@@ -429,6 +436,68 @@ fun AirosPosApp(
     // auto-clock-in (which fires on sign-in, before the user navigates to Shift) also
     // surfaces its pending sync state in the global banner.
     val currentStaffId = session!!.staffId
+    val currentStaffName = session!!.displayName
+    val lockScope = rememberCoroutineScope()
+    var cashierLocked by remember(currentStaffId) { mutableStateOf(false) }
+    var cashierLockPin by remember(currentStaffId) { mutableStateOf("") }
+    var cashierLockPinError by remember(currentStaffId) { mutableStateOf<String?>(null) }
+    var cashierUnlockBusy by remember(currentStaffId) { mutableStateOf(false) }
+    var lastCashierActivityAtMillis by remember(currentStaffId) {
+        mutableStateOf(System.currentTimeMillis())
+    }
+
+    fun submitCashierUnlockPin(pin: String) {
+        if (cashierUnlockBusy || pin.length < 4) return
+        lockScope.launch {
+            cashierUnlockBusy = true
+            cashierLockPinError = null
+            when (val result = appContainer.authRepository.signInWithPin(currentStaffId, pin)) {
+                is PosResult.Success -> {
+                    cashierLocked = false
+                    cashierLockPin = ""
+                    cashierLockPinError = null
+                    lastCashierActivityAtMillis = System.currentTimeMillis()
+                    Log.w(
+                        CashierLockDebugTag,
+                        "unlock success cashierLocked=false staffId=$currentStaffId",
+                    )
+                }
+                is PosResult.Failure -> {
+                    cashierLockPin = ""
+                    cashierLockPinError = result.message
+                    Log.w(
+                        CashierLockDebugTag,
+                        "unlock failed cashierLocked=true staffId=$currentStaffId message=${result.message}",
+                    )
+                }
+            }
+            cashierUnlockBusy = false
+        }
+    }
+
+    LaunchedEffect(currentStaffId) {
+        Log.w(
+            CashierLockDebugTag,
+            "ticker started staffId=$currentStaffId timeoutMillis=$AUTO_LOCK_TIMEOUT_MILLIS",
+        )
+        while (true) {
+            delay(1_000L)
+            val elapsedIdleMillis = System.currentTimeMillis() - lastCashierActivityAtMillis
+            Log.w(
+                CashierLockDebugTag,
+                "ticker status cashierLocked=$cashierLocked elapsedIdleMillis=$elapsedIdleMillis",
+            )
+            if (!cashierLocked && elapsedIdleMillis >= AUTO_LOCK_TIMEOUT_MILLIS) {
+                cashierLocked = true
+                cashierLockPin = ""
+                cashierLockPinError = null
+                Log.w(
+                    CashierLockDebugTag,
+                    "locking cashier after inactivity elapsedIdleMillis=$elapsedIdleMillis",
+                )
+            }
+        }
+    }
     val attendanceGlobalStateFlow = remember(appContainer.worktimeAttendanceRepository, currentStaffId) {
         appContainer.worktimeAttendanceRepository.observeCurrentUserState(currentStaffId)
     }
@@ -444,16 +513,72 @@ fun AirosPosApp(
         else -> null
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(currentStaffId, cashierLocked) {
+                awaitPointerEventScope {
+                    while (true) {
+                        awaitPointerEvent(pass = PointerEventPass.Initial)
+                        if (!cashierLocked) {
+                            lastCashierActivityAtMillis = System.currentTimeMillis()
+                        }
+                    }
+                }
+            },
+    ) {
         SignedInApp(
             appContainer = appContainer,
             currentStaffId = currentStaffId,
-            currentStaffName = session!!.displayName,
+            currentStaffName = currentStaffName,
             now = shellNow,
+            cashierLocked = cashierLocked,
         )
         Column(modifier = Modifier.fillMaxWidth()) {
             MenuSyncBanner(syncState = syncState)
             AttendanceSyncBanner(message = attendanceSyncNotice)
+        }
+        if (cashierLocked) {
+            LaunchedEffect(cashierLocked, currentStaffId) {
+                Log.w(
+                    CashierLockDebugTag,
+                    "cashier lock overlay branch rendered cashierLocked=true staffId=$currentStaffId",
+                )
+            }
+            Dialog(
+                onDismissRequest = { },
+                properties = DialogProperties(
+                    dismissOnBackPress = false,
+                    dismissOnClickOutside = false,
+                    usePlatformDefaultWidth = false,
+                    decorFitsSystemWindows = false,
+                ),
+            ) {
+                CashierAutoLockOverlay(
+                    currentStaffName = currentStaffName,
+                    pin = cashierLockPin,
+                    errorMessage = cashierLockPinError,
+                    busy = cashierUnlockBusy,
+                    onDigit = { digit ->
+                        if (!cashierUnlockBusy && cashierLockPin.length < 4) {
+                            val updated = cashierLockPin + digit
+                            cashierLockPin = updated
+                            if (updated.length == 4) {
+                                submitCashierUnlockPin(updated)
+                            }
+                        }
+                    },
+                    onBackspace = {
+                        if (!cashierUnlockBusy && cashierLockPin.isNotEmpty()) {
+                            cashierLockPin = cashierLockPin.dropLast(1)
+                            cashierLockPinError = null
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .zIndex(CASHIER_LOCK_OVERLAY_Z_INDEX),
+                )
+            }
         }
     }
 }
@@ -621,6 +746,7 @@ private fun SignedInApp(
     currentStaffId: String,
     currentStaffName: String,
     now: LocalDateTime,
+    cashierLocked: Boolean,
 ) {
     val navController = rememberNavController()
     val scope = rememberCoroutineScope()
@@ -710,6 +836,20 @@ private fun SignedInApp(
     var openPaymentDialogRequest by remember { mutableStateOf(false) }
     var clearQuickSaleRequest by remember { mutableStateOf(false) }
 
+    LaunchedEffect(cashierLocked) {
+        if (cashierLocked) {
+            showQuickSaleLeaveDialog = false
+            pendingNavDestination = null
+            sellerSwitchDialogVisible = false
+            sellerSwitchSelectedStaff = null
+            sellerSwitchPin = ""
+            sellerSwitchPinError = null
+            signOutDialogVisible = false
+            signOutPin = ""
+            signOutPinError = null
+        }
+    }
+
     LaunchedEffect(appContainer.tableRepository) {
         appContainer.tableRepository.observeFloorMap().collect { floorMap ->
             tableLabelsByBackendId = floorMap.tables
@@ -745,11 +885,12 @@ private fun SignedInApp(
         )
     }
 
-    Row(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(AppShellBackground),
-    ) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(AppShellBackground),
+        ) {
         AppRail(
             navController = navController,
             currentStaffName = currentStaffName,
@@ -945,6 +1086,7 @@ private fun SignedInApp(
                         state = state,
                         currentStaffId = currentStaffId,
                         currentStaffName = currentStaffName,
+                        onOpeningFloatChanged = viewModel::updateOpeningFloat,
                         onCountedCashChanged = viewModel::updateCountedCash,
                         onOpenShift = viewModel::openShift,
                         onCloseShift = viewModel::closeShift,
@@ -2395,6 +2537,119 @@ private fun SignedInApp(
                             if (signOutPin.isNotEmpty()) signOutPin = signOutPin.dropLast(1)
                         },
                     )
+                }
+            }
+        }
+    }
+
+    }
+}
+
+
+@Composable
+private fun CashierAutoLockOverlay(
+    currentStaffName: String,
+    pin: String,
+    errorMessage: String?,
+    busy: Boolean,
+    onDigit: (String) -> Unit,
+    onBackspace: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    LaunchedEffect(Unit) {
+        Log.w(CashierLockDebugTag, "cashier lock overlay visual root composed")
+    }
+
+    val pinDisplay = "*".repeat(pin.length).padEnd(4, '-')
+
+    Surface(
+        modifier = modifier.fillMaxSize(),
+        color = Color.Black,
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xFF020202)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 32.dp, vertical = 28.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text(
+                    text = "AIROS KASSA LUKITTU",
+                    style = MaterialTheme.typography.displayMedium,
+                    color = Color(0xFFFFF176),
+                    textAlign = TextAlign.Center,
+                )
+                Text(
+                    text = currentStaffName,
+                    modifier = Modifier.padding(top = 14.dp),
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = Color.White,
+                    textAlign = TextAlign.Center,
+                )
+                Surface(
+                    modifier = Modifier.padding(top = 22.dp),
+                    shape = RoundedCornerShape(999.dp),
+                    color = Color(0xFFFFD54F),
+                    contentColor = Color.Black,
+                ) {
+                    Text(
+                        text = "Tunnistaudu jatkaaksesi",
+                        modifier = Modifier.padding(horizontal = 28.dp, vertical = 14.dp),
+                        style = MaterialTheme.typography.titleLarge,
+                        color = Color.Black,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+                Text(
+                    text = pinDisplay,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 28.dp),
+                    style = MaterialTheme.typography.displaySmall,
+                    color = Color.White,
+                    textAlign = TextAlign.Center,
+                )
+                if (errorMessage != null) {
+                    Text(
+                        text = errorMessage,
+                        modifier = Modifier.padding(top = 10.dp),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = TextAlign.Center,
+                    )
+                } else if (busy) {
+                    Text(
+                        text = "Checking PIN...",
+                        modifier = Modifier.padding(top = 10.dp),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = Color.White,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+                Surface(
+                    modifier = Modifier
+                        .padding(top = 18.dp)
+                        .width(420.dp),
+                    shape = RoundedCornerShape(20.dp),
+                    color = Color(0xFF121212),
+                    contentColor = Color.White,
+                    border = androidx.compose.foundation.BorderStroke(2.dp, Color(0xFFFFD54F)),
+                ) {
+                    Box(
+                        modifier = Modifier.padding(18.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        NumericPinPad(
+                            onDigit = onDigit,
+                            onBackspace = onBackspace,
+                        )
+                    }
                 }
             }
         }

@@ -3,6 +3,7 @@ package com.airos.pos.app
 import android.util.Log
 import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.model.PlannedStaffShift
+import com.airos.pos.core.model.RestaurantOperatingHoursDay
 import com.airos.pos.core.model.ShiftScheduleDay
 import com.airos.pos.core.model.ShiftSchedulePublicationStatus
 import com.airos.pos.core.model.ShiftScheduleSnapshot
@@ -14,6 +15,7 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.LocalTime
 import java.time.OffsetDateTime
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -30,11 +32,23 @@ class BackendShiftScheduleRepository(
         dateFrom: LocalDate,
         dateTo: LocalDate,
     ): PosResult<ShiftScheduleSnapshot> = withContext(Dispatchers.IO) {
-        request(
+        when (val scheduleResult = request(
             path = "/api/shift-schedule/pos",
             dateFrom = dateFrom,
             dateTo = dateTo,
-        )
+        )) {
+            is PosResult.Success -> {
+                val hours = fetchRestaurantOperatingHours()
+                PosResult.Success(
+                    scheduleResult.value.copy(
+                        operatingHours = hours.days,
+                        operatingHoursSourceRef = hours.sourceRef,
+                        operatingHoursMessage = hours.errorMessage,
+                    ),
+                )
+            }
+            is PosResult.Failure -> scheduleResult
+        }
     }
 
     override suspend fun fetchOwnShifts(
@@ -97,6 +111,110 @@ class BackendShiftScheduleRepository(
             PosResult.Failure("Shift schedule request failed: ${t.message ?: t.javaClass.simpleName}", t)
         } finally {
             connection?.disconnect()
+        }
+    }
+
+    private data class RestaurantHoursFetchResult(
+        val days: List<RestaurantOperatingHoursDay> = emptyList(),
+        val sourceRef: String? = null,
+        val errorMessage: String? = null,
+    )
+
+    private fun fetchRestaurantOperatingHours(): RestaurantHoursFetchResult {
+        val baseUrl = backendBaseUrlProvider().trim().trimEnd('/')
+        if (baseUrl.isBlank()) {
+            return RestaurantHoursFetchResult(errorMessage = "Backend URL is empty. Restaurant hours cannot be fetched.")
+        }
+
+        var connection: HttpURLConnection? = null
+        return try {
+            val restaurantKey = restaurantKeyProvider().trim().ifBlank { "ravintola_default" }
+            connection = (URL("$baseUrl/api/restaurant/profile").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = connectTimeoutMs
+                readTimeout = readTimeoutMs
+                doInput = true
+                useCaches = false
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("x-airos-restaurant-key", restaurantKey)
+            }
+
+            val statusCode = connection.responseCode
+            val body = readScheduleStream(if (statusCode in 200..299) connection.inputStream else connection.errorStream)
+            if (statusCode !in 200..299) {
+                return RestaurantHoursFetchResult(
+                    errorMessage = "Restaurant hours profile request failed (HTTP $statusCode).",
+                )
+            }
+            parseRestaurantOperatingHours(body)
+        } catch (t: Throwable) {
+            Log.d(
+                "AIROS",
+                "[BackendShiftScheduleRepository] GET /api/restaurant/profile failed: ${t.javaClass.simpleName}: ${t.message.orEmpty()}",
+            )
+            RestaurantHoursFetchResult(
+                errorMessage = "Restaurant hours request failed: ${t.message ?: t.javaClass.simpleName}",
+            )
+        } finally {
+            connection?.disconnect()
+        }
+    }
+
+    private fun parseRestaurantOperatingHours(body: String): RestaurantHoursFetchResult {
+        if (body.isBlank()) {
+            return RestaurantHoursFetchResult(errorMessage = "Restaurant hours payload was empty.")
+        }
+        return try {
+            val root = JSONObject(body)
+            val profile = root.optJSONObject("profile")
+            val hours = root.optJSONObject("restaurant.hours.v1")
+                ?: profile?.optJSONObject("restaurant.hours.v1")
+                ?: root.optJSONObject("restaurant_hours")
+                ?: profile?.optJSONObject("restaurant_hours")
+                ?: root.optJSONObject("hours")
+                ?: profile?.optJSONObject("hours")
+                ?: return RestaurantHoursFetchResult(errorMessage = "Restaurant profile is missing restaurant.hours.v1.")
+
+            if (hours.optBoolean("refused", false)) {
+                val reason = hours.optNullableString("reason") ?: "refused"
+                return RestaurantHoursFetchResult(errorMessage = "Restaurant hours payload was refused: $reason.")
+            }
+
+            val daysArray = hours.optJSONArray("days")
+                ?: return RestaurantHoursFetchResult(errorMessage = "Restaurant hours payload has no days array.")
+
+            val days = (0 until daysArray.length()).mapNotNull { index ->
+                val item = daysArray.optJSONObject(index) ?: return@mapNotNull null
+                val weekday = item.optInt("weekday", -1)
+                if (weekday !in 1..7) {
+                    throw IllegalArgumentException("Invalid restaurant hours weekday: $weekday")
+                }
+                val closed = item.optBoolean("closed", false)
+                val open = item.optNullableString("open")?.let { parseLocalTime(it) }
+                val close = item.optNullableString("close")?.let { parseLocalTime(it) }
+                if (!closed && (open == null || close == null)) {
+                    throw IllegalArgumentException("Open restaurant hours day $weekday is missing open or close time")
+                }
+                RestaurantOperatingHoursDay(
+                    weekday = weekday,
+                    open = open,
+                    close = close,
+                    closed = closed,
+                )
+            }
+
+            if (days.isEmpty()) {
+                RestaurantHoursFetchResult(errorMessage = "Restaurant hours payload did not contain usable days.")
+            } else {
+                RestaurantHoursFetchResult(
+                    days = days,
+                    sourceRef = hours.optNullableString("source_ref") ?: "restaurant.hours.v1",
+                )
+            }
+        } catch (t: Throwable) {
+            RestaurantHoursFetchResult(
+                errorMessage = "Restaurant hours payload could not be parsed: ${t.message ?: t.javaClass.simpleName}",
+            )
         }
     }
 
@@ -178,6 +296,10 @@ class BackendShiftScheduleRepository(
         }.getOrElse {
             OffsetDateTime.parse(value).toLocalDateTime()
         }
+    }
+
+    private fun parseLocalTime(raw: String): LocalTime {
+        return LocalTime.parse(raw.trim())
     }
 
     private fun urlEncode(value: String): String = URLEncoder.encode(value, StandardCharsets.UTF_8.name())

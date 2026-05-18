@@ -2,6 +2,7 @@ package com.airos.pos.core.model
 
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.LocalTime
 import java.util.UUID
 
 enum class StaffRole {
@@ -535,11 +536,21 @@ data class ShiftScheduleDay(
     val plannedShifts: List<PlannedStaffShift> = emptyList(),
 )
 
+data class RestaurantOperatingHoursDay(
+    val weekday: Int,
+    val open: LocalTime? = null,
+    val close: LocalTime? = null,
+    val closed: Boolean = false,
+)
+
 data class ShiftScheduleSnapshot(
     val restaurantKey: String,
     val dateFrom: LocalDate,
     val dateTo: LocalDate,
     val days: List<ShiftScheduleDay> = emptyList(),
+    val operatingHours: List<RestaurantOperatingHoursDay> = emptyList(),
+    val operatingHoursSourceRef: String? = null,
+    val operatingHoursMessage: String? = null,
 )
 
 enum class PaymentMethod {

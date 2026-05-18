@@ -19,7 +19,7 @@ import java.net.URI
 import java.util.UUID
 
 private val Context.terminalPreferencesDataStore: DataStore<Preferences> by preferencesDataStore(name = "terminal_preferences")
-private const val DEFAULT_EDGE_BASE_URL = "http://192.168.8.158:8000/"
+private const val DEFAULT_EDGE_BASE_URL = "http://192.168.8.158:8000"
 private const val LEGACY_EMULATOR_HOST = "10.0.2.2"
 private const val PHYSICAL_EDGE_HOST = "192.168.8.158"
 private const val DEFAULT_EDGE_PORT = 8000
@@ -67,7 +67,8 @@ class TerminalPreferencesStore(
     }
 
     suspend fun updateEdgeBaseUrl(value: String) {
-        context.terminalPreferencesDataStore.edit { it[Keys.edgeBaseUrl] = normalizeEdgeBaseUrl(value) }
+        val normalized = normalizeEdgeBaseUrlOrNull(value) ?: return
+        context.terminalPreferencesDataStore.edit { it[Keys.edgeBaseUrl] = normalized }
     }
 
     suspend fun setOfflineMode(enabled: Boolean) {
@@ -125,28 +126,55 @@ class TerminalPreferencesStore(
     }
 
     private fun normalizeEdgeBaseUrl(value: String): String {
-        val normalized = value.trim()
-        if (normalized.isBlank()) {
-            return normalized
+        return normalizeEdgeBaseUrlOrNull(value) ?: DEFAULT_EDGE_BASE_URL
+    }
+
+    private fun normalizeEdgeBaseUrlOrNull(value: String): String? {
+        val trimmed = value.trim().trimEnd('/')
+        if (trimmed.isBlank()) return null
+        if (trimmed.any { it.isWhitespace() }) return null
+
+        val withScheme = if (trimmed.startsWith("http://", ignoreCase = true) ||
+            trimmed.startsWith("https://", ignoreCase = true)
+        ) {
+            trimmed
+        } else {
+            "http://$trimmed"
         }
 
         return try {
-            val uri = URI(normalized)
-            if (uri.host != LEGACY_EMULATOR_HOST) {
-                normalized
-            } else {
-                URI(
-                    uri.scheme ?: "http",
-                    uri.userInfo,
-                    PHYSICAL_EDGE_HOST,
-                    if (uri.port == -1) DEFAULT_EDGE_PORT else uri.port,
-                    uri.path,
-                    uri.query,
-                    uri.fragment,
-                ).toString()
+            val uri = URI(withScheme)
+            val scheme = uri.scheme?.lowercase()
+            if (scheme != "http" && scheme != "https") return null
+
+            var host = uri.host?.trim()?.takeIf { it.isNotBlank() } ?: return null
+            val rawPath = uri.rawPath
+            if (!rawPath.isNullOrBlank() && rawPath != "/") return null
+            if (!uri.rawQuery.isNullOrBlank()) return null
+            if (!uri.rawFragment.isNullOrBlank()) return null
+
+            val port = when {
+                uri.port != -1 -> uri.port
+                host == LEGACY_EMULATOR_HOST -> DEFAULT_EDGE_PORT
+                else -> -1
             }
+            if (port != -1 && port !in 1..65535) return null
+
+            if (host == LEGACY_EMULATOR_HOST) {
+                host = PHYSICAL_EDGE_HOST
+            }
+
+            URI(
+                scheme,
+                null,
+                host,
+                port,
+                null,
+                null,
+                null,
+            ).toString()
         } catch (_: Exception) {
-            normalized
+            null
         }
     }
 }
