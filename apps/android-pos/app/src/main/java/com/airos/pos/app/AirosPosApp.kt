@@ -57,6 +57,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -169,6 +171,8 @@ private const val MenuPlaceResultSpotLabelKey = "menu_place_result_spot_label"
 private const val ReservationPlaceResultTableIdKey = "reservation_place_result_table_id"
 private const val ReservationPlaceResultTableLabelKey = "reservation_place_result_table_label"
 private const val MenuMaxOpenBillsWireUnbounded = -1
+private const val CashierLockDebugTag = "AIROS_LOCK_DEBUG"
+private const val AUTO_LOCK_TIMEOUT_MILLIS = 90_000L
 
 private object Routes {
     const val Auth = "auth"
@@ -345,6 +349,19 @@ fun AirosPosApp(
 ) {
     val session by appContainer.authRepository.activeSession.collectAsState()
     val shellNow = rememberCurrentMinute()
+    var cashierAutoLockAwaitingAuth by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(session?.sessionId, cashierAutoLockAwaitingAuth) {
+        val activeSession = session
+        if (cashierAutoLockAwaitingAuth && activeSession != null) {
+            Log.w(
+                CashierLockDebugTag,
+                "staff authenticated after auto-lock staffId=${activeSession.staffId} " +
+                    "displayName=${activeSession.displayName} authMethod=${activeSession.authMethodSnapshot}",
+            )
+            cashierAutoLockAwaitingAuth = false
+        }
+    }
 
     if (session == null) {
         val authViewModel: AuthViewModel = viewModel(factory = AuthViewModel.factory(appContainer.authRepository))
@@ -362,7 +379,7 @@ fun AirosPosApp(
         // When direct-login is OFF: keep preselect + notice behavior.
         // When direct-login is ON: known tags sign in directly via AuthRepository.
         // drop(1) skips a stale StateFlow value from an earlier screen/session.
-        LaunchedEffect(authViewModel, nfcDirectLoginEnabled) {
+        LaunchedEffect(authViewModel, nfcDirectLoginEnabled, cashierAutoLockAwaitingAuth) {
             Log.d(NfcLogTag, "Auth screen NFC handler active | directLoginEnabled=$nfcDirectLoginEnabled")
             NfcProbe.status.drop(1).collect { status ->
                 when (val r = status.lastStaffResolution) {
@@ -371,7 +388,8 @@ fun AirosPosApp(
                             NfcLogTag,
                             "Matched NFC tag on auth screen | uid=${r.match.uid} staffId=${r.match.staffId} directLoginEnabled=$nfcDirectLoginEnabled",
                         )
-                        if (nfcDirectLoginEnabled) {
+                        val signInDirectly = nfcDirectLoginEnabled || cashierAutoLockAwaitingAuth
+                        if (signInDirectly) {
                             authViewModel.signInWithNfc(
                                 staffId = r.match.staffId,
                                 noticeMessage = "NFC: ${r.match.displayName}",
@@ -430,6 +448,40 @@ fun AirosPosApp(
     // auto-clock-in (which fires on sign-in, before the user navigates to Shift) also
     // surfaces its pending sync state in the global banner.
     val currentStaffId = session!!.staffId
+    var cashierLocked by remember(currentStaffId) { mutableStateOf(false) }
+    var lastCashierActivityAtMillis by remember(currentStaffId) {
+        mutableStateOf(System.currentTimeMillis())
+    }
+
+    LaunchedEffect(currentStaffId) {
+        Log.w(
+            CashierLockDebugTag,
+            "auto-lock timer started staffId=$currentStaffId timeoutMillis=$AUTO_LOCK_TIMEOUT_MILLIS",
+        )
+        while (true) {
+            delay(1_000L)
+            val elapsedIdleMillis = System.currentTimeMillis() - lastCashierActivityAtMillis
+            if (!cashierLocked && elapsedIdleMillis >= AUTO_LOCK_TIMEOUT_MILLIS) {
+                cashierLocked = true
+                Log.w(
+                    CashierLockDebugTag,
+                    "auto-lock timeout triggered elapsedIdleMillis=$elapsedIdleMillis staffId=$currentStaffId",
+                )
+            }
+        }
+    }
+
+    LaunchedEffect(cashierLocked) {
+        if (cashierLocked) {
+            cashierAutoLockAwaitingAuth = true
+            Log.w(
+                CashierLockDebugTag,
+                "auto-lock routed to existing seller authentication previousStaffId=$currentStaffId",
+            )
+            appContainer.authRepository.signOut()
+        }
+    }
+
     val attendanceGlobalStateFlow = remember(appContainer.worktimeAttendanceRepository, currentStaffId) {
         appContainer.worktimeAttendanceRepository.observeCurrentUserState(currentStaffId)
     }
@@ -445,7 +497,20 @@ fun AirosPosApp(
         else -> null
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(currentStaffId, cashierLocked) {
+                awaitPointerEventScope {
+                    while (true) {
+                        awaitPointerEvent(pass = PointerEventPass.Initial)
+                        if (!cashierLocked) {
+                            lastCashierActivityAtMillis = System.currentTimeMillis()
+                        }
+                    }
+                }
+            },
+    ) {
         SignedInApp(
             appContainer = appContainer,
             currentStaffId = currentStaffId,
