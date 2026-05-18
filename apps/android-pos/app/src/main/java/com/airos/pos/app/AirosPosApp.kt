@@ -2810,89 +2810,14 @@ private fun AppRail(
                 }
             }
 
-            var staffControlPanelOpen by rememberSaveable { mutableStateOf(false) }
-            val staffControlPopupOffset = with(LocalDensity.current) {
-                IntOffset((RAIL_WIDTH + 16.dp).roundToPx(), (-10).dp.roundToPx())
-            }
-
             RailButton(
                 label = "MYYJÄ",
                 icon = Icons.Filled.Person,
                 iconContainerColor = Color(0xFF243A2F),
                 iconTint = Color(0xFFB7F3C8),
-                selected = staffControlPanelOpen || isRailDestinationSelected(currentRoute, Routes.Shift),
-                onClick = { staffControlPanelOpen = true },
+                selected = isRailDestinationSelected(currentRoute, Routes.Shift),
+                onClick = onSellerSwitchRequested,
             )
-
-            if (staffControlPanelOpen) {
-                Popup(
-                    alignment = Alignment.BottomStart,
-                    offset = staffControlPopupOffset,
-                    onDismissRequest = { staffControlPanelOpen = false },
-                    properties = PopupProperties(focusable = true),
-                ) {
-                    StaffControlPanel(
-                        currentStaffName = currentStaffName,
-                        onOpenCurrentSeller = {
-                            staffControlPanelOpen = false
-                            val alreadySelected = isRailDestinationSelected(currentRoute, Routes.Shift)
-                            if (isQuickSaleDirty && !alreadySelected) {
-                                onNavigationBlocked?.invoke(Routes.Shift)
-                            } else if (!alreadySelected) {
-                                onWillNavigateAway?.invoke()
-                                navController.navigate(Routes.Shift) {
-                                    launchSingleTop = true
-                                }
-                            }
-                        },
-                        onAuthenticate = {
-                            staffControlPanelOpen = false
-                            onSellerSwitchRequested()
-                        },
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun StaffControlPanel(
-    currentStaffName: String,
-    onOpenCurrentSeller: () -> Unit,
-    onAuthenticate: () -> Unit,
-) {
-    Surface(
-        modifier = Modifier.width(260.dp),
-        shape = RoundedCornerShape(18.dp),
-        color = AppShellPanelColor,
-        border = androidx.compose.foundation.BorderStroke(1.dp, AppShellBorderColor),
-    ) {
-        Column(
-            modifier = Modifier.padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text(
-                text = currentStaffName,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onOpenCurrentSeller)
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
-                style = MaterialTheme.typography.titleSmall,
-                color = AppShellAccentText,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Button(
-                onClick = onAuthenticate,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = AppShellButtonColor,
-                    contentColor = AppShellTextPrimary,
-                ),
-            ) {
-                Text("Tunnistaudu")
-            }
         }
     }
 }
