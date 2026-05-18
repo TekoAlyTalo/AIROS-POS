@@ -1,10 +1,13 @@
 package com.airos.pos.feature.tablemap
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.os.Handler
 import android.os.Looper
 import android.text.format.DateFormat
 import android.util.Log
+import androidx.compose.foundation.Image
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
@@ -58,8 +61,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -92,6 +97,7 @@ import com.airos.pos.domain.OpenSaleRepository
 import com.airos.pos.domain.SettingsRepository
 import com.airos.pos.domain.StaffUiPreferencesRepository
 import com.airos.pos.domain.TableRepository
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -99,11 +105,15 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.webrtc.EglBase
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
+import java.net.HttpURLConnection
 import java.net.URI
+import java.net.URL
+import java.net.URLEncoder
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneOffset
@@ -128,6 +138,10 @@ private const val SIGNALING_PORT = 8000
 private const val PREVIEW_TAG = "TableLivePreview"
 private val previewMainHandler: Handler by lazy { Handler(Looper.getMainLooper()) }
 private const val MINI_PREVIEW_SHELL_ASPECT_RATIO = 16f / 9f
+private const val LINEUP_CAMERA_ID = "cam3"
+private const val LINEUP_CAMERA_NAME = "Tuulikaappi / jono"
+private const val LINEUP_CAMERA_ROLE_LABEL = "Jonokamera"
+private const val LINEUP_CAMERA_FRAME_REFRESH_MILLIS = 2_000L
 private const val PREVIEW_FRAME_FRESHNESS_WINDOW_MILLIS = 2_500L
 private const val PREVIEW_FRAME_FRESHNESS_TICK_MILLIS = 500L
 private const val AREA_FILTER_ALL = "Kaikki"
@@ -197,6 +211,13 @@ data class TableLivePreviewTarget(
     val tableLabel: String,
     val cameraId: String,
     val cameraLabel: String,
+)
+
+private data class CameraStillFrameUiState(
+    val bitmap: Bitmap? = null,
+    val isLoading: Boolean = false,
+    val message: String? = null,
+    val degraded: Boolean = false,
 )
 
 data class TableMapUiState(
@@ -704,6 +725,10 @@ fun TableMapScreen(
             selectedAreaName = activeAreaName,
         )
     }
+    var selectedCameraObjectId by rememberSaveable { mutableStateOf<String?>(null) }
+    val selectedCameraObject = visibleFloorObjects.firstOrNull { floorObject ->
+        floorObject.id == selectedCameraObjectId && floorObject.isLineupCameraObject()
+    }
     val openBillCountsBySpotId = remember(state.openChecksBySpotId) {
         state.openChecksBySpotId.mapValues { (_, summary) -> summary.count }
     }
@@ -788,7 +813,7 @@ fun TableMapScreen(
             reservationEntries = reservationTickerEntries,
         )
     }
-    val desiredPreviewTarget = selectedTable?.previewTarget()
+    val desiredPreviewTarget = if (selectedCameraObject == null) selectedTable?.previewTarget() else null
     val selectedPreviewTarget = when {
         state.cameraPreviewState.matchesTransportCamera(desiredPreviewTarget) -> desiredPreviewTarget
         else -> state.livePreviewTarget?.takeIf { it.tableId == selectedTable?.id }
@@ -827,6 +852,7 @@ fun TableMapScreen(
     }
 
     fun handleTableTap(table: RestaurantTable) {
+        selectedCameraObjectId = null
         if (isPickingTransferTarget) {
             onTransferTargetSelected(table.id)
             return
@@ -851,6 +877,13 @@ fun TableMapScreen(
         }
 
         onSelectTable(table.id)
+    }
+
+    fun handleCameraObjectTap(cameraObject: FloorMapObject) {
+        if (transferState != null || placeSelectionMode || !cameraObject.isLineupCameraObject()) {
+            return
+        }
+        selectedCameraObjectId = cameraObject.id
     }
 LaunchedEffect(
         desiredPreviewTarget?.tableId,
@@ -893,7 +926,10 @@ LaunchedEffect(
         if (state.selectedTableId != null && visibleTables.any { it.id == state.selectedTableId }) {
             return@LaunchedEffect
         }
-        visibleTables.firstOrNull()?.id?.let(onSelectTable)
+        visibleTables.firstOrNull()?.id?.let { tableId ->
+            selectedCameraObjectId = null
+            onSelectTable(tableId)
+        }
     }
     val nonTickerMessage = state.message?.takeUnless { it.isTransferredTableMapMessage() }
 
@@ -978,7 +1014,10 @@ LaunchedEffect(
                             when {
                                 areaTables.isEmpty() -> Unit
                                 state.selectedTableId != null && areaTables.any { it.id == state.selectedTableId } -> Unit
-                                else -> onSelectTable(areaTables.first().id)
+                                else -> {
+                                    selectedCameraObjectId = null
+                                    onSelectTable(areaTables.first().id)
+                                }
                             }
                         },
                     )
@@ -1043,10 +1082,14 @@ LaunchedEffect(
                             floorMapWidthPx = activeFloorMap?.widthPx ?: activeFloorMap?.width?.toFloat(),
                             floorMapHeightPx = activeFloorMap?.heightPx ?: activeFloorMap?.height?.toFloat(),
                                 selectedTableId = selectedTable?.id,
+                                selectedCameraObjectId = selectedCameraObject?.id,
                                 onSelectTable = { tableId ->
                                     visibleTables.firstOrNull { it.id == tableId }
                                         ?.let(::handleTableTap)
                                         ?: onSelectTable(tableId)
+                                },
+                                onSelectCameraObject = { cameraObject ->
+                                    handleCameraObjectTap(cameraObject)
                                 },
                                 onLongPressTable = { tableId ->
                                     if (!isPickingTransferTarget && !placeSelectionMode) {
@@ -1096,13 +1139,19 @@ LaunchedEffect(
                     .padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Text(
-                    text = selectedTable?.label ?: "Pöydän tiedot",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = TableMapVisualTokens.TextPrimary,
-                )
-                if (selectedTable == null) {
+                if (selectedCameraObject != null) {
+                    CameraObjectDetailsContent(
+                        cameraObject = selectedCameraObject,
+                        edgeBaseUrl = state.edgeBaseUrl,
+                    )
+                } else {
+                    Text(
+                        text = selectedTable?.label ?: "Pöydän tiedot",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = TableMapVisualTokens.TextPrimary,
+                    )
+                    if (selectedTable == null) {
                     if (hasRealFloorMap) {
                         Text("Valitse pöytä jatkaaksesi.")
                     } else {
@@ -1157,6 +1206,7 @@ LaunchedEffect(
                 }
             }
         }
+    }
     }
 if (billDrag.active) {
     val hoveredLabel = billDrag.hoveredTableId?.let { hoveredId ->
@@ -1268,6 +1318,183 @@ private fun HonestFloorMapUnavailableState(
                 text = message,
                 style = MaterialTheme.typography.bodyMedium,
                 color = TableMapVisualTokens.TextSecondary,
+            )
+        }
+    }
+}
+
+@Composable
+private fun CameraObjectDetailsContent(
+    cameraObject: FloorMapObject,
+    edgeBaseUrl: String?,
+) {
+    val cameraId = cameraObject.cameraId?.takeIf(String::isNotBlank)
+
+    Column(
+        modifier = Modifier.fillMaxHeight(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = cameraObject.lineupCameraDisplayName(),
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                color = TableMapVisualTokens.TextPrimary,
+            )
+            Surface(
+                shape = RoundedCornerShape(999.dp),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f),
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            ) {
+                Text(
+                    text = LINEUP_CAMERA_ROLE_LABEL,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+        }
+
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    text = cameraId ?: "Kameratunnus puuttuu",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                LineupCameraFramePreview(
+                    cameraId = cameraId,
+                    edgeBaseUrl = edgeBaseUrl,
+                    label = cameraObject.lineupCameraDisplayName(),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LineupCameraFramePreview(
+    cameraId: String?,
+    edgeBaseUrl: String?,
+    label: String,
+) {
+    val normalizedBaseUrl = edgeBaseUrl?.trim().orEmpty()
+    var frameState by remember(cameraId, normalizedBaseUrl) {
+        mutableStateOf(CameraStillFrameUiState(isLoading = true))
+    }
+
+    LaunchedEffect(cameraId, normalizedBaseUrl) {
+        if (cameraId.isNullOrBlank()) {
+            frameState = CameraStillFrameUiState(
+                isLoading = false,
+                message = "Kameratunnus puuttuu.",
+            )
+            return@LaunchedEffect
+        }
+        if (normalizedBaseUrl.isBlank()) {
+            frameState = CameraStillFrameUiState(
+                isLoading = false,
+                message = "Kamerayhteyden osoitetta ei ole määritetty.",
+            )
+            return@LaunchedEffect
+        }
+
+        while (true) {
+            val requestUrl = latestCameraFrameUrl(
+                edgeBaseUrl = normalizedBaseUrl,
+                cameraId = cameraId,
+                cacheBustEpochMillis = System.currentTimeMillis(),
+            )
+            frameState = frameState.copy(isLoading = frameState.bitmap == null)
+            val result = runCatching { fetchLatestCameraFrameBitmap(requestUrl) }
+            frameState = result.fold(
+                onSuccess = { bitmap ->
+                    CameraStillFrameUiState(
+                        bitmap = bitmap,
+                        isLoading = false,
+                    )
+                },
+                onFailure = { error ->
+                    frameState.copy(
+                        isLoading = false,
+                        message = error.message ?: "Kamerakuva ei ole saatavilla.",
+                        degraded = frameState.bitmap != null,
+                    )
+                },
+            )
+            delay(LINEUP_CAMERA_FRAME_REFRESH_MILLIS)
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(MINI_PREVIEW_SHELL_ASPECT_RATIO)
+            .clip(RoundedCornerShape(18.dp))
+            .background(MaterialTheme.colorScheme.surface),
+        contentAlignment = Alignment.Center,
+    ) {
+        val bitmap = frameState.bitmap
+        if (bitmap != null) {
+            Image(
+                bitmap = remember(bitmap) { bitmap.asImageBitmap() },
+                contentDescription = "$label kamerakuva",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+            )
+        }
+
+        if (bitmap == null || frameState.message != null) {
+            val message = when {
+                frameState.isLoading -> "Ladataan kamerakuvaa..."
+                frameState.degraded -> frameState.message ?: "Kamerakuva päivittyy hitaasti."
+                else -> frameState.message ?: "Kamerakuva ei ole saatavilla."
+            }
+            Text(
+                text = message,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(12.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (bitmap == null) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.error
+                },
+            )
+        }
+
+        Surface(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(10.dp),
+            shape = RoundedCornerShape(999.dp),
+            color = if (frameState.message == null) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.84f)
+            } else {
+                MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.84f)
+            },
+        ) {
+            Text(
+                text = if (frameState.message == null) "Kuva" else "Ei saatavilla",
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = if (frameState.message == null) {
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                } else {
+                    MaterialTheme.colorScheme.onErrorContainer
+                },
             )
         }
     }
@@ -3194,6 +3421,49 @@ private fun previewTargetTrace(
     cameraId: String?,
 ): String {
     return "tableId=${tableId ?: "null"} cameraId=${cameraId ?: "null"}"
+}
+
+private fun FloorMapObject.isLineupCameraObject(): Boolean {
+    return type.equals("camera", ignoreCase = true) && cameraId == LINEUP_CAMERA_ID
+}
+
+private fun FloorMapObject.lineupCameraDisplayName(): String {
+    return if (cameraId == LINEUP_CAMERA_ID) {
+        LINEUP_CAMERA_NAME
+    } else {
+        label.ifBlank { cameraId.orEmpty() }
+    }
+}
+
+private fun latestCameraFrameUrl(
+    edgeBaseUrl: String,
+    cameraId: String,
+    cacheBustEpochMillis: Long,
+): String {
+    val base = edgeBaseUrl.trim().trimEnd('/')
+    val encodedCameraId = URLEncoder.encode(cameraId, Charsets.UTF_8.name())
+    return "$base/vision/frame/latest?camera_id=$encodedCameraId&_=$cacheBustEpochMillis"
+}
+
+private suspend fun fetchLatestCameraFrameBitmap(urlString: String): Bitmap = withContext(Dispatchers.IO) {
+    var connection: HttpURLConnection? = null
+    try {
+        connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 1_500
+            readTimeout = 2_500
+            useCaches = false
+        }
+        val responseCode = connection.responseCode
+        if (responseCode !in 200..299) {
+            throw IllegalStateException("Kamerakuva ei ole saatavilla (HTTP $responseCode).")
+        }
+        val bytes = connection.inputStream.use { input -> input.readBytes() }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            ?: throw IllegalStateException("Kamerakuvaa ei voitu lukea.")
+    } finally {
+        connection?.disconnect()
+    }
 }
 
 private fun CameraPreviewState.runtimeVideoAspectRatioOrNull(

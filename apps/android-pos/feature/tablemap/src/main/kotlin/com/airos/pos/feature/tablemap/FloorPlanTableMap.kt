@@ -296,7 +296,9 @@ internal fun FloorPlanTableMap(
     floorMapWidthPx: Float? = null,
     floorMapHeightPx: Float? = null,
     selectedTableId: String?,
+    selectedCameraObjectId: String? = null,
     onSelectTable: (String) -> Unit,
+    onSelectCameraObject: (FloorMapObject) -> Unit = {},
     onLongPressTable: (String) -> Unit = {},
     style: FloorPlanVisualStyle,
     viewpoint: FloorPlanViewpoint = DefaultFloorPlanViewpoint,
@@ -323,7 +325,9 @@ internal fun FloorPlanTableMap(
                 floorMapWidthPx = floorMapWidthPx,
                 floorMapHeightPx = floorMapHeightPx,
                 selectedTableId = selectedTableId,
+                selectedCameraObjectId = selectedCameraObjectId,
                 onSelectTable = onSelectTable,
+                onSelectCameraObject = onSelectCameraObject,
                 onLongPressTable = onLongPressTable,
                 viewpoint = viewpoint,
                 floorPlanViewport = floorPlanViewport,
@@ -347,7 +351,9 @@ internal fun FloorPlanTableMap(
                 floorMapWidthPx = floorMapWidthPx,
                 floorMapHeightPx = floorMapHeightPx,
                 selectedTableId = selectedTableId,
+                selectedCameraObjectId = selectedCameraObjectId,
                 onSelectTable = onSelectTable,
+                onSelectCameraObject = onSelectCameraObject,
                 onLongPressTable = onLongPressTable,
                 viewpoint = viewpoint,
                 floorPlanViewport = floorPlanViewport,
@@ -373,7 +379,9 @@ private fun SimpleFloorPlanTableMap(
     floorMapWidthPx: Float? = null,
     floorMapHeightPx: Float? = null,
     selectedTableId: String?,
+    selectedCameraObjectId: String? = null,
     onSelectTable: (String) -> Unit,
+    onSelectCameraObject: (FloorMapObject) -> Unit = {},
     onLongPressTable: (String) -> Unit,
     viewpoint: FloorPlanViewpoint,
     floorPlanViewport: StaffFloorPlanViewportPreference,
@@ -508,7 +516,22 @@ private fun SimpleFloorPlanTableMap(
                 )
             }
         }
+        val cameraObjectHitTargets = remember(layoutModel.objects) {
+            layoutModel.objects
+                .filter { placement -> placement.floorObject.isSelectableFloorPlanCameraObject() }
+                .map { placement ->
+                    val visualRect = placement.floorObject.visualScreenRectForObject(placement.rect)
+                    FloorPlanObjectHitTarget(
+                        floorObject = placement.floorObject,
+                        left = visualRect.left,
+                        top = visualRect.top,
+                        right = visualRect.right,
+                        bottom = visualRect.bottom,
+                    )
+                }
+        }
         val currentTableHitTargets by rememberUpdatedState(tableHitTargets)
+        val currentCameraObjectHitTargets by rememberUpdatedState(cameraObjectHitTargets)
         val currentClampedOffset by rememberUpdatedState(clampedOffset)
         val currentZoomScale by rememberUpdatedState(zoomScale)
         val currentViewportWidthPx by rememberUpdatedState(viewportWidthPx)
@@ -516,6 +539,7 @@ private fun SimpleFloorPlanTableMap(
         val currentContentWidthPx by rememberUpdatedState(contentWidthPx)
         val currentContentHeightPx by rememberUpdatedState(contentHeightPx)
         val currentOnSelectTable by rememberUpdatedState(onSelectTable)
+        val currentOnSelectCameraObject by rememberUpdatedState(onSelectCameraObject)
         val currentOnLongPressTable by rememberUpdatedState(onLongPressTable)
         val currentOnFloorPlanViewportChange by rememberUpdatedState(onFloorPlanViewportChange)
 
@@ -559,8 +583,13 @@ private fun SimpleFloorPlanTableMap(
                     detectTapGestures(
                         onTap = { tapPosition ->
                             val mapPosition = (tapPosition - currentClampedOffset) / currentZoomScale
-                            currentTableHitTargets.lastOrNull { it.contains(mapPosition) }?.let { hit ->
-                                currentOnSelectTable(hit.tableId)
+                            val cameraHit = currentCameraObjectHitTargets.lastOrNull { it.contains(mapPosition) }
+                            if (cameraHit != null) {
+                                currentOnSelectCameraObject(cameraHit.floorObject)
+                            } else {
+                                currentTableHitTargets.lastOrNull { it.contains(mapPosition) }?.let { hit ->
+                                    currentOnSelectTable(hit.tableId)
+                                }
                             }
                         },
                         onLongPress = { tapPosition ->
@@ -622,6 +651,7 @@ private fun SimpleFloorPlanTableMap(
                         placement = placement,
                         panOffset = clampedOffset,
                         zoom = zoomScale,
+                        selected = placement.floorObject.id == selectedCameraObjectId,
                     )
                 }
             layoutModel.tables.forEach { placement ->
@@ -2350,6 +2380,7 @@ private fun FloorPlanObjectNode(
     placement: FloorPlanObjectPlacement,
     panOffset: Offset,
     zoom: Float,
+    selected: Boolean = false,
 ) {
     val density = LocalDensity.current
     val floorObject = placement.floorObject
@@ -2390,6 +2421,7 @@ private fun FloorPlanObjectNode(
                 },
                 label = floorObject.label,
                 screenWidthPx = objectWidthPx,
+                selected = selected,
             )
         }
         "armchair" -> {
@@ -3854,10 +3886,20 @@ private fun FloorPlanCameraSymbol(
     modifier: Modifier,
     label: String,
     screenWidthPx: Float,
+    selected: Boolean = false,
 ) {
     Box(modifier = modifier) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             val stroke = 1.55.dp.toPx()
+            if (selected) {
+                drawRoundRect(
+                    color = TableMapVisualTokens.AccentText,
+                    topLeft = Offset(size.width * 0.04f, size.height * 0.04f),
+                    size = Size(size.width * 0.92f, size.height * 0.92f),
+                    cornerRadius = CornerRadius(size.width * 0.16f, size.height * 0.16f),
+                    style = Stroke(width = max(2f, stroke * 1.55f)),
+                )
+            }
             val bodyLeft = size.width * 0.12f
             val bodyTop = size.height * 0.43f
             val bodyWidth = size.width * 0.53f
@@ -6142,4 +6184,20 @@ private data class FloorPlanTableHitTarget(
     fun contains(position: Offset): Boolean {
         return position.x in left..right && position.y in top..bottom
     }
+}
+
+private data class FloorPlanObjectHitTarget(
+    val floorObject: FloorMapObject,
+    val left: Float,
+    val top: Float,
+    val right: Float,
+    val bottom: Float,
+) {
+    fun contains(position: Offset): Boolean {
+        return position.x in left..right && position.y in top..bottom
+    }
+}
+
+private fun FloorMapObject.isSelectableFloorPlanCameraObject(): Boolean {
+    return type.equals("camera", ignoreCase = true) && !cameraId.isNullOrBlank()
 }
