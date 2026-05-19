@@ -52,6 +52,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -90,6 +91,10 @@ import com.airos.pos.core.model.RestaurantTable
 import com.airos.pos.core.model.ServiceSpotType
 import com.airos.pos.core.model.StaffFloorPlanViewportPreference
 import com.airos.pos.core.model.StaffTableMapViewPreference
+import com.airos.pos.core.model.TableAttentionFlag
+import com.airos.pos.core.model.TableOperationalFlag
+import com.airos.pos.core.model.TableStatus
+import com.airos.pos.core.model.TableTruthSource
 import com.airos.pos.core.ui.KeyValueRow
 import com.airos.pos.core.ui.StatusBanner
 import com.airos.pos.device.camera.CameraPreviewService
@@ -141,7 +146,12 @@ private const val MINI_PREVIEW_SHELL_ASPECT_RATIO = 16f / 9f
 private const val LINEUP_CAMERA_ID = "cam3"
 private const val LINEUP_CAMERA_NAME = "Tuulikaappi / jono"
 private const val LINEUP_CAMERA_ROLE_LABEL = "Jonokamera"
-private const val LINEUP_CAMERA_FRAME_REFRESH_MILLIS = 2_000L
+private const val GENERAL_PREVIEW_CAMERA_ID = "cam4"
+private const val GENERAL_PREVIEW_CAMERA_NAME = "Yleiskamera / Cam4"
+private const val GENERAL_PREVIEW_CAMERA_ROLE_LABEL = "Yleiskamera"
+private const val TABLE_CAMERA_ROLE_LABEL = "P\u00f6yt\u00e4kamera"
+private const val DEFAULT_CAMERA_ROLE_LABEL = "Kamera"
+private const val CAMERA_PREVIEW_FRAME_REFRESH_MILLIS = 2_000L
 private const val PREVIEW_FRAME_FRESHNESS_WINDOW_MILLIS = 2_500L
 private const val PREVIEW_FRAME_FRESHNESS_TICK_MILLIS = 500L
 private const val AREA_FILTER_ALL = "Kaikki"
@@ -207,10 +217,28 @@ private enum class TableTickerEntryKind {
 }
 
 data class TableLivePreviewTarget(
-    val tableId: String,
+    val tableId: String?,
     val tableLabel: String,
     val cameraId: String,
     val cameraLabel: String,
+    val roleLabel: String? = null,
+    val kind: LivePreviewTargetKind = LivePreviewTargetKind.TABLE,
+)
+
+enum class LivePreviewTargetKind {
+    TABLE,
+    CAMERA,
+}
+
+private data class CameraStackPreviewItem(
+    val cameraId: String,
+    val cameraName: String,
+    val roleLabel: String,
+    val kind: LivePreviewTargetKind,
+    val tableId: String? = null,
+    val tableLabel: String? = null,
+    val available: Boolean = true,
+    val unavailableMessage: String? = null,
 )
 
 private data class CameraStillFrameUiState(
@@ -727,7 +755,45 @@ fun TableMapScreen(
     }
     var selectedCameraObjectId by rememberSaveable { mutableStateOf<String?>(null) }
     val selectedCameraObject = visibleFloorObjects.firstOrNull { floorObject ->
-        floorObject.id == selectedCameraObjectId && floorObject.isLineupCameraObject()
+        floorObject.id == selectedCameraObjectId && floorObject.isCameraObject()
+    }
+    val cameraStackItems = remember(selectedCameraObject, floorObjects, allTables) {
+        selectedCameraObject?.let { selected ->
+            buildCameraStackPreviewItems(
+                selectedCameraObject = selected,
+                floorObjects = floorObjects,
+                tables = allTables,
+            )
+        }.orEmpty()
+    }
+    var cameraLivePreviewTarget by remember { mutableStateOf<TableLivePreviewTarget?>(null) }
+    val cameraLivePreviewScope = rememberCoroutineScope()
+    fun startCameraLivePreview(target: TableLivePreviewTarget) {
+        val edgeBaseUrl = state.edgeBaseUrl?.takeIf(String::isNotBlank) ?: return
+        cameraLivePreviewScope.launch {
+            if (!state.cameraPreviewState.shouldStartPreviewFor(target)) {
+                Log.i(
+                    PREVIEW_TAG,
+                    "Skipping camera stack preview transport restart cameraId=${target.cameraId} " +
+                        "oldTableId=${state.cameraPreviewState.tableId ?: "null"} newTableId=${target.tableId ?: "null"} " +
+                        "reason=same_camera_transport_identity",
+                )
+                return@launch
+            }
+            cameraPreviewService.startPreview(
+                CameraPreviewRequest(
+                    cameraId = target.cameraId,
+                    signalingBaseUrl = edgeBaseUrl.toAutoStartSignalingBaseUrl(),
+                    tableId = target.tableId,
+                    tableLabel = target.tableLabel.takeIf { target.kind == LivePreviewTargetKind.TABLE },
+                    sourceLabel = target.cameraLabel,
+                ),
+            )
+        }
+    }
+    fun openCameraLivePreview(target: TableLivePreviewTarget) {
+        cameraLivePreviewTarget = target
+        startCameraLivePreview(target)
     }
     val openBillCountsBySpotId = remember(state.openChecksBySpotId) {
         state.openChecksBySpotId.mapValues { (_, summary) -> summary.count }
@@ -880,7 +946,7 @@ fun TableMapScreen(
     }
 
     fun handleCameraObjectTap(cameraObject: FloorMapObject) {
-        if (transferState != null || placeSelectionMode || !cameraObject.isLineupCameraObject()) {
+        if (transferState != null || placeSelectionMode || !cameraObject.isCameraObject()) {
             return
         }
         selectedCameraObjectId = cameraObject.id
@@ -1142,7 +1208,9 @@ LaunchedEffect(
                 if (selectedCameraObject != null) {
                     CameraObjectDetailsContent(
                         cameraObject = selectedCameraObject,
+                        cameraStackItems = cameraStackItems,
                         edgeBaseUrl = state.edgeBaseUrl,
+                        onOpenLivePreview = ::openCameraLivePreview,
                     )
                 } else {
                     Text(
@@ -1274,7 +1342,7 @@ if (billDrag.active) {
 if (state.isLivePreviewDialogVisible) {
         state.livePreviewTarget?.let { target ->
         val previewTable = allTables.firstOrNull { it.id == target.tableId }
-        val previewOpenSales = state.openSalesBySpotId[target.tableId].orEmpty()
+        val previewOpenSales = target.tableId?.let { state.openSalesBySpotId[it].orEmpty() }.orEmpty()
         TableLivePreviewDialog(
             target = target,
             table = previewTable,
@@ -1286,6 +1354,19 @@ if (state.isLivePreviewDialogVisible) {
         )
         }
     }
+cameraLivePreviewTarget?.let { target ->
+    val previewTable = target.tableId?.let { tableId -> allTables.firstOrNull { it.id == tableId } }
+    val previewOpenSales = target.tableId?.let { state.openSalesBySpotId[it].orEmpty() }.orEmpty()
+    TableLivePreviewDialog(
+        target = target,
+        table = previewTable,
+        openSales = previewOpenSales,
+        previewState = state.cameraPreviewState,
+        cameraPreviewService = cameraPreviewService,
+        onRetry = { startCameraLivePreview(target) },
+        onDismiss = { cameraLivePreviewTarget = null },
+    )
+}
 }
 
 
@@ -1326,56 +1407,49 @@ private fun HonestFloorMapUnavailableState(
 @Composable
 private fun CameraObjectDetailsContent(
     cameraObject: FloorMapObject,
+    cameraStackItems: List<CameraStackPreviewItem>,
     edgeBaseUrl: String?,
+    onOpenLivePreview: (TableLivePreviewTarget) -> Unit,
 ) {
     val cameraId = cameraObject.cameraId?.takeIf(String::isNotBlank)
+    val selectedCameraName = cameraObject.cameraDisplayName()
+    val canOpenLivePreview = !edgeBaseUrl.isNullOrBlank()
 
     Column(
         modifier = Modifier.fillMaxHeight(),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Column(
+        Text(
+            text = selectedCameraName,
             modifier = Modifier.fillMaxWidth(),
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = TableMapVisualTokens.TextPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f, fill = true),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Text(
-                text = cameraObject.lineupCameraDisplayName(),
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                color = TableMapVisualTokens.TextPrimary,
-            )
-            Surface(
-                shape = RoundedCornerShape(999.dp),
-                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f),
-                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-            ) {
-                Text(
-                    text = LINEUP_CAMERA_ROLE_LABEL,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold,
+            cameraStackItems.take(4).forEach { item ->
+                CameraStackPreviewCard(
+                    item = item,
+                    selected = item.cameraId == cameraId,
+                    edgeBaseUrl = edgeBaseUrl,
+                    canOpenLivePreview = canOpenLivePreview,
+                    onOpenLivePreview = onOpenLivePreview,
+                    modifier = Modifier.weight(1f, fill = true),
                 )
             }
-        }
-
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
-        ) {
-            Column(
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Text(
-                    text = cameraId ?: "Kameratunnus puuttuu",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                LineupCameraFramePreview(
-                    cameraId = cameraId,
-                    edgeBaseUrl = edgeBaseUrl,
-                    label = cameraObject.lineupCameraDisplayName(),
+            if (cameraStackItems.isEmpty()) {
+                HonestFloorMapUnavailableState(
+                    title = "Kamerat eiv\u00e4t ole saatavilla",
+                    message = "Pohjakartassa ei ole valittavaa kameraa.",
+                    modifier = Modifier.weight(1f, fill = true),
                 )
             }
         }
@@ -1383,17 +1457,89 @@ private fun CameraObjectDetailsContent(
 }
 
 @Composable
-private fun LineupCameraFramePreview(
+private fun CameraStackPreviewCard(
+    item: CameraStackPreviewItem,
+    selected: Boolean,
+    edgeBaseUrl: String?,
+    canOpenLivePreview: Boolean,
+    onOpenLivePreview: (TableLivePreviewTarget) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val clickEnabled = canOpenLivePreview && item.cameraId.isNotBlank()
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(
+                enabled = clickEnabled,
+                onClick = { onOpenLivePreview(item.toLivePreviewTarget()) },
+            ),
+        shape = RoundedCornerShape(16.dp),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.22f)
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.58f)
+        },
+        border = androidx.compose.foundation.BorderStroke(
+            width = 1.dp,
+            color = if (selected) {
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.72f)
+            } else {
+                TableMapVisualTokens.BorderColor
+            },
+        ),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = item.cameraName,
+                modifier = Modifier.fillMaxWidth(),
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            CameraStillFramePreview(
+                cameraId = item.cameraId,
+                edgeBaseUrl = edgeBaseUrl,
+                label = item.cameraName,
+                enabled = item.available,
+                unavailableMessage = item.unavailableMessage,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f, fill = true),
+            )
+        }
+    }
+}
+
+@Composable
+private fun CameraStillFramePreview(
     cameraId: String?,
     edgeBaseUrl: String?,
     label: String,
+    enabled: Boolean,
+    unavailableMessage: String?,
+    modifier: Modifier = Modifier,
 ) {
     val normalizedBaseUrl = edgeBaseUrl?.trim().orEmpty()
-    var frameState by remember(cameraId, normalizedBaseUrl) {
+    var frameState by remember(cameraId, normalizedBaseUrl, enabled, unavailableMessage) {
         mutableStateOf(CameraStillFrameUiState(isLoading = true))
     }
 
-    LaunchedEffect(cameraId, normalizedBaseUrl) {
+    LaunchedEffect(cameraId, normalizedBaseUrl, enabled, unavailableMessage) {
+        if (!enabled) {
+            frameState = CameraStillFrameUiState(
+                isLoading = false,
+                message = unavailableMessage ?: "Kamerakuva ei ole saatavilla.",
+            )
+            return@LaunchedEffect
+        }
         if (cameraId.isNullOrBlank()) {
             frameState = CameraStillFrameUiState(
                 isLoading = false,
@@ -1432,15 +1578,13 @@ private fun LineupCameraFramePreview(
                     )
                 },
             )
-            delay(LINEUP_CAMERA_FRAME_REFRESH_MILLIS)
+            delay(CAMERA_PREVIEW_FRAME_REFRESH_MILLIS)
         }
     }
 
     Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .aspectRatio(MINI_PREVIEW_SHELL_ASPECT_RATIO)
-            .clip(RoundedCornerShape(18.dp))
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surface),
         contentAlignment = Alignment.Center,
     ) {
@@ -1448,9 +1592,9 @@ private fun LineupCameraFramePreview(
         if (bitmap != null) {
             Image(
                 bitmap = remember(bitmap) { bitmap.asImageBitmap() },
-                contentDescription = "$label kamerakuva",
+                contentDescription = "$label camera preview",
                 modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop,
+                contentScale = ContentScale.Fit,
             )
         }
 
@@ -1464,39 +1608,18 @@ private fun LineupCameraFramePreview(
                 text = message,
                 modifier = Modifier
                     .align(Alignment.Center)
-                    .padding(12.dp),
+                    .padding(10.dp),
                 style = MaterialTheme.typography.bodySmall,
                 color = if (bitmap == null) {
                     MaterialTheme.colorScheme.onSurfaceVariant
                 } else {
                     MaterialTheme.colorScheme.error
                 },
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
             )
         }
 
-        Surface(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(10.dp),
-            shape = RoundedCornerShape(999.dp),
-            color = if (frameState.message == null) {
-                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.84f)
-            } else {
-                MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.84f)
-            },
-        ) {
-            Text(
-                text = if (frameState.message == null) "Kuva" else "Ei saatavilla",
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = if (frameState.message == null) {
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                } else {
-                    MaterialTheme.colorScheme.onErrorContainer
-                },
-            )
-        }
     }
 }
 
@@ -1542,7 +1665,9 @@ private fun TableDetailsContent(
         attentionFlag = table.attentionFlag,
     )
     val statusTick = rememberStatusTickPresentation(displayStatus)
-    val acknowledgeActionKind = displayStatus.acknowledgeActionFor(statusTick.label)
+    val acknowledgeActionKind = displayStatus.acknowledgeActionFor(table)
+    val tablePreviewCameraId = table.cameraId?.takeIf(String::isNotBlank)
+    val hasTablePreviewCamera = tablePreviewCameraId != null
     val mergedHint = mergedHintFor(table)
     val physicalReviewDetail = remember(
         table.emptyAnchorTime,
@@ -1896,20 +2021,21 @@ private fun TableDetailsContent(
             }
         }
 
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
-        ) {
-            Column(
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+        if (hasTablePreviewCamera) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
             ) {
-                Text(
-                    text = table.cameraLabel ?: table.cameraId ?: "Ei määritettyä kameraa",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Column(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(
+                        text = table.cameraLabel ?: tablePreviewCameraId ?: "Ei kameraa",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
 
                 Box(
                     modifier = Modifier
@@ -1980,6 +2106,7 @@ private fun TableDetailsContent(
                         },
                     )
                 }
+            }
             }
         }
     }
@@ -2347,16 +2474,17 @@ private fun FloorMapObject.centerPointInside(area: FloorMapArea): Boolean {
 
 
 private fun TableDisplayStatus.acknowledgeActionFor(
-    statusTickLabel: String,
+    table: RestaurantTable,
 ): TableAcknowledgeActionKind? {
-    val showingCheckTick = hasCheckAttention && (
-        statusTickLabel.equals("CHECK", ignoreCase = true) ||
-            statusTickLabel.equals("TARKISTA", ignoreCase = true)
-        )
+    val hasBackendCheck = table.attentionFlag == TableAttentionFlag.CHECK_TABLE ||
+        TableOperationalFlag.CHECK in table.operationalFlags
+    val hasBackendNeedsCleaning = TableOperationalFlag.NEEDS_CLEANING in table.operationalFlags ||
+        (table.truthSource == TableTruthSource.BACKEND && table.status == TableStatus.DIRTY)
     return when {
-        showingCheckTick -> TableAcknowledgeActionKind.CHECK
-        kind == TableDisplayStatusKind.DIRTY -> TableAcknowledgeActionKind.NEEDS_CLEANING
-        hasCheckAttention -> TableAcknowledgeActionKind.CHECK
+        hasBackendCheck && (hasCheckAttention || TableOperationalFlag.CHECK in table.operationalFlags) ->
+            TableAcknowledgeActionKind.CHECK
+        hasBackendNeedsCleaning && kind == TableDisplayStatusKind.DIRTY ->
+            TableAcknowledgeActionKind.NEEDS_CLEANING
         else -> null
     }
 }
@@ -2935,6 +3063,7 @@ private fun TableLivePreviewDialog(
     onDismiss: () -> Unit,
 ) {
     val errorMessage = previewState.errorMessage
+    val isTablePreview = target.kind == LivePreviewTargetKind.TABLE
     val previewNowEpochMillis = rememberPreviewFreshnessNow(
         isTickerActive = previewState.shouldTrackPreviewUserStateClock(),
     )
@@ -2942,7 +3071,7 @@ private fun TableLivePreviewDialog(
         target.tableId,
         target.cameraId,
     ) { mutableStateOf(false) }
-    val dialogOwnerKey = "dialog:${target.tableId}:${target.cameraId}"
+    val dialogOwnerKey = "dialog:${target.tableId ?: "camera"}:${target.cameraId}"
     val displayConnectionState = rememberUserVisiblePreviewConnectionState(
         previewState = previewState,
         nowEpochMillis = previewNowEpochMillis,
@@ -2995,12 +3124,16 @@ private fun TableLivePreviewDialog(
                             verticalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
                             Text(
-                                text = target.tableLabel,
+                                text = if (isTablePreview) target.tableLabel else target.cameraLabel,
                                 style = MaterialTheme.typography.headlineSmall,
                                 fontWeight = FontWeight.Bold,
                             )
                             Text(
-                                text = target.cameraLabel,
+                                text = if (isTablePreview) {
+                                    target.cameraLabel
+                                } else {
+                                    target.roleLabel ?: DEFAULT_CAMERA_ROLE_LABEL
+                                },
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -3037,7 +3170,7 @@ private fun TableLivePreviewDialog(
                     }
 
                     // Table operational summary
-                    if (table != null) {
+                    if (isTablePreview && table != null) {
                         val openBillCount = openSales.size
                         val displayStatus = resolveTableDisplayStatus(
                             physicalStatus = table.status,
@@ -3120,11 +3253,18 @@ private fun TableLivePreviewDialog(
                     }
 
                     // Camera id — compact technical footnote
-                    Text(
-                        text = "kamera: ${target.cameraId}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
-                    )
+                    if (!isTablePreview) {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            KeyValueRow("Kameratunnus", target.cameraId)
+                            KeyValueRow("Rooli", target.roleLabel ?: DEFAULT_CAMERA_ROLE_LABEL)
+                        }
+                    } else {
+                        Text(
+                            text = "kamera: ${target.cameraId}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+                        )
+                    }
 
                     // Retry only on error
                     if (previewState.connectionState == CameraConnectionState.ERROR) {
@@ -3423,16 +3563,174 @@ private fun previewTargetTrace(
     return "tableId=${tableId ?: "null"} cameraId=${cameraId ?: "null"}"
 }
 
-private fun FloorMapObject.isLineupCameraObject(): Boolean {
-    return type.equals("camera", ignoreCase = true) && cameraId == LINEUP_CAMERA_ID
+private fun FloorMapObject.isCameraObject(): Boolean {
+    return type.equals("camera", ignoreCase = true) &&
+        !cameraId.isNullOrBlank()
 }
 
-private fun FloorMapObject.lineupCameraDisplayName(): String {
-    return if (cameraId == LINEUP_CAMERA_ID) {
-        LINEUP_CAMERA_NAME
-    } else {
-        label.ifBlank { cameraId.orEmpty() }
+private fun FloorMapObject.isStandaloneCameraObject(): Boolean {
+    return isCameraObject() && !linkedTargetType.equals("table", ignoreCase = true)
+}
+
+private fun FloorMapObject.cameraDisplayName(): String {
+    return when (cameraId) {
+        LINEUP_CAMERA_ID -> LINEUP_CAMERA_NAME
+        GENERAL_PREVIEW_CAMERA_ID -> GENERAL_PREVIEW_CAMERA_NAME
+        else -> label.ifBlank { cameraId.orEmpty() }
     }
+}
+
+private fun FloorMapObject.cameraRoleLabel(): String {
+    return when (cameraId) {
+        LINEUP_CAMERA_ID -> LINEUP_CAMERA_ROLE_LABEL
+        GENERAL_PREVIEW_CAMERA_ID -> GENERAL_PREVIEW_CAMERA_ROLE_LABEL
+        else -> if (linkedTargetType.equals("table", ignoreCase = true)) {
+            TABLE_CAMERA_ROLE_LABEL
+        } else {
+            DEFAULT_CAMERA_ROLE_LABEL
+        }
+    }
+}
+
+private fun buildCameraStackPreviewItems(
+    selectedCameraObject: FloorMapObject,
+    floorObjects: List<FloorMapObject>,
+    tables: List<RestaurantTable>,
+): List<CameraStackPreviewItem> {
+    val nonTableCameraOrder = listOf(LINEUP_CAMERA_ID, GENERAL_PREVIEW_CAMERA_ID)
+    val tableCameraOrder = listOf("cam1", "cam2")
+    val cameraObjectsById = floorObjects
+        .asSequence()
+        .filter { it.type.equals("camera", ignoreCase = true) }
+        .filter { !it.cameraId.isNullOrBlank() }
+        .groupBy { it.cameraId.orEmpty() }
+        .mapValues { (_, objects) -> objects.first() }
+    val tableItemsByCameraId = tables
+        .asSequence()
+        .filter { !it.cameraId.isNullOrBlank() }
+        .distinctBy { it.cameraId.orEmpty() }
+        .associateBy { it.cameraId.orEmpty() }
+
+    val result = mutableListOf<CameraStackPreviewItem>()
+    fun addUnique(item: CameraStackPreviewItem) {
+        if (result.none { it.cameraId == item.cameraId }) {
+            result += item
+        }
+    }
+
+    addUnique(selectedCameraObject.toCameraIconStackPreviewItem())
+
+    nonTableCameraOrder.forEach { cameraId ->
+        if (cameraId != selectedCameraObject.cameraId) {
+            val cameraObject = cameraObjectsById[cameraId]?.takeIf { it.isStandaloneCameraObject() }
+            addUnique(
+                cameraObject?.toStandaloneCameraStackPreviewItem()
+                    ?: missingStandaloneCameraStackPreviewItem(cameraId),
+            )
+        }
+    }
+
+    val laterTableCameraIds = (tableItemsByCameraId.keys + cameraObjectsById.values
+        .asSequence()
+        .filter { it.linkedTargetType.equals("table", ignoreCase = true) }
+        .mapNotNull { it.cameraId }
+        .toList())
+        .distinct()
+        .filterNot { it in tableCameraOrder }
+        .sorted()
+    (tableCameraOrder + laterTableCameraIds).forEach { cameraId ->
+        val table = tableItemsByCameraId[cameraId]
+        addUnique(
+            table?.toTableCameraStackPreviewItem()
+                ?: missingTableCameraStackPreviewItem(cameraId),
+        )
+    }
+
+    return result.take(4)
+}
+
+private fun FloorMapObject.toStandaloneCameraStackPreviewItem(): CameraStackPreviewItem {
+    val resolvedCameraId = cameraId.orEmpty()
+    return CameraStackPreviewItem(
+        cameraId = resolvedCameraId,
+        cameraName = cameraDisplayName(),
+        roleLabel = cameraRoleLabel(),
+        kind = LivePreviewTargetKind.CAMERA,
+        available = true,
+    )
+}
+
+private fun FloorMapObject.toCameraIconStackPreviewItem(): CameraStackPreviewItem {
+    val resolvedCameraId = cameraId.orEmpty()
+    return CameraStackPreviewItem(
+        cameraId = resolvedCameraId,
+        cameraName = cameraDisplayName(),
+        roleLabel = cameraRoleLabel(),
+        kind = LivePreviewTargetKind.CAMERA,
+        available = true,
+    )
+}
+
+private fun RestaurantTable.toTableCameraStackPreviewItem(): CameraStackPreviewItem {
+    val resolvedCameraId = cameraId.orEmpty()
+    return CameraStackPreviewItem(
+        cameraId = resolvedCameraId,
+        cameraName = cameraLabel ?: resolvedCameraId,
+        roleLabel = TABLE_CAMERA_ROLE_LABEL,
+        kind = LivePreviewTargetKind.CAMERA,
+        available = true,
+    )
+}
+
+private fun missingStandaloneCameraStackPreviewItem(cameraId: String): CameraStackPreviewItem {
+    return CameraStackPreviewItem(
+        cameraId = cameraId,
+        cameraName = knownCameraName(cameraId),
+        roleLabel = knownCameraRoleLabel(cameraId),
+        kind = LivePreviewTargetKind.CAMERA,
+        available = false,
+        unavailableMessage = "Kameraa ei ole sidottu pohjakarttaan.",
+    )
+}
+
+private fun missingTableCameraStackPreviewItem(cameraId: String): CameraStackPreviewItem {
+    return CameraStackPreviewItem(
+        cameraId = cameraId,
+        cameraName = knownCameraName(cameraId),
+        roleLabel = TABLE_CAMERA_ROLE_LABEL,
+        kind = LivePreviewTargetKind.CAMERA,
+        available = false,
+        unavailableMessage = "Kameraa ei ole sidottu p\u00f6yt\u00e4\u00e4n.",
+    )
+}
+
+private fun knownCameraName(cameraId: String): String {
+    return when (cameraId) {
+        LINEUP_CAMERA_ID -> LINEUP_CAMERA_NAME
+        GENERAL_PREVIEW_CAMERA_ID -> GENERAL_PREVIEW_CAMERA_NAME
+        "cam1" -> "Cam1"
+        "cam2" -> "Cam2"
+        else -> cameraId
+    }
+}
+
+private fun knownCameraRoleLabel(cameraId: String): String {
+    return when (cameraId) {
+        LINEUP_CAMERA_ID -> LINEUP_CAMERA_ROLE_LABEL
+        GENERAL_PREVIEW_CAMERA_ID -> GENERAL_PREVIEW_CAMERA_ROLE_LABEL
+        else -> DEFAULT_CAMERA_ROLE_LABEL
+    }
+}
+
+private fun CameraStackPreviewItem.toLivePreviewTarget(): TableLivePreviewTarget {
+    return TableLivePreviewTarget(
+        tableId = tableId,
+        tableLabel = tableLabel ?: cameraName,
+        cameraId = cameraId,
+        cameraLabel = cameraName,
+        roleLabel = roleLabel,
+        kind = kind,
+    )
 }
 
 private fun latestCameraFrameUrl(
