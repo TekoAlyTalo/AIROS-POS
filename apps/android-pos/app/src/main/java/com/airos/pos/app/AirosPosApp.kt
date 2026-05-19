@@ -5,6 +5,8 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.SharedPreferences
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.net.Uri
@@ -17,7 +19,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -55,6 +59,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -66,6 +71,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import com.airos.pos.core.model.StaffMember
@@ -83,6 +91,9 @@ import androidx.navigation.navArgument
 import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.model.AttendanceEntry
 import com.airos.pos.core.model.DeviceConnectionState
+import com.airos.pos.core.model.FloorMap
+import com.airos.pos.core.model.FloorMapObject
+import com.airos.pos.core.model.RestaurantTable
 import com.airos.pos.core.model.WorktimeAttendanceSnapshot
 import com.airos.pos.core.model.ManagerOverrideReason
 import com.airos.pos.core.model.ScanEvent
@@ -122,12 +133,14 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.airos.pos.core.ui.NumericPinPad
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.HttpURLConnection
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
@@ -135,6 +148,8 @@ import java.time.LocalDateTime
 import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.net.URL
+import java.net.URLEncoder
 import androidx.compose.ui.unit.IntOffset
 
 private val AppShellBackground = Color(0xFF060C12)
@@ -173,12 +188,23 @@ private const val ReservationPlaceResultTableLabelKey = "reservation_place_resul
 private const val MenuMaxOpenBillsWireUnbounded = -1
 private const val CashierLockDebugTag = "AIROS_LOCK_DEBUG"
 private const val AUTO_LOCK_TIMEOUT_MILLIS = 90_000L
+private const val CAMERAS_FRAME_REFRESH_MILLIS = 2_000L
+private val CAMERAS_PAGE_PADDING = 18.dp
+private val CAMERAS_GRID_SPACING = 14.dp
+private val CAMERAS_GRID_LARGE_CARD_MIN_WIDTH = 340.dp
+private val CAMERAS_GRID_STANDARD_CARD_MIN_WIDTH = 260.dp
+private val CAMERAS_GRID_CARD_MIN_HEIGHT = 220.dp
+private const val CAMERAS_GRID_TWO_COLUMNS = 2
+private const val CAMERAS_GRID_BALANCED_CAMERA_COUNT = 4
+private const val CAMERAS_DIALOG_WIDTH_FRACTION = 0.90f
+private const val CAMERAS_DIALOG_HEIGHT_FRACTION = 0.86f
 
 private object Routes {
     const val Auth = "auth"
     const val Shift = "shift"
     const val TableMap = "tablemap"
     const val TableMapPattern = "tablemap?menuPlacePicker={menuPlacePicker}&reservationPlacePicker={reservationPlacePicker}"
+    const val Cameras = "cameras"
     const val Menu = "menu"
     const val Transactions = "transactions"
     const val Reservations = "reservations"
@@ -264,6 +290,13 @@ private val mainRailDestinations = listOf(
         icon = Icons.Filled.ReceiptLong,
         iconContainerColor = Color(0xFF243A2F),
         iconTint = Color(0xFFB7F3C8),
+    ),
+    RailDestination(
+        route = Routes.Cameras,
+        labelKey = CashierStringKey.RailCameras,
+        icon = Icons.Filled.Search,
+        iconContainerColor = Color(0xFF26384B),
+        iconTint = Color(0xFFC7E7FF),
     ),
     RailDestination(
         route = Routes.Settings,
@@ -1829,6 +1862,20 @@ private fun SignedInApp(
                     )
                 }
 
+                composable(Routes.Cameras) {
+                    val floorMap by appContainer.tableRepository.observeFloorMap().collectAsState(
+                        initial = FloorMap(
+                            id = "cameras-loading",
+                            name = "",
+                            tables = emptyList(),
+                        ),
+                    )
+                    CamerasRoute(
+                        floorMap = floorMap,
+                        edgeBaseUrl = terminalSettings.edgeBaseUrl,
+                    )
+                }
+
                 composable(Routes.Transactions) {
                     TransactionsRoute(
                         openSaleRepository = appContainer.openSaleRepository,
@@ -2765,6 +2812,426 @@ private fun isRailDestinationSelected(
         Routes.TableMap -> currentRoute == Routes.TableMap || currentRoute == Routes.TableMapPattern
         Routes.Menu -> currentRoute == Routes.Menu || currentRoute == Routes.MenuPattern
         else -> currentRoute == destinationRoute
+    }
+}
+
+private enum class CamerasPageRole {
+    TABLE,
+    QUEUE,
+    GENERAL,
+    CAMERA,
+}
+
+private data class CamerasPageCamera(
+    val cameraId: String,
+    val label: String,
+    val role: CamerasPageRole,
+    val tableLabel: String? = null,
+)
+
+private data class CamerasPageFrameState(
+    val bitmap: Bitmap? = null,
+    val isLoading: Boolean = true,
+    val message: String? = null,
+)
+
+@Composable
+private fun CamerasRoute(
+    floorMap: FloorMap,
+    edgeBaseUrl: String?,
+) {
+    val cameras = remember(floorMap) { buildCamerasPageCameras(floorMap) }
+    var selectedCamera by remember(cameras) { mutableStateOf<CamerasPageCamera?>(null) }
+    val minCardWidth = if (cameras.size <= 4) {
+        CAMERAS_GRID_LARGE_CARD_MIN_WIDTH
+    } else {
+        CAMERAS_GRID_STANDARD_CARD_MIN_WIDTH
+    }
+    val gridColumns = when (cameras.size) {
+        1 -> GridCells.Fixed(1)
+        2, CAMERAS_GRID_BALANCED_CAMERA_COUNT -> GridCells.Fixed(CAMERAS_GRID_TWO_COLUMNS)
+        else -> GridCells.Adaptive(minSize = minCardWidth)
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(CAMERAS_PAGE_PADDING),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Text(
+                text = "KAMERAT",
+                style = MaterialTheme.typography.headlineSmall,
+                color = AppShellTextPrimary,
+            )
+            Text(
+                text = "Kameranäkymät erillään pöytien tilatiedoista.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = AppShellTextMuted,
+            )
+
+            if (cameras.isEmpty()) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(22.dp),
+                    color = AppShellPanelColor,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, AppShellBorderColor),
+                ) {
+                    Text(
+                        text = "Kamerat eivät ole saatavilla.",
+                        modifier = Modifier.padding(18.dp),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = AppShellTextSecondary,
+                    )
+                }
+            } else {
+                LazyVerticalGrid(
+                    columns = gridColumns,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentPadding = PaddingValues(bottom = CAMERAS_PAGE_PADDING),
+                    horizontalArrangement = Arrangement.spacedBy(CAMERAS_GRID_SPACING),
+                    verticalArrangement = Arrangement.spacedBy(CAMERAS_GRID_SPACING),
+                ) {
+                    items(
+                        items = cameras,
+                        key = { it.cameraId },
+                    ) { camera ->
+                        CameraGridCard(
+                            camera = camera,
+                            edgeBaseUrl = edgeBaseUrl,
+                            onClick = { selectedCamera = camera },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = CAMERAS_GRID_CARD_MIN_HEIGHT),
+                        )
+                    }
+                }
+            }
+        }
+
+        selectedCamera?.let { camera ->
+            CamerasPageDialog(
+                camera = camera,
+                edgeBaseUrl = edgeBaseUrl,
+                onDismiss = { selectedCamera = null },
+            )
+        }
+    }
+}
+
+@Composable
+private fun CameraGridCard(
+    camera: CamerasPageCamera,
+    edgeBaseUrl: String?,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(22.dp),
+        color = AppShellPanelColor,
+        border = androidx.compose.foundation.BorderStroke(1.dp, AppShellBorderColor),
+    ) {
+        Column(
+            modifier = Modifier.padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = camera.label,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = AppShellTextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = camera.cameraId,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AppShellTextMuted,
+                        maxLines = 1,
+                    )
+                }
+                Surface(
+                    shape = RoundedCornerShape(999.dp),
+                    color = AppShellButtonActiveColor,
+                ) {
+                    Text(
+                        text = camera.role.displayLabel(),
+                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AppShellAccentText,
+                        maxLines = 1,
+                    )
+                }
+            }
+            CameraPageStillPreview(
+                cameraId = camera.cameraId,
+                edgeBaseUrl = edgeBaseUrl,
+                label = camera.label,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun CamerasPageDialog(
+    camera: CamerasPageCamera,
+    edgeBaseUrl: String?,
+    onDismiss: () -> Unit,
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(CAMERAS_DIALOG_WIDTH_FRACTION)
+                .fillMaxHeight(CAMERAS_DIALOG_HEIGHT_FRACTION),
+            shape = RoundedCornerShape(28.dp),
+            color = AppShellPanelColor,
+            border = androidx.compose.foundation.BorderStroke(1.dp, AppShellBorderColor),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = camera.label,
+                            style = MaterialTheme.typography.titleLarge,
+                            color = AppShellTextPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = "${camera.cameraId} · ${camera.role.displayLabel()}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AppShellTextMuted,
+                            maxLines = 1,
+                        )
+                    }
+                    Button(onClick = onDismiss) {
+                        Text("Sulje")
+                    }
+                }
+                CameraPageStillPreview(
+                    cameraId = camera.cameraId,
+                    edgeBaseUrl = edgeBaseUrl,
+                    label = camera.label,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CameraPageStillPreview(
+    cameraId: String,
+    edgeBaseUrl: String?,
+    label: String,
+    modifier: Modifier = Modifier,
+) {
+    val normalizedBaseUrl = edgeBaseUrl?.trim().orEmpty()
+    var frameState by remember(cameraId, normalizedBaseUrl) {
+        mutableStateOf(CamerasPageFrameState(isLoading = true))
+    }
+
+    LaunchedEffect(cameraId, normalizedBaseUrl) {
+        if (cameraId.isBlank()) {
+            frameState = CamerasPageFrameState(isLoading = false, message = "Kameratunnus puuttuu.")
+            return@LaunchedEffect
+        }
+        if (normalizedBaseUrl.isBlank()) {
+            frameState = CamerasPageFrameState(isLoading = false, message = "Kamerayhteyttä ei ole määritetty.")
+            return@LaunchedEffect
+        }
+
+        while (true) {
+            val requestUrl = camerasPageLatestFrameUrl(
+                edgeBaseUrl = normalizedBaseUrl,
+                cameraId = cameraId,
+                cacheBustEpochMillis = System.currentTimeMillis(),
+            )
+            frameState = frameState.copy(isLoading = frameState.bitmap == null)
+            val result = runCatching { fetchCamerasPageFrameBitmap(requestUrl) }
+            frameState = result.fold(
+                onSuccess = { bitmap ->
+                    CamerasPageFrameState(
+                        bitmap = bitmap,
+                        isLoading = false,
+                    )
+                },
+                onFailure = { error ->
+                    frameState.copy(
+                        isLoading = false,
+                        message = error.message ?: "Kamerakuva ei ole saatavilla.",
+                    )
+                },
+            )
+            delay(CAMERAS_FRAME_REFRESH_MILLIS)
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(AppShellButtonMutedColor),
+        contentAlignment = Alignment.Center,
+    ) {
+        val bitmap = frameState.bitmap
+        if (bitmap != null) {
+            Image(
+                bitmap = remember(bitmap) { bitmap.asImageBitmap() },
+                contentDescription = "$label camera preview",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Fit,
+            )
+        }
+        if (bitmap == null || frameState.message != null) {
+            val message = when {
+                frameState.isLoading -> "Ladataan kamerakuvaa..."
+                else -> frameState.message ?: "Kamerakuva ei ole saatavilla."
+            }
+            Text(
+                text = message,
+                modifier = Modifier.padding(12.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = AppShellTextMuted,
+                textAlign = TextAlign.Center,
+            )
+        }
+    }
+}
+
+private fun buildCamerasPageCameras(floorMap: FloorMap): List<CamerasPageCamera> {
+    val byCameraId = linkedMapOf<String, CamerasPageCamera>()
+
+    fun addCamera(camera: CamerasPageCamera) {
+        val existing = byCameraId[camera.cameraId]
+        byCameraId[camera.cameraId] = when {
+            existing == null -> camera
+            existing.label == existing.cameraId && camera.label != camera.cameraId -> camera
+            existing.role == CamerasPageRole.CAMERA && camera.role != CamerasPageRole.CAMERA -> camera
+            else -> existing
+        }
+    }
+
+    floorMap.tables.forEach { table ->
+        val cameraId = table.cameraId?.takeIf(String::isNotBlank) ?: return@forEach
+        addCamera(
+            CamerasPageCamera(
+                cameraId = cameraId,
+                label = table.cameraLabel?.takeIf(String::isNotBlank) ?: "${table.label} kamera",
+                role = CamerasPageRole.TABLE,
+                tableLabel = table.label,
+            ),
+        )
+    }
+
+    floorMap.objects
+        .asSequence()
+        .filter { it.type.equals("camera", ignoreCase = true) }
+        .forEach { floorObject ->
+            val cameraId = floorObject.cameraId?.takeIf(String::isNotBlank) ?: return@forEach
+            val label = floorObject.label.takeIf(String::isNotBlank) ?: cameraId
+            addCamera(
+                CamerasPageCamera(
+                    cameraId = cameraId,
+                    label = label,
+                    role = floorObject.cameraPageRole(),
+                    tableLabel = floorObject.linkedTargetId,
+                ),
+            )
+        }
+
+    return byCameraId.values.sortedWith(
+        compareBy<CamerasPageCamera> { it.role.sortOrder() }
+            .thenBy { it.cameraId },
+    )
+}
+
+private fun FloorMapObject.cameraPageRole(): CamerasPageRole {
+    val linked = linkedTargetType.orEmpty()
+    val coverage = coverageType.orEmpty().lowercase()
+    return when {
+        linked.equals("table", ignoreCase = true) -> CamerasPageRole.TABLE
+        "queue" in coverage || "lineup" in coverage || "jono" in coverage -> CamerasPageRole.QUEUE
+        "general" in coverage -> CamerasPageRole.GENERAL
+        else -> CamerasPageRole.CAMERA
+    }
+}
+
+private fun CamerasPageRole.displayLabel(): String {
+    return when (this) {
+        CamerasPageRole.TABLE -> "TABLE"
+        CamerasPageRole.QUEUE -> "QUEUE"
+        CamerasPageRole.GENERAL -> "GENERAL"
+        CamerasPageRole.CAMERA -> "CAMERA"
+    }
+}
+
+private fun CamerasPageRole.sortOrder(): Int {
+    return when (this) {
+        CamerasPageRole.TABLE -> 0
+        CamerasPageRole.QUEUE -> 1
+        CamerasPageRole.GENERAL -> 2
+        CamerasPageRole.CAMERA -> 3
+    }
+}
+
+private fun camerasPageLatestFrameUrl(
+    edgeBaseUrl: String,
+    cameraId: String,
+    cacheBustEpochMillis: Long,
+): String {
+    val base = edgeBaseUrl.trim().trimEnd('/')
+    val encodedCameraId = URLEncoder.encode(cameraId, Charsets.UTF_8.name())
+    return "$base/vision/frame/latest?camera_id=$encodedCameraId&_=$cacheBustEpochMillis"
+}
+
+private suspend fun fetchCamerasPageFrameBitmap(urlString: String): Bitmap = withContext(Dispatchers.IO) {
+    var connection: HttpURLConnection? = null
+    try {
+        connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 1_500
+            readTimeout = 2_500
+            doInput = true
+            useCaches = false
+            setRequestProperty("Accept", "image/jpeg,image/png,*/*")
+        }
+        val statusCode = connection.responseCode
+        if (statusCode !in 200..299) {
+            throw IllegalStateException("Kamerakuva ei ole saatavilla.")
+        }
+        val bytes = connection.inputStream.use { it.readBytes() }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            ?: throw IllegalStateException("Kamerakuvaa ei voitu lukea.")
+    } finally {
+        connection?.disconnect()
     }
 }
 
