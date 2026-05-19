@@ -187,14 +187,14 @@ private const val ReservationPlaceResultTableIdKey = "reservation_place_result_t
 private const val ReservationPlaceResultTableLabelKey = "reservation_place_result_table_label"
 private const val MenuMaxOpenBillsWireUnbounded = -1
 private const val CashierLockDebugTag = "AIROS_LOCK_DEBUG"
-private const val AUTO_LOCK_TIMEOUT_MILLIS = 90_000L
+private const val AUTO_LOCK_TIMEOUT_MILLIS = 600_000L
 private const val CAMERAS_FRAME_REFRESH_MILLIS = 2_000L
+private const val CAMERAS_GRID_FRAME_REFRESH_MILLIS = 4_500L
 private val CAMERAS_PAGE_PADDING = 12.dp
 private val CAMERAS_GRID_SPACING = 8.dp
-private val CAMERAS_GRID_LARGE_CARD_MIN_WIDTH = 340.dp
-private val CAMERAS_GRID_STANDARD_CARD_MIN_WIDTH = 260.dp
 private val CAMERAS_GRID_CARD_MIN_HEIGHT = 170.dp
 private const val CAMERAS_GRID_TWO_COLUMNS = 2
+private const val CAMERAS_GRID_THREE_COLUMNS = 3
 private const val CAMERAS_GRID_BALANCED_CAMERA_COUNT = 4
 private const val CAMERAS_DIALOG_WIDTH_FRACTION = 0.90f
 private const val CAMERAS_DIALOG_HEIGHT_FRACTION = 0.86f
@@ -2842,15 +2842,12 @@ private fun CamerasRoute(
 ) {
     val cameras = remember(floorMap) { buildCamerasPageCameras(floorMap) }
     var selectedCamera by remember(cameras) { mutableStateOf<CamerasPageCamera?>(null) }
-    val minCardWidth = if (cameras.size <= 4) {
-        CAMERAS_GRID_LARGE_CARD_MIN_WIDTH
-    } else {
-        CAMERAS_GRID_STANDARD_CARD_MIN_WIDTH
-    }
     val gridColumns = when (cameras.size) {
         1 -> GridCells.Fixed(1)
-        2, CAMERAS_GRID_BALANCED_CAMERA_COUNT -> GridCells.Fixed(CAMERAS_GRID_TWO_COLUMNS)
-        else -> GridCells.Adaptive(minSize = minCardWidth)
+        2 -> GridCells.Fixed(CAMERAS_GRID_TWO_COLUMNS)
+        3 -> GridCells.Fixed(CAMERAS_GRID_THREE_COLUMNS)
+        CAMERAS_GRID_BALANCED_CAMERA_COUNT -> GridCells.Fixed(CAMERAS_GRID_TWO_COLUMNS)
+        else -> GridCells.Fixed(CAMERAS_GRID_THREE_COLUMNS)
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -2981,6 +2978,7 @@ private fun CameraGridCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(16f / 9f),
+                refreshMillis = CAMERAS_GRID_FRAME_REFRESH_MILLIS,
             )
         }
     }
@@ -3053,6 +3051,7 @@ private fun CameraPageStillPreview(
     edgeBaseUrl: String?,
     label: String,
     modifier: Modifier = Modifier,
+    refreshMillis: Long = CAMERAS_FRAME_REFRESH_MILLIS,
 ) {
     val normalizedBaseUrl = edgeBaseUrl?.trim().orEmpty()
     var frameState by remember(cameraId, normalizedBaseUrl) {
@@ -3091,7 +3090,7 @@ private fun CameraPageStillPreview(
                     )
                 },
             )
-            delay(CAMERAS_FRAME_REFRESH_MILLIS)
+            delay(refreshMillis)
         }
     }
 
