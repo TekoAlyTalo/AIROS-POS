@@ -583,12 +583,12 @@ private fun SimpleFloorPlanTableMap(
                     detectTapGestures(
                         onTap = { tapPosition ->
                             val mapPosition = (tapPosition - currentClampedOffset) / currentZoomScale
-                            val cameraHit = currentCameraObjectHitTargets.lastOrNull { it.contains(mapPosition) }
-                            if (cameraHit != null) {
-                                currentOnSelectCameraObject(cameraHit.floorObject)
+                            val tableHit = currentTableHitTargets.lastOrNull { it.contains(mapPosition) }
+                            if (tableHit != null) {
+                                currentOnSelectTable(tableHit.tableId)
                             } else {
-                                currentTableHitTargets.lastOrNull { it.contains(mapPosition) }?.let { hit ->
-                                    currentOnSelectTable(hit.tableId)
+                                currentCameraObjectHitTargets.lastOrNull { it.contains(mapPosition) }?.let { cameraHit ->
+                                    currentOnSelectCameraObject(cameraHit.floorObject)
                                 }
                             }
                         },

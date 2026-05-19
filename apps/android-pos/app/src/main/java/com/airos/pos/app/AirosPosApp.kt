@@ -189,11 +189,11 @@ private const val MenuMaxOpenBillsWireUnbounded = -1
 private const val CashierLockDebugTag = "AIROS_LOCK_DEBUG"
 private const val AUTO_LOCK_TIMEOUT_MILLIS = 90_000L
 private const val CAMERAS_FRAME_REFRESH_MILLIS = 2_000L
-private val CAMERAS_PAGE_PADDING = 18.dp
-private val CAMERAS_GRID_SPACING = 14.dp
+private val CAMERAS_PAGE_PADDING = 12.dp
+private val CAMERAS_GRID_SPACING = 8.dp
 private val CAMERAS_GRID_LARGE_CARD_MIN_WIDTH = 340.dp
 private val CAMERAS_GRID_STANDARD_CARD_MIN_WIDTH = 260.dp
-private val CAMERAS_GRID_CARD_MIN_HEIGHT = 220.dp
+private val CAMERAS_GRID_CARD_MIN_HEIGHT = 170.dp
 private const val CAMERAS_GRID_TWO_COLUMNS = 2
 private const val CAMERAS_GRID_BALANCED_CAMERA_COUNT = 4
 private const val CAMERAS_DIALOG_WIDTH_FRACTION = 0.90f
@@ -2858,7 +2858,7 @@ private fun CamerasRoute(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(CAMERAS_PAGE_PADDING),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Text(
                 text = "KAMERAT",

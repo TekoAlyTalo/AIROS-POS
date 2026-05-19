@@ -1435,7 +1435,7 @@ private fun CameraObjectDetailsContent(
                 .weight(1f, fill = true),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            cameraStackItems.take(4).forEach { item ->
+            cameraStackItems.take(1).forEach { item ->
                 CameraStackPreviewCard(
                     item = item,
                     selected = item.cameraId == cameraId,
