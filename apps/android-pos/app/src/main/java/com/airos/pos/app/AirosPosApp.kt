@@ -743,8 +743,8 @@ private fun ShellNowStamp(
     ) {
         Text(
             text = formatFinnishNowStamp(now),
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-            style = MaterialTheme.typography.labelLarge,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+            style = MaterialTheme.typography.titleSmall,
             color = AppShellTextPrimary,
             maxLines = 1,
         )
@@ -764,19 +764,19 @@ private fun ShellActiveSellerStamp(
         border = androidx.compose.foundation.BorderStroke(1.dp, AppShellBorderColor),
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 text = label,
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelMedium,
                 color = AppShellTextMuted,
                 maxLines = 1,
             )
             Text(
                 text = currentStaffName,
-                style = MaterialTheme.typography.labelLarge,
+                style = MaterialTheme.typography.titleSmall,
                 color = AppShellAccentText,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,

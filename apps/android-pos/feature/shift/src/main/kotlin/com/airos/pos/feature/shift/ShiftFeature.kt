@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -56,6 +57,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -402,6 +404,7 @@ fun ShiftScreen(
     var pendingCashOpenJournalText by remember { mutableStateOf<String?>(null) }
     var pendingCashCloseShiftId by remember { mutableStateOf<String?>(null) }
     var pendingCashCloseJournalText by remember { mutableStateOf<String?>(null) }
+    var selectedPulseDate by remember { mutableStateOf<LocalDate?>(null) }
 
     LaunchedEffect(state.journalEventId) {
         val text = state.journalEventText
@@ -523,6 +526,7 @@ fun ShiftScreen(
                         attendance = attendance,
                         loading = scheduleLoading,
                         message = scheduleMessage,
+                        selectedScheduleDate = selectedPulseDate,
                         lastSeenEvents = lastSeenEvents,
                         onStaffSelected = onPulseStaffSelected,
                         modifier = Modifier
@@ -548,6 +552,8 @@ fun ShiftScreen(
                         ownSchedule = ownSchedule,
                         ownScheduleLoading = ownScheduleLoading,
                         ownScheduleMessage = ownScheduleMessage,
+                        selectedScheduleDate = selectedPulseDate,
+                        onScheduleDateSelected = { selectedPulseDate = it },
                         onClockIn = onClockIn,
                         onClockOut = onClockOut,
                         modifier = Modifier
@@ -723,12 +729,17 @@ private fun CashShiftCard(
                         disabledContainerColor = ShiftPanelRaisedColor,
                         disabledContentColor = ShiftTextMuted,
                     ),
+                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
                     shape = RoundedCornerShape(16.dp),
                 ) {
                     Text(
                         text = "Laske kassa",
-                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.fillMaxWidth(),
+                        style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
                 Button(
@@ -747,12 +758,17 @@ private fun CashShiftCard(
                         disabledContainerColor = ShiftPanelRaisedColor,
                         disabledContentColor = ShiftTextMuted,
                     ),
+                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
                     shape = RoundedCornerShape(16.dp),
                 ) {
                     Text(
                         text = if (isOpen) "Sulje ravintola" else "Avaa ravintola",
-                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.fillMaxWidth(),
+                        style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
@@ -987,6 +1003,8 @@ private fun WorktimeSummaryCard(
     ownSchedule: ShiftScheduleSnapshot?,
     ownScheduleLoading: Boolean,
     ownScheduleMessage: String?,
+    selectedScheduleDate: LocalDate?,
+    onScheduleDateSelected: (LocalDate) -> Unit,
     onClockIn: () -> Unit,
     onClockOut: () -> Unit,
     modifier: Modifier = Modifier,
@@ -1022,6 +1040,8 @@ private fun WorktimeSummaryCard(
                 currentStaffId = currentStaffId,
                 loading = ownScheduleLoading,
                 message = ownScheduleMessage,
+                selectedScheduleDate = selectedScheduleDate,
+                onScheduleDateSelected = onScheduleDateSelected,
                 modifier = Modifier
                     .weight(1.95f)
                     .fillMaxHeight(),
@@ -1098,6 +1118,8 @@ private fun OwnShiftsCompactPanel(
     currentStaffId: String?,
     loading: Boolean,
     message: String?,
+    selectedScheduleDate: LocalDate?,
+    onScheduleDateSelected: (LocalDate) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -1150,6 +1172,8 @@ private fun OwnShiftsCompactPanel(
                     }
                     OwnShiftCalendarGrid(
                         weeks = weeks,
+                        selectedDate = selectedScheduleDate,
+                        onDateSelected = onScheduleDateSelected,
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f),
@@ -1219,6 +1243,8 @@ private fun ownShiftCalendarWeeks(
 @Composable
 private fun OwnShiftCalendarGrid(
     weeks: List<List<OwnShiftCalendarCell>>,
+    selectedDate: LocalDate?,
+    onDateSelected: (LocalDate) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -1258,6 +1284,8 @@ private fun OwnShiftCalendarGrid(
                     week.forEach { cell ->
                         OwnShiftCalendarDayCell(
                             cell = cell,
+                            selected = selectedDate == cell.date,
+                            onSelected = { onDateSelected(cell.date) },
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxHeight(),
@@ -1272,24 +1300,41 @@ private fun OwnShiftCalendarGrid(
 @Composable
 private fun OwnShiftCalendarDayCell(
     cell: OwnShiftCalendarCell,
+    selected: Boolean,
+    onSelected: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val borderColor = when {
+        selected -> ShiftGold.copy(alpha = 0.72f)
+        cell.isToday -> ShiftCyan.copy(alpha = 0.40f)
+        else -> ShiftBorderColor
+    }
+    val backgroundColor = when {
+        selected -> ShiftGold.copy(alpha = 0.16f)
+        cell.isToday -> ShiftCyanSoft.copy(alpha = 0.20f)
+        else -> ShiftPanelColor.copy(alpha = 0.52f)
+    }
+    val dateColor = when {
+        selected -> ShiftGold
+        cell.isToday -> ShiftCyan
+        else -> ShiftTextMuted
+    }
     Surface(
-        modifier = modifier,
+        modifier = modifier.clickable(onClick = onSelected),
         shape = RoundedCornerShape(8.dp),
-        color = if (cell.isToday) ShiftCyanSoft.copy(alpha = 0.20f) else ShiftPanelColor.copy(alpha = 0.52f),
-        border = BorderStroke(1.dp, if (cell.isToday) ShiftCyan.copy(alpha = 0.40f) else ShiftBorderColor),
+        color = backgroundColor,
+        border = BorderStroke(1.dp, borderColor),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 2.dp, vertical = 3.dp),
+                .padding(horizontal = 4.dp, vertical = 3.dp),
             verticalArrangement = Arrangement.spacedBy(1.dp),
         ) {
             Text(
                 text = "${cell.date.dayOfMonth}.${cell.date.monthValue}.",
                 style = MaterialTheme.typography.labelSmall,
-                color = if (cell.isToday) ShiftCyan else ShiftTextSecondary,
+                color = dateColor,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -1306,9 +1351,11 @@ private fun OwnShiftCalendarDayCell(
                 cell.shifts.take(2).forEach { shift ->
                     Text(
                         text = plannedShiftCalendarTimeRange(shift),
-                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.fillMaxWidth(),
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
                         color = ShiftTextPrimary,
                         fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -1374,6 +1421,7 @@ private fun ShiftSchedulePulseCard(
     attendance: WorktimeAttendanceSnapshot,
     loading: Boolean,
     message: String?,
+    selectedScheduleDate: LocalDate?,
     lastSeenEvents: List<LastSeenAuthEvent> = emptyList(),
     onStaffSelected: (String, String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
@@ -1392,16 +1440,21 @@ private fun ShiftSchedulePulseCard(
             }
         }
         var pulseZoom by remember { mutableStateOf(1f) }
-        val publishedDays = schedule?.days.orEmpty().filter { it.hasPublishedScheduleTruth() }
-        val selectedDay = publishedDays
-            .firstOrNull { day ->
-                val od = day.operationalDay
-                od.truthAvailable && !od.isClosed &&
-                    od.opensAt != null && od.closesAt != null &&
-                    !now.isBefore(od.opensAt) && !now.isAfter(od.closesAt)
-            }
-            ?: publishedDays.firstOrNull { it.plannedShifts.isNotEmpty() }
-            ?: publishedDays.firstOrNull()
+        val allDays = schedule?.days.orEmpty()
+        val publishedDays = allDays.filter { it.hasPublishedScheduleTruth() }
+        val selectedDay = if (selectedScheduleDate != null) {
+            allDays.firstOrNull { it.date == selectedScheduleDate }
+        } else {
+            publishedDays
+                .firstOrNull { day ->
+                    val od = day.operationalDay
+                    od.truthAvailable && !od.isClosed &&
+                        od.opensAt != null && od.closesAt != null &&
+                        !now.isBefore(od.opensAt) && !now.isAfter(od.closesAt)
+                }
+                ?: publishedDays.firstOrNull { it.plannedShifts.isNotEmpty() }
+                ?: publishedDays.firstOrNull()
+        }
         val operationalDay = selectedDay?.operationalDay
         val operationalWindowStart = operationalDay?.opensAt
         val operationalWindowEnd = operationalDay?.closesAt
@@ -1417,6 +1470,10 @@ private fun ShiftSchedulePulseCard(
                     tint = ShiftWarning,
                 )
                 schedule == null -> ShiftEmptyText("Työvuorosuunnitelma ei ole saatavilla.")
+                selectedScheduleDate != null && selectedDay == null ->
+                    ShiftEmptyText("Valitulla päivällä ei ole työvuoropäivän tietoa.")
+                selectedScheduleDate != null && selectedDay != null && !selectedDay.hasPublishedScheduleTruth() ->
+                    ShiftEmptyText("Valitulla päivällä ei ole julkaistua työvuorosuunnitelmaa.")
                 publishedDays.isEmpty() -> ShiftEmptyText("Aikavälillä ei ole julkaistua työvuorosuunnitelmaa.")
                 selectedDay == null -> ShiftEmptyText("Julkaistua työvuoropäivää ei ole valittavissa.")
                 operationalDay == null || !operationalDay.truthAvailable ->
@@ -1500,12 +1557,26 @@ private fun ShiftSchedulePulseCard(
                         ) {
                             val windowLabel = "${formatPulseWindowTime(windowStart)}-${formatPulseWindowTime(windowEnd)}"
                             val operationalSource = operationalDay.source?.takeIf { it.isNotBlank() }
-                            Text(
-                                text = if (operationalSource != null) "$windowLabel · $operationalSource" else windowLabel,
+                            Column(
                                 modifier = Modifier.weight(1f),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = ShiftTextMuted,
-                            )
+                                verticalArrangement = Arrangement.spacedBy(2.dp),
+                            ) {
+                                Text(
+                                    text = "Pulssi · ${formatPulseScheduleDate(selectedDay.date)}",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = ShiftTextPrimary,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = if (operationalSource != null) "$windowLabel · $operationalSource" else windowLabel,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = ShiftTextMuted,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                         }
                         Column(
                             modifier = Modifier
@@ -2164,7 +2235,8 @@ private const val PulseZoomMax = 2.5f
 private const val PulseZoomStep = 0.25f
 private val PulseTimelineMinimumChartWidth = 684.dp
 private val PulseTimelineWidthPerHour = 96.dp
-private val PulseLeftColumnWidth = 176.dp
+private val PulseLeftColumnWidth = 224.dp
+private val PulseTimelineGap = 10.dp
 private val PulseTickLabelWidth = 48.dp
 private val PulseTickLabelHalfWidth = 24.dp
 
@@ -2248,6 +2320,7 @@ private fun PulseTimelineHeader(
         BoxWithConstraints(
             modifier = Modifier
                 .weight(1f)
+                .padding(start = PulseTimelineGap)
                 .horizontalScroll(horizontalScrollState)
                 .height(18.dp),
         ) {
@@ -2359,6 +2432,7 @@ private fun PulseTimelineShiftRow(
         BoxWithConstraints(
             modifier = Modifier
                 .weight(1f)
+                .padding(start = PulseTimelineGap)
                 .horizontalScroll(horizontalScrollState)
                 .fillMaxHeight(),
             contentAlignment = Alignment.CenterStart,
@@ -2526,6 +2600,7 @@ private fun PulseTimelinePresenceRow(
         BoxWithConstraints(
             modifier = Modifier
                 .weight(1f)
+                .padding(start = PulseTimelineGap)
                 .horizontalScroll(horizontalScrollState)
                 .fillMaxHeight(),
             contentAlignment = Alignment.CenterStart,
@@ -2683,6 +2758,7 @@ private fun PulseTimelineLastSeenRow(
         BoxWithConstraints(
             modifier = Modifier
                 .weight(1f)
+                .padding(start = PulseTimelineGap)
                 .horizontalScroll(horizontalScrollState)
                 .fillMaxHeight(),
             contentAlignment = Alignment.CenterStart,
@@ -3191,6 +3267,19 @@ private fun formatCompactShiftDate(date: LocalDate): String {
         else -> "Su"
     }
     return "$day ${date.dayOfMonth}.${date.monthValue}."
+}
+
+private fun formatPulseScheduleDate(date: LocalDate): String {
+    val day = when (date.dayOfWeek.value) {
+        1 -> "Ma"
+        2 -> "Ti"
+        3 -> "Ke"
+        4 -> "To"
+        5 -> "Pe"
+        6 -> "La"
+        else -> "Su"
+    }
+    return "$day ${date.dayOfMonth}.${date.monthValue}.${date.year}"
 }
 
 private fun formatPulseWindowTime(value: LocalDateTime): String = value.format(ShiftJournalTimeFormatter)
