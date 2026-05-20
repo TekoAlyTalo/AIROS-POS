@@ -113,7 +113,6 @@ private val ShiftJournalDayFormatter: DateTimeFormatter = DateTimeFormatter.ofPa
 private val ShiftJournalTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm", Locale.getDefault())
 private val ShiftCardShape = RoundedCornerShape(26.dp)
 private val ShiftInnerShape = RoundedCornerShape(18.dp)
-
 data class ShiftUiState(
     val currentShift: PosShift? = null,
     val openingFloatInput: String = "50,00",
@@ -1003,55 +1002,80 @@ private fun WorktimeSummaryCard(
             else -> ShiftTextMuted
         },
     ) {
-        Column(
+        Row(
             modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Row(
-                modifier = Modifier.weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            OwnShiftsCompactPanel(
+                schedule = ownSchedule,
+                currentStaffId = currentStaffId,
+                loading = ownScheduleLoading,
+                message = ownScheduleMessage,
+                modifier = Modifier
+                    .weight(1.55f)
+                    .fillMaxHeight(),
+            )
+
+            Column(
+                modifier = Modifier
+                    .weight(0.82f)
+                    .fillMaxHeight(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Column(
-                    modifier = Modifier.weight(0.9f),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    shape = ShiftInnerShape,
+                    color = ShiftPanelDeepColor.copy(alpha = 0.72f),
+                    border = BorderStroke(1.dp, ShiftBorderColor),
+                    contentColor = ShiftTextPrimary,
                 ) {
-                    ShiftKeyValueRow("Henkilö", activeStaffName)
-                    ShiftKeyValueRow("Tila", if (isClockedIn) "Työaika käynnissä" else "Ei aktiivista työaikaa")
-                    if (isClockedIn) {
-                        ShiftKeyValueRow("Aloitettu", startedAt ?: "Ei saatavilla")
-                        ShiftKeyValueRow("Kesto", durationText ?: "Ei saatavilla", highlight = true)
-                    }
-                    attendanceMessage?.takeIf { it.isNotBlank() }?.let { message ->
-                        ShiftStatusBanner(text = message, tint = ShiftWarning)
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            text = "Muut tiedot",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = ShiftTextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                        )
+                        ShiftKeyValueRow("Henkilö", activeStaffName)
+                        ShiftKeyValueRow("Tila", if (isClockedIn) "Työaika käynnissä" else "Ei aktiivista työaikaa")
+                        if (isClockedIn) {
+                            ShiftKeyValueRow("Aloitettu", startedAt ?: "Ei saatavilla")
+                            ShiftKeyValueRow("Kesto", durationText ?: "Ei saatavilla", highlight = true)
+                        }
+                        attendanceMessage?.takeIf { it.isNotBlank() }?.let { message ->
+                            ShiftStatusBanner(text = message, tint = ShiftWarning)
+                        }
                     }
                 }
 
-                OwnShiftsCompactPanel(
-                    schedule = ownSchedule,
-                    currentStaffId = currentStaffId,
-                    loading = ownScheduleLoading,
-                    message = ownScheduleMessage,
-                    modifier = Modifier.weight(1.1f),
-                )
-            }
-
-            Button(
-                onClick = if (isClockedIn) onClockOut else onClockIn,
-                enabled = !attendanceBusy && !attendanceStateLoading,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isClockedIn) ShiftGold.copy(alpha = 0.86f) else ShiftSuccess.copy(alpha = 0.86f),
-                    contentColor = Color(0xFF071109),
-                    disabledContainerColor = ShiftPanelRaisedColor,
-                    disabledContentColor = ShiftTextMuted,
-                ),
-                shape = RoundedCornerShape(16.dp),
-            ) {
-                Text(
-                    text = if (isClockedIn) "Lopeta työaika" else "Aloita työaika",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                )
+                Button(
+                    onClick = if (isClockedIn) onClockOut else onClockIn,
+                    enabled = !attendanceBusy && !attendanceStateLoading,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(42.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isClockedIn) ShiftGold.copy(alpha = 0.86f) else ShiftSuccess.copy(alpha = 0.86f),
+                        contentColor = Color(0xFF071109),
+                        disabledContainerColor = ShiftPanelRaisedColor,
+                        disabledContentColor = ShiftTextMuted,
+                    ),
+                    shape = RoundedCornerShape(14.dp),
+                ) {
+                    Text(
+                        text = if (isClockedIn) "Lopeta" else "Aloita",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
             }
         }
     }
@@ -1103,34 +1127,22 @@ private fun OwnShiftsCompactPanel(
                 loading && schedule == null -> ShiftCompactEmptyText("Haetaan vuoroja...")
                 message != null && schedule == null -> ShiftCompactEmptyText("Vuorot eivät ole saatavilla.")
                 schedule == null -> ShiftCompactEmptyText("Vuoroja ei ole ladattu.")
+                schedule.days.none { it.hasPublishedScheduleTruth() } -> ShiftCompactEmptyText("Ei julkaistuja vuoropäiviä.")
                 else -> {
                     val today = LocalDate.now()
-                    val ownShifts = schedule.days
-                        .filter { it.hasPublishedScheduleTruth() }
-                        .flatMap { day ->
-                            day.plannedShifts
-                                .filter { shift ->
-                                    shift.staffId == currentStaffId &&
-                                        !shift.endsAt.toLocalDate().isBefore(today)
-                                }
-                                .map { shift -> day.date to shift }
-                        }
-                        .sortedBy { it.second.startsAt }
-                        .take(3)
-                    if (ownShifts.isEmpty()) {
-                        ShiftCompactEmptyText("Ei tulevia julkaistuja vuoroja.")
-                    } else {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(5.dp),
-                        ) {
-                            ownShifts.forEach { (date, shift) ->
-                                OwnShiftCompactRow(date = date, shift = shift)
-                            }
-                        }
+                    val weeks = remember(schedule, currentStaffId, today) {
+                        ownShiftCalendarWeeks(
+                            schedule = schedule,
+                            currentStaffId = currentStaffId,
+                            today = today,
+                        )
                     }
+                    OwnShiftCalendarGrid(
+                        weeks = weeks,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                    )
                 }
             }
 
@@ -1147,35 +1159,159 @@ private fun OwnShiftsCompactPanel(
     }
 }
 
-@Composable
-private fun OwnShiftCompactRow(date: LocalDate, shift: PlannedStaffShift) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(7.dp)
-                .clip(CircleShape)
-                .background(ShiftUpcoming),
-        )
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = formatCompactShiftDate(date),
-                style = MaterialTheme.typography.labelMedium,
-                color = ShiftTextSecondary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+private data class OwnShiftCalendarCell(
+    val date: LocalDate,
+    val shifts: List<PlannedStaffShift>,
+    val isToday: Boolean,
+)
+
+private val OwnShiftCalendarWeekdayLabels = listOf("Ma", "Ti", "Ke", "To", "Pe", "La", "Su")
+
+private fun ownShiftCalendarWeeks(
+    schedule: ShiftScheduleSnapshot,
+    currentStaffId: String?,
+    today: LocalDate,
+): List<List<OwnShiftCalendarCell>> {
+    val currentWeekStart = today.minusDays((today.dayOfWeek.value - 1).toLong())
+    val publishedDays = schedule.days.filter { it.hasPublishedScheduleTruth() }
+    val lastPublishedDate = publishedDays.map { it.date }.maxOrNull()
+    val minimumEndDate = currentWeekStart.plusDays(13)
+    val calendarEndDate = if (lastPublishedDate != null && lastPublishedDate.isAfter(minimumEndDate)) {
+        lastPublishedDate
+    } else {
+        minimumEndDate
+    }
+    val weekCount = ((ChronoUnit.DAYS.between(currentWeekStart, calendarEndDate).coerceAtLeast(13L) / 7L) + 1L)
+        .toInt()
+        .coerceAtLeast(2)
+    val shiftsByDate = publishedDays
+        .flatMap { day ->
+            day.plannedShifts
+                .filter { shift -> shift.staffId == currentStaffId }
+                .map { shift -> day.date to shift }
+        }
+        .groupBy({ it.first }, { it.second })
+        .mapValues { (_, shifts) -> shifts.sortedBy { it.startsAt } }
+
+    return (0 until weekCount).map { weekIndex ->
+        (0..6).map { dayIndex ->
+            val date = currentWeekStart.plusDays((weekIndex * 7 + dayIndex).toLong())
+            OwnShiftCalendarCell(
+                date = date,
+                shifts = shiftsByDate[date].orEmpty(),
+                isToday = date == today,
             )
+        }
+    }
+}
+
+@Composable
+private fun OwnShiftCalendarGrid(
+    weeks: List<List<OwnShiftCalendarCell>>,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            OwnShiftCalendarWeekdayLabels.forEach { label ->
+                Text(
+                    text = label,
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ShiftTextMuted,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                )
+            }
+        }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            weeks.forEach { week ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    week.forEach { cell ->
+                        OwnShiftCalendarDayCell(
+                            cell = cell,
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight(),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OwnShiftCalendarDayCell(
+    cell: OwnShiftCalendarCell,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(8.dp),
+        color = if (cell.isToday) ShiftCyanSoft.copy(alpha = 0.20f) else ShiftPanelColor.copy(alpha = 0.52f),
+        border = BorderStroke(1.dp, if (cell.isToday) ShiftCyan.copy(alpha = 0.40f) else ShiftBorderColor),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 4.dp, vertical = 3.dp),
+            verticalArrangement = Arrangement.spacedBy(1.dp),
+        ) {
             Text(
-                text = plannedShiftTimeRange(shift),
-                style = MaterialTheme.typography.labelLarge,
-                color = ShiftTextPrimary,
+                text = "${cell.date.dayOfMonth}.${cell.date.monthValue}.",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (cell.isToday) ShiftCyan else ShiftTextSecondary,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            if (cell.shifts.isEmpty()) {
+                Text(
+                    text = "—",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ShiftTextMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            } else {
+                cell.shifts.take(2).forEach { shift ->
+                    Text(
+                        text = plannedShiftCalendarTimeRange(shift),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ShiftTextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (cell.shifts.size > 2) {
+                    Text(
+                        text = "+${cell.shifts.size - 2}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ShiftWarning,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
         }
     }
 }
@@ -1244,20 +1380,19 @@ private fun ShiftSchedulePulseCard(
             }
         }
         var pulseZoom by remember { mutableStateOf(1f) }
-        val todayDate = now.toLocalDate()
         val publishedDays = schedule?.days.orEmpty().filter { it.hasPublishedScheduleTruth() }
         val selectedDay = publishedDays
-            .firstOrNull { it.date == todayDate }
+            .firstOrNull { day ->
+                val od = day.operationalDay
+                od.truthAvailable && !od.isClosed &&
+                    od.opensAt != null && od.closesAt != null &&
+                    !now.isBefore(od.opensAt) && !now.isAfter(od.closesAt)
+            }
             ?: publishedDays.firstOrNull { it.plannedShifts.isNotEmpty() }
             ?: publishedDays.firstOrNull()
         val operationalDay = selectedDay?.operationalDay
         val operationalWindowStart = operationalDay?.opensAt
         val operationalWindowEnd = operationalDay?.closesAt
-        val visibleShifts = selectedDay
-            ?.plannedShifts
-            .orEmpty()
-            .distinctBy { it.id }
-            .sortedWith(compareBy<PlannedStaffShift> { it.startsAt }.thenBy { it.staffName })
 
         Column(
             modifier = Modifier.fillMaxSize(),
@@ -1272,20 +1407,20 @@ private fun ShiftSchedulePulseCard(
                 schedule == null -> ShiftEmptyText("Työvuorosuunnitelma ei ole saatavilla.")
                 publishedDays.isEmpty() -> ShiftEmptyText("Aikavälillä ei ole julkaistua työvuorosuunnitelmaa.")
                 selectedDay == null -> ShiftEmptyText("Julkaistua työvuoropäivää ei ole valittavissa.")
-                operationalDay == null || !operationalDay.truthAvailable -> ShiftStatusBanner(
-                    text = "Ravintolan aukioloaikaa ei ole saatavilla.",
-                    tint = ShiftDanger,
-                )
-                operationalDay.isClosed -> ShiftEmptyText("Ravintola on suljettu valittuna päivänä.")
-                operationalWindowStart == null ||
-                    operationalWindowEnd == null ||
-                    !operationalWindowEnd.isAfter(operationalWindowStart) -> ShiftStatusBanner(
-                    text = "Ravintolan aukioloaikaa ei ole saatavilla.",
-                    tint = ShiftDanger,
-                )
+                operationalDay == null || !operationalDay.truthAvailable ->
+                    ShiftEmptyText("Ravintolan aukioloaikatieto ei ole saatavilla.")
+                operationalDay.isClosed ->
+                    ShiftEmptyText("Ravintola on suljettu valitulle päivälle.")
+                operationalWindowStart == null || operationalWindowEnd == null ||
+                    !operationalWindowEnd.isAfter(operationalWindowStart) ->
+                    ShiftEmptyText("Ravintolan aukioloaikatieto on virheellinen.")
                 else -> {
                     val windowStart = operationalWindowStart
                     val windowEnd = operationalWindowEnd
+                    val visibleShifts = selectedDay.plannedShifts
+                        .distinctBy { it.id }
+                        .filter { it.overlaps(windowStart, windowEnd) }
+                        .sortedWith(compareBy<PlannedStaffShift> { it.startsAt }.thenBy { it.staffName })
                     // Unscheduled active worktime: staff working without a planned shift must
                     // appear in Työvuoropulssi as a distinct worktime row so the active
                     // worktime truth is visible, but never as a planned-shift bar — and
@@ -1351,8 +1486,10 @@ private fun ShiftSchedulePulseCard(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
+                            val windowLabel = "${formatPulseWindowTime(windowStart)}-${formatPulseWindowTime(windowEnd)}"
+                            val operationalSource = operationalDay.source?.takeIf { it.isNotBlank() }
                             Text(
-                                text = "${formatPulseWindowTime(windowStart)}-${formatPulseWindowTime(windowEnd)}",
+                                text = if (operationalSource != null) "$windowLabel · $operationalSource" else windowLabel,
                                 modifier = Modifier.weight(1f),
                                 style = MaterialTheme.typography.labelMedium,
                                 color = ShiftTextMuted,
@@ -2099,6 +2236,7 @@ private fun PulseTimelineShiftRow(
             .toLocalDateTime()
     }
     val detailText = listOfNotNull(
+        pulseStatus.label,
         timeRange,
         lastSeenTime?.let { "Viimeksi nähty ${formatPulseWindowTime(it)}" },
     ).joinToString(" · ")
@@ -2233,7 +2371,7 @@ private fun PulseTimelinePresenceRow(
     }
     val effectiveEnd = if (now.isAfter(windowEnd)) windowEnd else now
     val hasTruthBackedRange = effectiveStart != null && effectiveEnd.isAfter(effectiveStart)
-    val worktimeLabel = "Työaika käynnissä"
+    val worktimeLabel = "Suunnittelematon työaika käynnissä"
     val timeRangeText = if (hasTruthBackedRange && parsedStart != null) {
         "${formatPulseWindowTime(parsedStart)}-"
     } else {
@@ -2549,7 +2687,7 @@ private fun PulseStatusGlyph(status: PulseStatusVisual) {
 private fun Modifier.pulseBarModifier(status: PulseStatusVisual): Modifier {
     return when (status.kind) {
         PulseStatusKind.UPCOMING -> this
-            .background(status.tint.copy(alpha = 0.10f), RoundedCornerShape(5.dp))
+            .background(status.tint.copy(alpha = 0.34f), RoundedCornerShape(5.dp))
             .border(BorderStroke(1.dp, status.tint.copy(alpha = 0.80f)), RoundedCornerShape(5.dp))
         PulseStatusKind.ABSENT -> this
             .background(status.tint.copy(alpha = 0.20f), RoundedCornerShape(5.dp))
@@ -2853,8 +2991,30 @@ private fun LocalDateTime.roundUpToHour(): LocalDateTime {
     return if (this == roundedDown) roundedDown else roundedDown.plusHours(1)
 }
 
+private fun plannedShiftCalendarTimeRange(shift: PlannedStaffShift): String {
+    fun compactTime(value: LocalDateTime): String {
+        val endsAtMidnightNextDay = value.toLocalDate().isAfter(shift.startsAt.toLocalDate()) &&
+            value.hour == 0 && value.minute == 0
+        val hour = if (endsAtMidnightNextDay) 24 else value.hour
+        return "$hour.${value.minute.toString().padStart(2, '0')}"
+    }
+    val range = "${compactTime(shift.startsAt)}–${compactTime(shift.endsAt)}"
+    return if (shift.endsAt.toLocalDate().isAfter(shift.startsAt.toLocalDate()) &&
+        !(shift.endsAt.hour == 0 && shift.endsAt.minute == 0)
+    ) {
+        "$range +1"
+    } else {
+        range
+    }
+}
+
 private fun plannedShiftTimeRange(shift: PlannedStaffShift): String {
-    return "${formatPulseWindowTime(shift.startsAt)}-${formatPulseWindowTime(shift.endsAt)}"
+    val range = "${formatPulseWindowTime(shift.startsAt)}-${formatPulseWindowTime(shift.endsAt)}"
+    return if (shift.endsAt.toLocalDate().isAfter(shift.startsAt.toLocalDate())) {
+        "$range +1 pv"
+    } else {
+        range
+    }
 }
 
 private fun ShiftScheduleDay.hasPublishedScheduleTruth(): Boolean {
@@ -2899,7 +3059,12 @@ private fun pulseStatusForAttendance(entry: AttendanceEntry): PulseStatusVisual 
     val normalized = entry.status.trim().lowercase(Locale.ROOT)
     val start = formatJournalTime(entry.startedAt).takeIf { it != "--:--" }
     return when (normalized) {
-        "active", "present", "clocked_in", "paikalla" -> PulseStatusVisual(PulseStatusKind.PRESENT, "Työaika käynnissä", ShiftSuccess, "!")
+        "active", "present", "clocked_in", "paikalla" -> PulseStatusVisual(
+            PulseStatusKind.PRESENT,
+            "Suunnittelematon työaika",
+            ShiftCyan,
+            "!",
+        )
         "scheduled", "upcoming", "incoming", "tulossa" -> PulseStatusVisual(
             PulseStatusKind.UPCOMING,
             start?.let { "Tulossa $it" } ?: "Tulossa",
@@ -2910,7 +3075,7 @@ private fun pulseStatusForAttendance(entry: AttendanceEntry): PulseStatusVisual 
         "absent", "away", "off", "poissa", "no_show" -> PulseStatusVisual(PulseStatusKind.ABSENT, "Poissa", ShiftAbsent, "×")
         "completed", "done", "valmis" -> PulseStatusVisual(PulseStatusKind.COMPLETED, "Valmis", ShiftTextMuted, "✓")
         "on_break", "break", "tauolla" -> PulseStatusVisual(PulseStatusKind.PRESENT, "Tauolla", ShiftWarning, "Ⅱ")
-        else -> PulseStatusVisual(PulseStatusKind.PRESENT, statusLabelForAttendance(entry), ShiftSuccess, "•")
+        else -> PulseStatusVisual(PulseStatusKind.PRESENT, statusLabelForAttendance(entry), ShiftCyan, "•")
     }
 }
 
@@ -2921,7 +3086,7 @@ private fun plannedPulseStatus(
 ): PulseStatusVisual {
     val normalized = shift.status?.trim()?.lowercase(Locale.ROOT).orEmpty()
     if (normalized in setOf("absent", "away", "off", "poissa", "no_show", "cancelled", "canceled")) {
-        return PulseStatusVisual(PulseStatusKind.ABSENT, "Poissa", ShiftAbsent, "×")
+        return PulseStatusVisual(PulseStatusKind.ABSENT, "Poissa", ShiftDanger, "×")
     }
 
     val isClockedIn = shift.staffId.isNotBlank() &&
@@ -2936,13 +3101,13 @@ private fun plannedPulseStatus(
     val shiftIsCurrent = !now.isBefore(shift.startsAt) && now.isBefore(shift.endsAt)
 
     return when {
-        isClockedIn -> PulseStatusVisual(PulseStatusKind.PRESENT, "Työaika käynnissä", ShiftSuccess, "!")
-        now.isBefore(shift.startsAt) -> PulseStatusVisual(PulseStatusKind.UPCOMING, "Tulossa", ShiftUpcoming, "▷")
+        isClockedIn -> PulseStatusVisual(PulseStatusKind.PRESENT, "Suunniteltu · työaika käynnissä", ShiftSuccess, "✓")
+        now.isBefore(shift.startsAt) -> PulseStatusVisual(PulseStatusKind.UPCOMING, "Suunniteltu", ShiftSuccess, "▷")
         shiftIsCurrent && hasAttendanceTruth && !hasAmbiguousStaffIdentity -> {
-            PulseStatusVisual(PulseStatusKind.LATE, "Myöhässä", ShiftDanger, "!")
+            PulseStatusVisual(PulseStatusKind.LATE, "Työaika puuttuu", ShiftDanger, "!")
         }
         shiftIsCurrent -> PulseStatusVisual(PulseStatusKind.UNKNOWN, "Työaika tuntematon", ShiftTextMuted, "?")
-        else -> PulseStatusVisual(PulseStatusKind.COMPLETED, "Valmis", ShiftTextMuted, "✓")
+        else -> PulseStatusVisual(PulseStatusKind.COMPLETED, "Suunniteltu valmis", ShiftSuccess, "✓")
     }
 }
 
@@ -2962,7 +3127,7 @@ private fun statusLabelForAttendance(entry: AttendanceEntry): String {
 private fun statusColorForAttendance(entry: AttendanceEntry): Color {
     val normalized = entry.status.trim().lowercase(Locale.ROOT)
     return when (normalized) {
-        "active", "present", "clocked_in", "paikalla" -> ShiftSuccess
+        "active", "present", "clocked_in", "paikalla" -> ShiftCyan
         "scheduled", "upcoming", "incoming", "tulossa" -> ShiftUpcoming
         "late", "myöhässä", "missing" -> ShiftDanger
         "absent", "away", "off", "poissa", "no_show" -> ShiftAbsent
