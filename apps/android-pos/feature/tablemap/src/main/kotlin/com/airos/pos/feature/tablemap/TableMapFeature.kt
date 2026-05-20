@@ -949,18 +949,20 @@ fun TableMapScreen(
         if (transferState != null || placeSelectionMode || !cameraObject.isCameraObject()) {
             return
         }
-        selectedCameraObjectId = cameraObject.id
+        selectedCameraObjectId = null
+        openCameraLivePreview(cameraObject.toCameraIconStackPreviewItem().toLivePreviewTarget())
     }
 LaunchedEffect(
         desiredPreviewTarget?.tableId,
         desiredPreviewTarget?.cameraId,
+        cameraLivePreviewTarget?.cameraId,
         state.edgeBaseUrl,
         state.cameraPreviewState.connectionState,
         state.cameraPreviewState.tableId,
         state.cameraPreviewState.cameraId,
         state.isLivePreviewDialogVisible,
     ) {
-        if (state.isLivePreviewDialogVisible) {
+        if (state.isLivePreviewDialogVisible || cameraLivePreviewTarget != null) {
             return@LaunchedEffect
         }
         val target = desiredPreviewTarget ?: return@LaunchedEffect
