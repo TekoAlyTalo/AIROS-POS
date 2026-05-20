@@ -28,7 +28,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DropdownMenu
@@ -751,6 +753,17 @@ private class ReservationsViewModel(
         }
     }
 
+    fun deleteReservation() {
+        val id = uiState.value.form.editingReservationId ?: return
+        viewModelScope.launch {
+            mutableState.update { it.copy(isSaving = true, error = null, message = null) }
+            when (val result = reservationsRepository.deleteReservation(id)) {
+                is PosResult.Success -> refreshAfterMutation(message = "Varaus poistettu.")
+                is PosResult.Failure -> mutableState.update { it.copy(isSaving = false, error = result.message) }
+            }
+        }
+    }
+
     private suspend fun refreshAfterMutation(message: String) {
         when (val refreshed = reservationsRepository.listReservations()) {
             is PosResult.Success -> {
@@ -892,6 +905,7 @@ fun ReservationsRoute(
             onOpenTablePicker()
         },
         onClearForm = viewModel::clearForm,
+        onDelete = viewModel::deleteReservation,
     )
 }
 
@@ -939,6 +953,7 @@ private fun ReservationsScreen(
     onStatusUpdate: (BackendReservation, ReservationStatus) -> Unit,
     onAssignTable: (BackendReservation) -> Unit,
     onClearForm: () -> Unit,
+    onDelete: () -> Unit,
 ) {
     var showDatePicker by remember { mutableStateOf(false) }
     val visibleReservations = remember(
@@ -998,6 +1013,7 @@ private fun ReservationsScreen(
             onNotesChange = onNotesChange,
             onSubmit = onSubmit,
             onSelectReservation = onLoadReservationIntoSlotWorkbench,
+            onDelete = onDelete,
         )
     }
 
@@ -1589,11 +1605,32 @@ private fun ReservationSlotWorkbenchDialog(
     onNotesChange: (String) -> Unit,
     onSubmit: () -> Unit,
     onSelectReservation: (BackendReservation) -> Unit,
+    onDelete: () -> Unit,
 ) {
     val form = state.form
     val editing = form.editingReservationId != null
     val headerDate = if (editing) state.selectedDate else selection.date
     val headerTime = if (editing) form.startTime else selection.start.format(TimeFormatter)
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("Poistetaanko varaus?") },
+            text = { Text("Varaus poistetaan pysyvästi. Tätä toimintoa ei voi peruuttaa.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showDeleteConfirm = false
+                        onDelete()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                ) { Text("Poista varaus") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) { Text("Peruuta") }
+            },
+        )
+    }
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(
@@ -1694,15 +1731,31 @@ private fun ReservationSlotWorkbenchDialog(
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    OutlinedButton(onClick = onDismiss, enabled = !state.isSaving) {
-                        Text("Peruuta")
+                    if (editing) {
+                        OutlinedButton(
+                            onClick = { showDeleteConfirm = true },
+                            enabled = !state.isSaving,
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
+                        ) {
+                            Text("Poista varaus")
+                        }
+                    } else {
+                        Spacer(modifier = Modifier.width(1.dp))
                     }
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Button(onClick = onSubmit, enabled = !state.isSaving) {
-                        Text(if (editing) "Tallenna muutokset" else "Tallenna varaus")
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        OutlinedButton(onClick = onDismiss, enabled = !state.isSaving) {
+                            Text("Peruuta")
+                        }
+                        Button(onClick = onSubmit, enabled = !state.isSaving) {
+                            Text(if (editing) "Tallenna muutokset" else "Tallenna varaus")
+                        }
                     }
                 }
             }
