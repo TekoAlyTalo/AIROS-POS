@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.airos.pos.app"
     android:versionCode="1"
@@ -35,7 +35,7 @@
         android:name="android.hardware.camera.any"
         android:required="false" />
 
-    <!-- NFC â€” capability probe and future staff identification. required=false so the
+    <!-- NFC Ã¢â‚¬â€ capability probe and future staff identification. required=false so the
          app installs on devices without NFC hardware (e.g. basic terminals). -->
     <uses-permission android:name="android.permission.NFC" />
 
@@ -140,3 +140,4 @@
     </application>
 
 </manifest>
+

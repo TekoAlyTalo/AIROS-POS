@@ -1713,8 +1713,10 @@ private fun ReservationSlotWorkbenchDialog(
 
                         ReservationSlotWorkbenchTableSection(
                             state = state,
+                            editing = editing,
                             onOpenTablePicker = onOpenTablePicker,
                             onClearSelectedTable = onClearSelectedTable,
+                            onDeleteRequest = { showDeleteConfirm = true },
                         )
                     }
 
@@ -1731,31 +1733,15 @@ private fun ReservationSlotWorkbenchDialog(
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    if (editing) {
-                        OutlinedButton(
-                            onClick = { showDeleteConfirm = true },
-                            enabled = !state.isSaving,
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
-                        ) {
-                            Text("Poista varaus")
-                        }
-                    } else {
-                        Spacer(modifier = Modifier.width(1.dp))
+                    OutlinedButton(onClick = onDismiss, enabled = !state.isSaving) {
+                        Text("Peruuta")
                     }
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        OutlinedButton(onClick = onDismiss, enabled = !state.isSaving) {
-                            Text("Peruuta")
-                        }
-                        Button(onClick = onSubmit, enabled = !state.isSaving) {
-                            Text(if (editing) "Tallenna muutokset" else "Tallenna varaus")
-                        }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Button(onClick = onSubmit, enabled = !state.isSaving) {
+                        Text(if (editing) "Tallenna muutokset" else "Tallenna varaus")
                     }
                 }
             }
@@ -2097,8 +2083,10 @@ private fun ReservationSlotWorkbenchGuestSection(
 @Composable
 private fun ReservationSlotWorkbenchTableSection(
     state: ReservationsUiState,
+    editing: Boolean,
     onOpenTablePicker: () -> Unit,
     onClearSelectedTable: () -> Unit,
+    onDeleteRequest: () -> Unit,
 ) {
     val form = state.form
     val noTableSelected = form.selectedTableId == null
@@ -2138,6 +2126,15 @@ private fun ReservationSlotWorkbenchTableSection(
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (editing) {
+                    OutlinedButton(
+                        onClick = onDeleteRequest,
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
+                    ) {
+                        Text("Poista varaus")
+                    }
+                }
                 Button(onClick = onOpenTablePicker) { Text("Valitse pöytä") }
                 if (noTableSelected) {
                     Button(onClick = onClearSelectedTable) { Text("Ei pöytää") }
