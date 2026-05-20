@@ -2,6 +2,7 @@ package com.airos.pos.app
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -55,6 +56,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -62,8 +64,14 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
@@ -433,7 +441,7 @@ private class ReservationsViewModel(
     }
 
     fun updateCustomerName(value: String) = updateForm { it.copy(customerName = value) }
-    fun updateCustomerPhone(value: String) = updateForm { it.copy(customerPhone = value) }
+    fun updateCustomerPhone(value: String) = updateForm { it.copy(customerPhone = normalizeReservationPhoneInput(value)) }
     fun updateCustomerEmail(value: String) = updateForm { it.copy(customerEmail = value.take(160)) }
     fun updateAllergies(value: String) = updateForm { it.copy(allergies = value.take(300)) }
     fun updateStatus(status: ReservationStatus) = updateForm { it.copy(status = status) }
@@ -586,7 +594,7 @@ private class ReservationsViewModel(
         return ReservationFormState(
             editingReservationId = reservation.id,
             customerName = reservation.customerName,
-            customerPhone = reservation.customerPhone.orEmpty(),
+            customerPhone = normalizeReservationPhoneInput(reservation.customerPhone.orEmpty()),
             customerEmail = noteParts.email,
             allergies = noteParts.allergies,
             status = noteParts.status,
@@ -765,7 +773,17 @@ private class ReservationsViewModel(
             }
             is PosResult.Failure -> {
                 mutableState.update {
-                    it.copy(isSaving = false, isLoading = false, message = message, error = refreshed.message)
+                    it.copy(
+                        form = ReservationFormState(),
+                        wizardOpen = false,
+                        wizardStep = ReservationWizardStep.DATE_TIME,
+                        slotWorkbenchSelection = null,
+                        pendingAssignReservationId = null,
+                        isSaving = false,
+                        isLoading = false,
+                        message = message,
+                        error = refreshed.message,
+                    )
                 }
             }
         }
@@ -1010,18 +1028,23 @@ private fun ReservationsScreen(
     }
 
     var searchExpanded by remember { mutableStateOf(state.searchQuery.isNotBlank()) }
-    var transientMessage by remember { mutableStateOf<String?>(null) }
+    var transientFeedback by remember { mutableStateOf<ReservationFeedback?>(null) }
     LaunchedEffect(state.searchQuery) {
         if (state.searchQuery.isNotBlank()) {
             searchExpanded = true
         }
     }
-    LaunchedEffect(state.message) {
-        state.message?.let { message ->
-            transientMessage = message
-            delay(2400L)
-            if (transientMessage == message) {
-                transientMessage = null
+    LaunchedEffect(state.message, state.error) {
+        val feedback = when {
+            state.error != null -> ReservationFeedback(text = state.error, isError = true)
+            state.message != null -> ReservationFeedback(text = state.message, isError = false)
+            else -> null
+        }
+        feedback?.let { next ->
+            transientFeedback = next
+            delay(if (next.isError) 4200L else 2600L)
+            if (transientFeedback == next) {
+                transientFeedback = null
             }
         }
     }
@@ -1035,8 +1058,6 @@ private fun ReservationsScreen(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                state.error?.let { StatusBanner(text = it, tint = MaterialTheme.colorScheme.error) }
-
                 ReservationPulsePanel(
                     state = state,
                     selectedSlot = state.slotWorkbenchSelection,
@@ -1115,9 +1136,9 @@ private fun ReservationsScreen(
                 }
             }
 
-            transientMessage?.let { message ->
+            transientFeedback?.let { feedback ->
                 ReservationTransientToast(
-                    text = message,
+                    feedback = feedback,
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .padding(top = 6.dp),
@@ -1128,24 +1149,44 @@ private fun ReservationsScreen(
 
 }
 
+private data class ReservationFeedback(
+    val text: String,
+    val isError: Boolean,
+)
+
 @Composable
 private fun ReservationTransientToast(
-    text: String,
+    feedback: ReservationFeedback,
     modifier: Modifier = Modifier,
 ) {
+    val tint = if (feedback.isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(999.dp),
-        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.52f)),
+        shape = RoundedCornerShape(22.dp),
+        color = tint.copy(alpha = 0.18f),
+        border = BorderStroke(1.dp, tint.copy(alpha = 0.52f)),
     ) {
-        Text(
-            text = text,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary,
-            maxLines = 1,
-        )
+        Row(
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Image(
+                painter = painterResource(id = R.drawable.airos_logo),
+                contentDescription = "AIROS",
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .size(36.dp),
+            )
+            Text(
+                text = feedback.text,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = tint,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
@@ -1591,7 +1632,12 @@ private fun ReservationSlotWorkbenchDialog(
                     TextButton(onClick = onDismiss) { Text("Sulje") }
                 }
 
-                state.error?.let { StatusBanner(text = it, tint = MaterialTheme.colorScheme.error) }
+                state.error?.let { error ->
+                    ReservationTransientToast(
+                        feedback = ReservationFeedback(text = error, isError = true),
+                        modifier = Modifier.align(Alignment.CenterHorizontally),
+                    )
+                }
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1931,7 +1977,10 @@ private fun ReservationSlotWorkbenchGuestSection(
                     onValueChange = onCustomerNameChange,
                     label = { Text("Nimi *") },
                     singleLine = true,
-                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Words,
+                        keyboardType = KeyboardType.Text,
+                    ),
                     modifier = Modifier.weight(1f),
                 )
                 OutlinedTextField(
@@ -1939,6 +1988,8 @@ private fun ReservationSlotWorkbenchGuestSection(
                     onValueChange = onCustomerPhoneChange,
                     label = { Text("Puhelin (vapaaehtoinen)") },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                    visualTransformation = FinnishPhoneVisualTransformation,
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -1965,6 +2016,10 @@ private fun ReservationSlotWorkbenchGuestSection(
                     value = form.allergies,
                     onValueChange = onAllergiesChange,
                     label = { Text("Allergiat (vapaaehtoinen)") },
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Sentences,
+                        keyboardType = KeyboardType.Text,
+                    ),
                     minLines = 2,
                     maxLines = 3,
                     modifier = Modifier.fillMaxWidth(),
@@ -1973,6 +2028,10 @@ private fun ReservationSlotWorkbenchGuestSection(
                     value = form.notes,
                     onValueChange = onNotesChange,
                     label = { Text("Muistiinpanot (vapaaehtoinen)") },
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Sentences,
+                        keyboardType = KeyboardType.Text,
+                    ),
                     minLines = 2,
                     maxLines = 4,
                     modifier = Modifier.fillMaxWidth(),
@@ -2667,7 +2726,7 @@ private fun ReservationRow(
                     )
                     reservation.customerPhone?.let {
                         Text(
-                            text = it,
+                            text = formatFinnishPhoneForDisplay(it),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -3267,6 +3326,13 @@ private fun ReservationWizardDialog(
                     onStepChange = onStepChange,
                 )
 
+                state.error?.let { error ->
+                    ReservationTransientToast(
+                        feedback = ReservationFeedback(text = error, isError = true),
+                        modifier = Modifier.align(Alignment.CenterHorizontally),
+                    )
+                }
+
                 when (state.wizardStep) {
                     ReservationWizardStep.DATE_TIME -> ReservationWizardDateTimeStep(
                         state = state,
@@ -3513,7 +3579,10 @@ private fun ReservationWizardGuestStep(
             onValueChange = onCustomerNameChange,
             label = { Text("Nimi *") },
             singleLine = true,
-            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+            keyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.Words,
+                keyboardType = KeyboardType.Text,
+            ),
             modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
@@ -3521,6 +3590,8 @@ private fun ReservationWizardGuestStep(
             onValueChange = onCustomerPhoneChange,
             label = { Text("Puhelin, vapaaehtoinen") },
             singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+            visualTransformation = FinnishPhoneVisualTransformation,
             modifier = Modifier.fillMaxWidth(),
         )
         Row(
@@ -3560,6 +3631,10 @@ private fun ReservationWizardGuestStep(
                 value = form.allergies,
                 onValueChange = onAllergiesChange,
                 label = { Text("Allergiat, vapaaehtoinen") },
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.Sentences,
+                    keyboardType = KeyboardType.Text,
+                ),
                 minLines = 2,
                 maxLines = 3,
                 modifier = Modifier.fillMaxWidth(),
@@ -3568,6 +3643,10 @@ private fun ReservationWizardGuestStep(
                 value = form.notes,
                 onValueChange = onNotesChange,
                 label = { Text("Muistiinpanot, vapaaehtoinen") },
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.Sentences,
+                    keyboardType = KeyboardType.Text,
+                ),
                 minLines = 2,
                 maxLines = 4,
                 modifier = Modifier.fillMaxWidth(),
@@ -3699,7 +3778,10 @@ private fun ReservationForm(
             onValueChange = onCustomerNameChange,
             label = { Text("Asiakkaan nimi") },
             singleLine = true,
-            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+            keyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.Words,
+                keyboardType = KeyboardType.Text,
+            ),
             modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
@@ -3707,6 +3789,8 @@ private fun ReservationForm(
             onValueChange = onCustomerPhoneChange,
             label = { Text("Asiakkaan puhelin") },
             singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+            visualTransformation = FinnishPhoneVisualTransformation,
             modifier = Modifier.fillMaxWidth(),
         )
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -3786,6 +3870,10 @@ private fun ReservationForm(
             value = form.notes,
             onValueChange = onNotesChange,
             label = { Text("Muistiinpanot") },
+            keyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.Sentences,
+                keyboardType = KeyboardType.Text,
+            ),
             minLines = 3,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -4210,11 +4298,92 @@ private fun ReservationFormState.proposedInterval(date: LocalDate): Pair<LocalDa
     return LocalDateTime.of(date, start) to LocalDateTime.of(date, end)
 }
 
+private object FinnishPhoneVisualTransformation : VisualTransformation {
+    override fun filter(text: AnnotatedString): TransformedText {
+        val raw = normalizeReservationPhoneInput(text.text)
+        val formatted = formatFinnishPhoneForDisplay(raw)
+        return TransformedText(
+            text = AnnotatedString(formatted),
+            offsetMapping = object : OffsetMapping {
+                override fun originalToTransformed(offset: Int): Int {
+                    return phoneOriginalToTransformedOffset(
+                        formatted = formatted,
+                        offset = offset.coerceIn(0, raw.length),
+                    )
+                }
+
+                override fun transformedToOriginal(offset: Int): Int {
+                    return formatted
+                        .take(offset.coerceIn(0, formatted.length))
+                        .count { it != ' ' }
+                        .coerceIn(0, raw.length)
+                }
+            },
+        )
+    }
+}
+
+private fun phoneOriginalToTransformedOffset(formatted: String, offset: Int): Int {
+    if (offset <= 0) return 0
+    var rawSeen = 0
+    formatted.forEachIndexed { index, char ->
+        if (char != ' ') {
+            rawSeen += 1
+            if (rawSeen == offset) return index + 1
+        }
+    }
+    return formatted.length
+}
+
+private fun normalizeReservationPhoneInput(value: String): String {
+    val input = value.trim()
+    val builder = StringBuilder()
+    input.forEach { char ->
+        when {
+            char.isDigit() -> builder.append(char)
+            char == '+' && builder.isEmpty() -> builder.append(char)
+        }
+    }
+    return builder.toString()
+}
+
+private fun formatFinnishPhoneForDisplay(value: String): String {
+    val phone = normalizeReservationPhoneInput(value)
+    if (phone.isBlank()) return ""
+    return when {
+        phone.startsWith("+358") -> {
+            val localDigits = phone.removePrefix("+358")
+            listOf("+358")
+                .plus(groupPhoneDigits(localDigits, listOf(2, 3)))
+                .filter { it.isNotBlank() }
+                .joinToString(" ")
+        }
+        phone.startsWith("0") -> groupPhoneDigits(phone, listOf(3, 3)).joinToString(" ")
+        else -> groupPhoneDigits(phone, listOf(3, 3, 4)).joinToString(" ")
+    }
+}
+
+private fun groupPhoneDigits(value: String, sizes: List<Int>): List<String> {
+    if (value.isBlank()) return emptyList()
+    val groups = mutableListOf<String>()
+    var offset = 0
+    sizes.forEach { size ->
+        if (offset >= value.length) return groups
+        val end = (offset + size).coerceAtMost(value.length)
+        groups += value.substring(offset, end)
+        offset = end
+    }
+    if (offset < value.length) {
+        groups += value.substring(offset)
+    }
+    return groups
+}
+
 private fun ReservationFormState.toPayload(date: LocalDate): PosResult<BackendReservationWrite> {
     val tableId = selectedTableId
     val name = customerName.trim()
     if (name.isBlank()) return PosResult.Failure("Asiakkaan nimi vaaditaan.")
-    val phone = customerPhone.trim()
+    val phone = normalizeReservationPhoneInput(customerPhone)
     val personsInt = persons.toIntOrNull()?.takeIf { it > 0 } ?: return PosResult.Failure("Henkilömäärän pitää olla suurempi kuin nolla.")
     val start = parseFormTime(startTime) ?: return PosResult.Failure("Aloitusajan muodon pitää olla HH:mm.")
     val end = parseFormTime(endTime) ?: return PosResult.Failure("Päättymisajan muodon pitää olla HH:mm.")
