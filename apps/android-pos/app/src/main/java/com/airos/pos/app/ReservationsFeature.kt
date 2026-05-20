@@ -1140,9 +1140,6 @@ private fun ReservationsScreen(
                             state = state,
                             reservations = visibleReservations,
                             onEdit = onEdit,
-                            onLoadReservationIntoSlotWorkbench = onLoadReservationIntoSlotWorkbench,
-                            onStatusUpdate = onStatusUpdate,
-                            onAssignTable = onAssignTable,
                         )
                     }
                     ReservationSortRail(
@@ -2250,35 +2247,11 @@ private fun ReservationInbox(
     state: ReservationsUiState,
     reservations: List<BackendReservation>,
     onEdit: (BackendReservation) -> Unit,
-    onLoadReservationIntoSlotWorkbench: (BackendReservation) -> Unit,
-    onStatusUpdate: (BackendReservation, ReservationStatus) -> Unit,
-    onAssignTable: (BackendReservation) -> Unit,
 ) {
-    var selectedReservation by remember { mutableStateOf<BackendReservation?>(null) }
     var pastExpanded by remember(state.selectedDate, state.searchQuery, state.queueFilter) {
         mutableStateOf(false)
     }
     val sections = remember(reservations) { buildReservationWorkQueue(reservations) }
-    selectedReservation?.let { reservation ->
-        val tableLabel = reservationTableLabel(reservation, state.tables)
-        ReservationActionSheet(
-            reservation = reservation,
-            tableLabel = tableLabel,
-            onDismiss = { selectedReservation = null },
-            onEdit = {
-                selectedReservation = null
-                onEdit(reservation)
-            },
-            onStatusUpdate = { status ->
-                selectedReservation = null
-                onStatusUpdate(reservation, status)
-            },
-            onAssignTable = {
-                selectedReservation = null
-                onAssignTable(reservation)
-            },
-        )
-    }
 
     Column(
         modifier = Modifier
@@ -2294,7 +2267,7 @@ private fun ReservationInbox(
             ReservationCompactRow(
                 reservation = reservation,
                 tableLabel = reservationTableLabel(reservation, state.tables),
-                onClick = { selectedReservation = reservation },
+                onClick = { onEdit(reservation) },
                 enabled = !state.isSaving,
             )
         }
@@ -2304,7 +2277,7 @@ private fun ReservationInbox(
             expanded = pastExpanded,
             enabled = !state.isSaving,
             onToggle = { pastExpanded = !pastExpanded },
-            onSelect = { selectedReservation = it },
+            onSelect = onEdit,
         )
         if (!state.isLoading && reservations.isNotEmpty() && sections.activeCount == 0 && sections.past.isEmpty()) {
             EmptyReservationList()
@@ -2597,115 +2570,6 @@ private fun ReservationCompactRow(
                         color = MaterialTheme.colorScheme.onError,
                     )
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ReservationActionSheet(
-    reservation: BackendReservation,
-    tableLabel: String,
-    onDismiss: () -> Unit,
-    onEdit: () -> Unit,
-    onStatusUpdate: (ReservationStatus) -> Unit,
-    onAssignTable: () -> Unit,
-) {
-    val noteParts = remember(reservation.notes) { splitReservationNotes(reservation.notes.orEmpty()) }
-    val status = noteParts.status
-    val unassigned = reservationIsUnassigned(reservation)
-    val started = (parseReservationDateTime(reservation.startTime) ?: LocalDateTime.MAX) <= LocalDateTime.now()
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            modifier = Modifier.widthIn(max = 460.dp),
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surface,
-        ) {
-            Column(
-                modifier = Modifier.padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.Top,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "${formatReservationTime(reservation.startTime)} • ${reservation.customerName}",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            text = "$tableLabel • ${reservation.persons} hlö",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    ReservationStatusChip(status)
-                }
-                noteParts.allergies.takeIf { it.isNotBlank() }?.let {
-                    Text(
-                        text = "Allergiat: $it",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-                noteParts.notes.takeIf { it.isNotBlank() }?.let {
-                    Text(
-                        text = it,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                Button(
-                    onClick = { onStatusUpdate(ReservationStatus.ARRIVED) },
-                    enabled = status != ReservationStatus.ARRIVED && status != ReservationStatus.SEATED,
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Saapunut") }
-                Button(
-                    onClick = { onStatusUpdate(ReservationStatus.SEATED) },
-                    enabled = !unassigned && status != ReservationStatus.SEATED,
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Istuta") }
-                if (unassigned) {
-                    Button(
-                        onClick = onAssignTable,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Valitse pöytä") }
-                } else {
-                    OutlinedButton(
-                        onClick = onAssignTable,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Vaihda pöytä") }
-                }
-                OutlinedButton(
-                    onClick = onEdit,
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Muokkaa") }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    OutlinedButton(
-                        onClick = { onStatusUpdate(ReservationStatus.CANCELLED) },
-                        enabled = status != ReservationStatus.CANCELLED,
-                        modifier = Modifier.weight(1f),
-                    ) { Text("Peru varaus") }
-                    OutlinedButton(
-                        onClick = { onStatusUpdate(ReservationStatus.NOSHOW) },
-                        enabled = started && status != ReservationStatus.NOSHOW,
-                        modifier = Modifier.weight(1f),
-                    ) { Text("Ei saapunut") }
-                }
-                TextButton(
-                    onClick = onDismiss,
-                    modifier = Modifier.align(Alignment.End),
-                ) { Text("Sulje") }
             }
         }
     }
