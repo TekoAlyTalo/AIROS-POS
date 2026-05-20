@@ -6,9 +6,12 @@ import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -48,6 +51,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -387,7 +391,11 @@ fun ShiftScreen(
     onClockOut: () -> Unit = {},
     journalNotes: List<JournalNote> = emptyList(),
     onNoteAdded: (String) -> Boolean = { false },
+    onSystemNoteAdded: (String) -> Boolean = { false },
+    onNoteUpdated: (JournalNote, String) -> Boolean = { _, _ -> false },
+    onNoteDeleted: (JournalNote) -> Boolean = { false },
     lastSeenEvents: List<LastSeenAuthEvent> = emptyList(),
+    onPulseStaffSelected: (String, String) -> Unit = { _, _ -> },
 ) {
     var cashWorkspaceMode by remember(state.currentShift?.id) { mutableStateOf<CashWorkspaceMode?>(null) }
     val activeStaffName = currentStaffName?.takeIf { it.isNotBlank() } ?: "Tuntematon"
@@ -398,7 +406,7 @@ fun ShiftScreen(
     LaunchedEffect(state.journalEventId) {
         val text = state.journalEventText
         if (state.journalEventId > 0 && !text.isNullOrBlank()) {
-            if (onNoteAdded(text)) {
+            if (onSystemNoteAdded(text)) {
                 cashWorkspaceMode = null
             }
         }
@@ -503,8 +511,10 @@ fun ShiftScreen(
                         attendanceMessage = attendanceMessage,
                         journalNotes = journalNotes,
                         onNoteAdded = onNoteAdded,
+                        onNoteUpdated = onNoteUpdated,
+                        onNoteDeleted = onNoteDeleted,
                         modifier = Modifier
-                            .weight(1.05f)
+                            .weight(0.90f)
                             .fillMaxHeight(),
                     )
 
@@ -514,8 +524,9 @@ fun ShiftScreen(
                         loading = scheduleLoading,
                         message = scheduleMessage,
                         lastSeenEvents = lastSeenEvents,
+                        onStaffSelected = onPulseStaffSelected,
                         modifier = Modifier
-                            .weight(1f)
+                            .weight(1.15f)
                             .fillMaxHeight(),
                     )
                 }
@@ -540,7 +551,7 @@ fun ShiftScreen(
                         onClockIn = onClockIn,
                         onClockOut = onClockOut,
                         modifier = Modifier
-                            .weight(1.35f)
+                            .weight(1.55f)
                             .fillMaxHeight(),
                     )
 
@@ -551,7 +562,7 @@ fun ShiftScreen(
                         onCashWorkspaceModeChanged = { cashWorkspaceMode = it },
                         onOpenShift = ::requestOpenRestaurant,
                         modifier = Modifier
-                            .weight(0.75f)
+                            .weight(0.55f)
                             .fillMaxHeight(),
                     )
                 }
@@ -1012,13 +1023,13 @@ private fun WorktimeSummaryCard(
                 loading = ownScheduleLoading,
                 message = ownScheduleMessage,
                 modifier = Modifier
-                    .weight(1.55f)
+                    .weight(1.95f)
                     .fillMaxHeight(),
             )
 
             Column(
                 modifier = Modifier
-                    .weight(0.82f)
+                    .weight(0.68f)
                     .fillMaxHeight(),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -1216,7 +1227,7 @@ private fun OwnShiftCalendarGrid(
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(3.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             OwnShiftCalendarWeekdayLabels.forEach { label ->
                 Text(
@@ -1241,8 +1252,8 @@ private fun OwnShiftCalendarGrid(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(56.dp),
-                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                        .height(62.dp),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     week.forEach { cell ->
                         OwnShiftCalendarDayCell(
@@ -1272,7 +1283,7 @@ private fun OwnShiftCalendarDayCell(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 4.dp, vertical = 3.dp),
+                .padding(horizontal = 2.dp, vertical = 3.dp),
             verticalArrangement = Arrangement.spacedBy(1.dp),
         ) {
             Text(
@@ -1364,6 +1375,7 @@ private fun ShiftSchedulePulseCard(
     loading: Boolean,
     message: String?,
     lastSeenEvents: List<LastSeenAuthEvent> = emptyList(),
+    onStaffSelected: (String, String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     ShiftCard(
@@ -1525,6 +1537,7 @@ private fun ShiftSchedulePulseCard(
                                     chartWidth = chartWidth,
                                     horizontalScrollState = horizontalScrollState,
                                     lastSeenEvent = latestLastSeenByStaffId[shift.staffId],
+                                    onStaffSelected = onStaffSelected,
                                 )
                                 val notLastShift = index != visibleShifts.lastIndex
                                 val unscheduledFollows = unscheduledPresence.isNotEmpty()
@@ -1547,6 +1560,7 @@ private fun ShiftSchedulePulseCard(
                                     chartWidth = chartWidth,
                                     horizontalScrollState = horizontalScrollState,
                                     lastSeenEvent = latestLastSeenByStaffId[entry.staffId],
+                                    onStaffSelected = onStaffSelected,
                                 )
                                 val moreLastSeenFollows = visibleLastSeen.isNotEmpty()
                                 if (index != unscheduledPresence.lastIndex || moreLastSeenFollows) {
@@ -1572,6 +1586,7 @@ private fun ShiftSchedulePulseCard(
                                     windowEnd = windowEnd,
                                     chartWidth = chartWidth,
                                     horizontalScrollState = horizontalScrollState,
+                                    onStaffSelected = onStaffSelected,
                                 )
                                 if (index != visibleLastSeen.lastIndex) {
                                     Box(
@@ -1670,6 +1685,8 @@ private fun ShiftJournalCard(
     attendanceMessage: String?,
     journalNotes: List<JournalNote> = emptyList(),
     onNoteAdded: (String) -> Boolean = { false },
+    onNoteUpdated: (JournalNote, String) -> Boolean = { _, _ -> false },
+    onNoteDeleted: (JournalNote) -> Boolean = { false },
     modifier: Modifier = Modifier,
 ) {
     ShiftCard(
@@ -1706,13 +1723,34 @@ private fun ShiftJournalCard(
                         title = note.text,
                         detail = "${note.authorName} · ${formatJournalTime(note.timestampMillis.toString())}",
                         timestamp = note.timestampMillis.toString(),
+                        note = note,
+                        editable = note.isEditableJournalNote(),
                     ),
                 )
             }
         }
 
         var noteInput by remember { mutableStateOf("") }
+        var editingNote by remember { mutableStateOf<JournalNote?>(null) }
+        var selectedNote by remember { mutableStateOf<JournalNote?>(null) }
+        var confirmDeleteNote by remember { mutableStateOf<JournalNote?>(null) }
         val journalScrollState = rememberScrollState()
+        fun submitNoteInput() {
+            val trimmed = noteInput.trim()
+            if (trimmed.isBlank()) return
+            val edited = editingNote
+            val saved = if (edited != null) {
+                onNoteUpdated(edited, trimmed)
+            } else {
+                onNoteAdded(trimmed)
+            }
+            if (saved) {
+                noteInput = ""
+                editingNote = null
+                selectedNote = null
+                confirmDeleteNote = null
+            }
+        }
         LaunchedEffect(events.size, journalScrollState.maxValue) {
             journalScrollState.scrollTo(journalScrollState.maxValue)
         }
@@ -1734,7 +1772,43 @@ private fun ShiftJournalCard(
                             ShiftDayBoundary(label = day)
                             lastDay = day
                         }
-                        JournalRow(event)
+                        val note = event.note
+                        JournalRow(
+                            event = event,
+                            selected = note != null && selectedNote?.sameJournalIdentity(note) == true,
+                            confirmingDelete = note != null && confirmDeleteNote?.sameJournalIdentity(note) == true,
+                            onSelected = {
+                                if (event.editable && note != null) {
+                                    selectedNote = if (selectedNote?.sameJournalIdentity(note) == true) null else note
+                                    confirmDeleteNote = null
+                                }
+                            },
+                            onEdit = {
+                                if (event.editable && note != null) {
+                                    editingNote = note
+                                    noteInput = note.text
+                                    selectedNote = null
+                                    confirmDeleteNote = null
+                                }
+                            },
+                            onDeleteRequested = {
+                                if (event.editable && note != null) {
+                                    confirmDeleteNote = note
+                                    selectedNote = note
+                                }
+                            },
+                            onDeleteConfirmed = {
+                                if (event.editable && note != null && onNoteDeleted(note)) {
+                                    if (editingNote?.sameJournalIdentity(note) == true) {
+                                        editingNote = null
+                                        noteInput = ""
+                                    }
+                                    selectedNote = null
+                                    confirmDeleteNote = null
+                                }
+                            },
+                            onDeleteCancelled = { confirmDeleteNote = null },
+                        )
                     }
                 }
             }
@@ -1756,11 +1830,13 @@ private fun ShiftJournalCard(
                     modifier = Modifier.weight(1f),
                     textStyle = MaterialTheme.typography.bodySmall.copy(color = ShiftTextPrimary),
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { submitNoteInput() }),
                     decorationBox = { inner ->
                         Box {
                             if (noteInput.isBlank()) {
                                 Text(
-                                    text = "Kirjoita muistiinpano…",
+                                    text = if (editingNote != null) "Muokkaa merkintää…" else "Kirjoita muistiinpano…",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = ShiftTextMuted,
                                 )
@@ -1773,11 +1849,7 @@ private fun ShiftJournalCard(
                     modifier = Modifier
                         .heightIn(min = 30.dp)
                         .clickable(enabled = noteInput.isNotBlank()) {
-                            if (noteInput.isNotBlank()) {
-                                if (onNoteAdded(noteInput.trim())) {
-                                    noteInput = ""
-                                }
-                            }
+                            submitNoteInput()
                         },
                     shape = RoundedCornerShape(10.dp),
                     color = ShiftCyan.copy(alpha = if (noteInput.isNotBlank()) 0.18f else 0.06f),
@@ -1789,7 +1861,7 @@ private fun ShiftJournalCard(
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
-                            text = "Lisää",
+                            text = if (editingNote != null) "Tallenna" else "Lisää",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
                             color = ShiftCyan.copy(alpha = if (noteInput.isNotBlank()) 1f else 0.38f),
@@ -2165,6 +2237,7 @@ private fun PulseTimelineHeader(
     windowEnd: LocalDateTime,
     chartWidth: Dp,
     horizontalScrollState: ScrollState,
+    onStaffSelected: (String, String) -> Unit = { _, _ -> },
 ) {
     val tickTimes = pulseTickTimes(windowStart, windowEnd)
     Row(
@@ -2211,6 +2284,7 @@ private fun PulseTimelineShiftRow(
     chartWidth: Dp,
     horizontalScrollState: ScrollState,
     lastSeenEvent: LastSeenAuthEvent? = null,
+    onStaffSelected: (String, String) -> Unit = { _, _ -> },
 ) {
     val pulseStatus = plannedPulseStatus(shift = shift, attendance = attendance, now = now)
     val overlapsWindow = shift.overlaps(windowStart, windowEnd)
@@ -2244,7 +2318,10 @@ private fun PulseTimelineShiftRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(56.dp),
+            .heightIn(min = 64.dp)
+            .clickable(enabled = shift.staffId.isNotBlank() || shift.staffName.isNotBlank()) {
+                onStaffSelected(shift.staffId, shift.staffName)
+            },
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Row(
@@ -2273,7 +2350,7 @@ private fun PulseTimelineShiftRow(
                     text = detailText,
                     style = MaterialTheme.typography.bodySmall,
                     color = ShiftTextMuted,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
@@ -2358,6 +2435,7 @@ private fun PulseTimelinePresenceRow(
     chartWidth: Dp,
     horizontalScrollState: ScrollState,
     lastSeenEvent: LastSeenAuthEvent? = null,
+    onStaffSelected: (String, String) -> Unit = { _, _ -> },
 ) {
     val parsedStart = parseAttendanceStart(entry.startedAt)
     val durationDerivedStart = if (entry.durationMinutes > 0.0) {
@@ -2392,7 +2470,10 @@ private fun PulseTimelinePresenceRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(56.dp),
+            .heightIn(min = 64.dp)
+            .clickable(enabled = entry.staffId.isNotBlank() || entry.staffName.isNotBlank()) {
+                onStaffSelected(entry.staffId, entry.staffName)
+            },
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Row(
@@ -2436,7 +2517,7 @@ private fun PulseTimelinePresenceRow(
                     text = detailText,
                     style = MaterialTheme.typography.bodySmall,
                     color = ShiftTextMuted,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
@@ -2534,6 +2615,7 @@ private fun PulseTimelineLastSeenRow(
     windowEnd: LocalDateTime,
     chartWidth: Dp,
     horizontalScrollState: ScrollState,
+    onStaffSelected: (String, String) -> Unit = { _, _ -> },
 ) {
     val eventTime = Instant.ofEpochMilli(event.timestampMillis)
         .atZone(ZoneId.systemDefault())
@@ -2545,7 +2627,10 @@ private fun PulseTimelineLastSeenRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(48.dp),
+            .heightIn(min = 56.dp)
+            .clickable(enabled = event.staffId.isNotBlank() || event.staffName.isNotBlank()) {
+                onStaffSelected(event.staffId, event.staffName)
+            },
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Row(
@@ -2589,7 +2674,7 @@ private fun PulseTimelineLastSeenRow(
                     text = "Viimeksi nähty $timeLabel",
                     style = MaterialTheme.typography.bodySmall,
                     color = ShiftTextMuted,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
@@ -2771,40 +2856,128 @@ private fun ShiftDayBoundary(label: String) {
 }
 
 @Composable
-private fun JournalRow(event: JournalEvent) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.Top,
+private fun JournalRow(
+    event: JournalEvent,
+    selected: Boolean,
+    confirmingDelete: Boolean,
+    onSelected: () -> Unit,
+    onEdit: () -> Unit,
+    onDeleteRequested: () -> Unit,
+    onDeleteConfirmed: () -> Unit,
+    onDeleteCancelled: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (selected) ShiftPanelDeepColor.copy(alpha = 0.86f) else Color.Transparent)
+            .border(
+                BorderStroke(1.dp, if (selected) ShiftBorderWarmColor else Color.Transparent),
+                RoundedCornerShape(14.dp),
+            )
+            .pointerInput(event.timestamp, event.title, event.editable) {
+                detectTapGestures(
+                    onTap = { if (event.editable) onSelected() },
+                    onLongPress = { if (event.editable) onSelected() },
+                )
+            }
+            .padding(if (selected) 8.dp else 0.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(event.tint.copy(alpha = 0.18f))
+                    .border(BorderStroke(1.dp, event.tint.copy(alpha = 0.32f)), CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = event.marker,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = event.tint,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = event.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ShiftTextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = event.detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ShiftTextMuted,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+
+        if (selected && event.editable) {
+            if (confirmingDelete) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Poistetaanko merkintä?",
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = ShiftTextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    JournalActionChip(label = "Peru", tint = ShiftTextMuted, onClick = onDeleteCancelled)
+                    JournalActionChip(label = "Poista", tint = ShiftDanger, onClick = onDeleteConfirmed)
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    JournalActionChip(label = "Muokkaa", tint = ShiftCyan, onClick = onEdit)
+                    JournalActionChip(label = "Poista", tint = ShiftDanger, onClick = onDeleteRequested)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun JournalActionChip(
+    label: String,
+    tint: Color,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .heightIn(min = 30.dp)
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(999.dp),
+        color = tint.copy(alpha = 0.14f),
+        border = BorderStroke(1.dp, tint.copy(alpha = 0.30f)),
+        contentColor = tint,
     ) {
         Box(
-            modifier = Modifier
-                .size(28.dp)
-                .clip(CircleShape)
-                .background(event.tint.copy(alpha = 0.18f))
-                .border(BorderStroke(1.dp, event.tint.copy(alpha = 0.32f)), CircleShape),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                text = event.marker,
+                text = label,
                 style = MaterialTheme.typography.labelMedium,
-                color = event.tint,
+                color = tint,
                 fontWeight = FontWeight.Bold,
-            )
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = event.title,
-                style = MaterialTheme.typography.bodyMedium,
-                color = ShiftTextPrimary,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                text = event.detail,
-                style = MaterialTheme.typography.bodySmall,
-                color = ShiftTextMuted,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+                maxLines = 1,
             )
         }
     }
@@ -2878,7 +3051,12 @@ data class JournalNote(
     val text: String,
     val authorName: String,
     val timestampMillis: Long,
+    val source: String = "",
+    val editable: Boolean = false,
 )
+
+const val JOURNAL_NOTE_SOURCE_MANUAL = "manual"
+const val JOURNAL_NOTE_SOURCE_SYSTEM = "system"
 
 /**
  * Factual authentication / recognition event for a single staff member.
@@ -2900,7 +3078,38 @@ private data class JournalEvent(
     val title: String,
     val detail: String,
     val timestamp: String? = null,
+    val note: JournalNote? = null,
+    val editable: Boolean = false,
 )
+
+private fun JournalNote.sameJournalIdentity(other: JournalNote): Boolean {
+    return timestampMillis == other.timestampMillis &&
+        authorName == other.authorName &&
+        text == other.text
+}
+
+private fun JournalNote.isEditableJournalNote(): Boolean {
+    return when (source) {
+        JOURNAL_NOTE_SOURCE_MANUAL -> editable
+        JOURNAL_NOTE_SOURCE_SYSTEM -> false
+        else -> !looksLikeSystemJournalNote(text)
+    }
+}
+
+private fun looksLikeSystemJournalNote(text: String): Boolean {
+    val normalized = text.trim().lowercase(Locale.ROOT)
+    if (normalized.isBlank()) return false
+    return listOf(
+        "tunnistautui kassalla",
+        "työvuorossa",
+        "lopetti työvuoron",
+        "ravintola avattu",
+        "ravintola suljettu",
+        "kassa laskettu",
+        "pohjakassa",
+        "kassaa ei laskettu",
+    ).any { marker -> marker in normalized }
+}
 
 private fun formatShiftStatus(status: String): String {
     return when (status.uppercase()) {

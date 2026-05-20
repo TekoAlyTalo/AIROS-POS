@@ -117,6 +117,8 @@ import com.airos.pos.feature.scanner.ScannerViewModel
 import com.airos.pos.feature.settings.SettingsScreen
 import com.airos.pos.feature.settings.SettingsViewModel
 import com.airos.pos.feature.shift.JournalNote
+import com.airos.pos.feature.shift.JOURNAL_NOTE_SOURCE_MANUAL
+import com.airos.pos.feature.shift.JOURNAL_NOTE_SOURCE_SYSTEM
 import com.airos.pos.feature.shift.LastSeenAuthEvent
 import com.airos.pos.feature.shift.ShiftScreen
 import com.airos.pos.feature.shift.ShiftViewModel
@@ -886,12 +888,19 @@ private fun SignedInApp(
         plannedShiftStaffIdsForScheduleDate(staffMenuScheduleSnapshot, staffMenuScheduleDate)
     }
 
-    fun addShiftJournalNote(text: String, authorName: String = currentStaffName.ifBlank { "Tuntematon" }): Boolean {
+    fun addShiftJournalNote(
+        text: String,
+        authorName: String = currentStaffName.ifBlank { "Tuntematon" },
+        source: String = JOURNAL_NOTE_SOURCE_MANUAL,
+        editable: Boolean = source == JOURNAL_NOTE_SOURCE_MANUAL,
+    ): Boolean {
         if (text.isBlank()) return false
         val note = JournalNote(
             text = text,
             authorName = authorName,
             timestampMillis = System.currentTimeMillis(),
+            source = source,
+            editable = editable,
         )
         val persistedNotes = loadJournalNotesFromPrefs(shiftJournalPrefs)
         val baseNotes = if (persistedNotes.size > journalNotes.size) persistedNotes else journalNotes
@@ -905,6 +914,46 @@ private fun SignedInApp(
         }
     }
 
+    fun updateShiftJournalNote(note: JournalNote, updatedText: String): Boolean {
+        val trimmed = updatedText.trim()
+        if (trimmed.isBlank()) return false
+        val persistedNotes = loadJournalNotesFromPrefs(shiftJournalPrefs)
+        val baseNotes = if (persistedNotes.size >= journalNotes.size) persistedNotes else journalNotes
+        val updated = baseNotes.map { existing ->
+            if (sameJournalNoteIdentity(existing, note)) {
+                existing.copy(text = trimmed)
+            } else {
+                existing
+            }
+        }
+        if (updated == baseNotes) {
+            Toast.makeText(context, "Vuoropäiväkirjamerkintää ei löytynyt.", Toast.LENGTH_LONG).show()
+            return false
+        }
+        if (saveJournalNotesToPrefs(shiftJournalPrefs, updated)) {
+            journalNotes = updated
+            return true
+        }
+        Toast.makeText(context, "Vuoropäiväkirjamerkintää ei voitu tallentaa.", Toast.LENGTH_LONG).show()
+        return false
+    }
+
+    fun deleteShiftJournalNote(note: JournalNote): Boolean {
+        val persistedNotes = loadJournalNotesFromPrefs(shiftJournalPrefs)
+        val baseNotes = if (persistedNotes.size >= journalNotes.size) persistedNotes else journalNotes
+        val updated = baseNotes.filterNot { existing -> sameJournalNoteIdentity(existing, note) }
+        if (updated.size == baseNotes.size) {
+            Toast.makeText(context, "Vuoropäiväkirjamerkintää ei löytynyt.", Toast.LENGTH_LONG).show()
+            return false
+        }
+        if (saveJournalNotesToPrefs(shiftJournalPrefs, updated)) {
+            journalNotes = updated
+            return true
+        }
+        Toast.makeText(context, "Vuoropäiväkirjamerkintää ei voitu poistaa.", Toast.LENGTH_LONG).show()
+        return false
+    }
+
     fun startCurrentWorktime() {
         if (staffPanelAttendanceBusy) return
         scope.launch {
@@ -912,7 +961,11 @@ private fun SignedInApp(
             try {
                 when (val result = appContainer.worktimeAttendanceRepository.clockIn(currentStaffId, currentStaffName)) {
                     is PosResult.Success -> {
-                        addShiftJournalNote("$currentStaffName työvuorossa")
+                        addShiftJournalNote(
+                            "$currentStaffName työvuorossa",
+                            source = JOURNAL_NOTE_SOURCE_SYSTEM,
+                            editable = false,
+                        )
                         Toast.makeText(context, "Työaika aloitettu", Toast.LENGTH_SHORT).show()
                     }
                     is PosResult.Failure -> {
@@ -932,7 +985,12 @@ private fun SignedInApp(
             try {
                 when (val result = appContainer.worktimeAttendanceRepository.clockOut(staffId, staffName)) {
                     is PosResult.Success -> {
-                        addShiftJournalNote("$staffName lopetti työvuoron")
+                        addShiftJournalNote(
+                            "$staffName lopetti työvuoron",
+                            authorName = staffName,
+                            source = JOURNAL_NOTE_SOURCE_SYSTEM,
+                            editable = false,
+                        )
                         Toast.makeText(context, "Työaika päätetty", Toast.LENGTH_SHORT).show()
                     }
                     is PosResult.Failure -> {
@@ -972,6 +1030,24 @@ private fun SignedInApp(
         sellerSwitchPinError = null
     }
 
+    fun handlePulseStaffTap(staffId: String, staffName: String) {
+        val staff = staffId.takeIf { it.isNotBlank() }
+            ?.let { id -> staffMenuStaff.firstOrNull { it.id == id } }
+            ?: staffName.takeIf { staffId.isBlank() && it.isNotBlank() }
+                ?.let { name ->
+                    staffMenuStaff
+                        .filter { it.displayName.equals(name, ignoreCase = true) }
+                        .takeIf { it.size == 1 }
+                        ?.single()
+                }
+        if (staff == null) {
+            val label = staffName.takeIf { it.isNotBlank() } ?: staffId.ifBlank { "Tuntematon" }
+            Toast.makeText(context, "Henkilöä ei löydy henkilöstölistasta: $label", Toast.LENGTH_LONG).show()
+            return
+        }
+        handleStaffMenuStaffTap(staff)
+    }
+
     fun submitSellerSwitchPin(staff: StaffMember, pin: String) {
         if (staffPanelAttendanceBusy) return
         val isClockedIn = staffPanelClockedInStaff.any { it.staffId == staff.id }
@@ -986,6 +1062,8 @@ private fun SignedInApp(
                                 is PosResult.Success -> addShiftJournalNote(
                                     text = "${staff.displayName} työvuorossa",
                                     authorName = staff.displayName,
+                                    source = JOURNAL_NOTE_SOURCE_SYSTEM,
+                                    editable = false,
                                 )
                                 is PosResult.Failure -> {
                                     Toast.makeText(context, clockInResult.message, Toast.LENGTH_LONG).show()
@@ -1026,6 +1104,8 @@ private fun SignedInApp(
                                 is PosResult.Success -> addShiftJournalNote(
                                     text = "$staffName työvuorossa",
                                     authorName = staffName,
+                                    source = JOURNAL_NOTE_SOURCE_SYSTEM,
+                                    editable = false,
                                 )
                                 is PosResult.Failure -> {
                                     Toast.makeText(context, clockInResult.message, Toast.LENGTH_LONG).show()
@@ -1077,6 +1157,8 @@ private fun SignedInApp(
             addShiftJournalNote(
                 text = "${session.displayName} tunnistautui kassalla",
                 authorName = session.displayName,
+                source = JOURNAL_NOTE_SOURCE_SYSTEM,
+                editable = false,
             )
         }
     }
@@ -1110,7 +1192,11 @@ private fun SignedInApp(
             .first()
         if (currentState.activeSession != null) return@LaunchedEffect
         when (val result = appContainer.worktimeAttendanceRepository.clockIn(currentStaffId, currentStaffName)) {
-            is PosResult.Success -> addShiftJournalNote("$currentStaffName työvuorossa")
+            is PosResult.Success -> addShiftJournalNote(
+                "$currentStaffName työvuorossa",
+                source = JOURNAL_NOTE_SOURCE_SYSTEM,
+                editable = false,
+            )
             is PosResult.Failure -> Log.w("AIROS", "Auto clock-in failed: ${result.message}")
         }
     }
@@ -1419,7 +1505,17 @@ private fun SignedInApp(
                         },
                         journalNotes = journalNotes,
                         onNoteAdded = { text -> addShiftJournalNote(text) },
+                        onSystemNoteAdded = { text ->
+                            addShiftJournalNote(
+                                text = text,
+                                source = JOURNAL_NOTE_SOURCE_SYSTEM,
+                                editable = false,
+                            )
+                        },
+                        onNoteUpdated = ::updateShiftJournalNote,
+                        onNoteDeleted = ::deleteShiftJournalNote,
                         lastSeenEvents = lastSeenEvents,
+                        onPulseStaffSelected = ::handlePulseStaffTap,
                     )
 
                     }
@@ -3676,9 +3772,17 @@ private fun loadJournalNotesFromPrefs(prefs: SharedPreferences): List<JournalNot
                 text = obj.getString("text"),
                 authorName = obj.getString("authorName"),
                 timestampMillis = obj.getLong("timestampMillis"),
+                source = obj.optString("source", ""),
+                editable = obj.optBoolean("editable", false),
             )
         }
     }.getOrDefault(emptyList())
+}
+
+private fun sameJournalNoteIdentity(left: JournalNote, right: JournalNote): Boolean {
+    return left.timestampMillis == right.timestampMillis &&
+        left.authorName == right.authorName &&
+        left.text == right.text
 }
 
 private fun saveJournalNotesToPrefs(prefs: SharedPreferences, notes: List<JournalNote>): Boolean {
@@ -3689,6 +3793,8 @@ private fun saveJournalNotesToPrefs(prefs: SharedPreferences, notes: List<Journa
                 put("text", note.text)
                 put("authorName", note.authorName)
                 put("timestampMillis", note.timestampMillis)
+                put("source", note.source)
+                put("editable", note.editable)
             },
         )
     }
