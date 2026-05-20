@@ -165,8 +165,12 @@ private val AppShellTextMuted = Color(0xFFB0C0CD)
 private val AppShellAccentText = Color(0xFF85F5E0)
 
 private val SHELL_CONTENT_GUTTER = 12.dp
-private val RAIL_WIDTH = 128.dp
-private val RAIL_BUTTON_WIDTH = 96.dp
+private val RAIL_WIDTH = 136.dp
+private val RAIL_BUTTON_WIDTH = 104.dp
+private val STAFF_MENU_WIDTH = 392.dp
+private val STAFF_MENU_MAX_HEIGHT = 420.dp
+private val STAFF_MENU_AVATAR_SIZE = 48.dp
+private val STAFF_MENU_SCHEDULE_DOT_SIZE = 10.dp
 
 private data class ActiveSaleContext(
     val tableId: String?,
@@ -680,6 +684,24 @@ private fun formatFinnishNowStamp(now: LocalDateTime): String {
     return "$day ${now.dayOfMonth}.${now.monthValue}. ${now.format(ShellNowFormatter)}"
 }
 
+private fun plannedShiftStaffIdsForScheduleDate(
+    schedule: ShiftScheduleSnapshot?,
+    date: LocalDate,
+): Set<String> {
+    if (schedule == null) return emptySet()
+    return schedule.days
+        .asSequence()
+        .filter { day -> day.date == date }
+        .filter { day ->
+            day.publicationStatus == ShiftSchedulePublicationStatus.PUBLISHED ||
+                day.publicationStatus == ShiftSchedulePublicationStatus.CLOSED
+        }
+        .flatMap { it.plannedShifts.asSequence() }
+        .filter { shift -> shift.staffId.isNotBlank() }
+        .map { it.staffId }
+        .toSet()
+}
+
 @Composable
 private fun staffPhotoPainterFor(staff: StaffMember): Painter? {
     return staffPhotoPainterForStaffId(staff.id)
@@ -728,6 +750,40 @@ private fun ShellNowStamp(
 }
 
 @Composable
+private fun ShellActiveSellerStamp(
+    label: String,
+    currentStaffName: String,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(999.dp),
+        color = AppShellPanelColor.copy(alpha = 0.92f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, AppShellBorderColor),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = AppShellTextMuted,
+                maxLines = 1,
+            )
+            Text(
+                text = currentStaffName,
+                style = MaterialTheme.typography.labelLarge,
+                color = AppShellAccentText,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
 private fun SignedInApp(
     appContainer: AppContainer,
     currentStaffId: String,
@@ -736,6 +792,7 @@ private fun SignedInApp(
 ) {
     val navController = rememberNavController()
     val scope = rememberCoroutineScope()
+    val strings = rememberCashierStrings()
     var useRichFloorPlanStyle by rememberSaveable { mutableStateOf(false) }
     val terminalSettings by appContainer.settingsRepository.observeSettings().collectAsState(
         initial = TerminalSettings(
@@ -750,13 +807,19 @@ private fun SignedInApp(
     var signOutPinError by remember { mutableStateOf<String?>(null) }
 
     var sellerSwitchDialogVisible by remember { mutableStateOf(false) }
-    var sellerSwitchSelectedStaff by remember { mutableStateOf<StaffMember?>(null) }
+    var sellerSwitchAuthStaff by remember { mutableStateOf<StaffMember?>(null) }
     var sellerSwitchPin by remember { mutableStateOf("") }
     var sellerSwitchPinError by remember { mutableStateOf<String?>(null) }
     val quickSelectStaffFlow = remember(appContainer.authRepository) {
         appContainer.authRepository.observeQuickSelectStaff()
     }
     val quickSelectStaff by quickSelectStaffFlow.collectAsState(initial = emptyList())
+    val staffMenuStaff = remember(quickSelectStaff) {
+        quickSelectStaff.sortedWith(
+            compareBy<StaffMember> { staffSurnameSortKey(it.displayName) }
+                .thenBy { it.displayName.lowercase() },
+        )
+    }
 
     val context = LocalContext.current
     val shiftJournalPrefs = remember { context.getSharedPreferences("shift_journal_notes", 0) }
@@ -803,16 +866,43 @@ private fun SignedInApp(
         }
         entries.distinctBy { it.staffId }
     }
+    var staffMenuScheduleSnapshot by remember { mutableStateOf<ShiftScheduleSnapshot?>(null) }
+    val staffMenuScheduleDate = remember(now) { now.toLocalDate() }
+    LaunchedEffect(appContainer.shiftScheduleRepository, staffMenuScheduleDate) {
+        staffMenuScheduleSnapshot = when (
+            val result = appContainer.shiftScheduleRepository.fetchPosSchedule(
+                staffMenuScheduleDate,
+                staffMenuScheduleDate,
+            )
+        ) {
+            is PosResult.Success -> result.value
+            is PosResult.Failure -> {
+                Log.d("AIROS", "[AirosPosApp] staff menu schedule truth unavailable: ${result.message}")
+                null
+            }
+        }
+    }
+    val staffMenuPlannedTodayStaffIds = remember(staffMenuScheduleSnapshot, staffMenuScheduleDate) {
+        plannedShiftStaffIdsForScheduleDate(staffMenuScheduleSnapshot, staffMenuScheduleDate)
+    }
 
-    fun addShiftJournalNote(text: String, authorName: String = currentStaffName.ifBlank { "Tuntematon" }) {
+    fun addShiftJournalNote(text: String, authorName: String = currentStaffName.ifBlank { "Tuntematon" }): Boolean {
+        if (text.isBlank()) return false
         val note = JournalNote(
             text = text,
             authorName = authorName,
             timestampMillis = System.currentTimeMillis(),
         )
-        val updated = journalNotes + note
-        journalNotes = updated
-        saveJournalNotesToPrefs(shiftJournalPrefs, updated)
+        val persistedNotes = loadJournalNotesFromPrefs(shiftJournalPrefs)
+        val baseNotes = if (persistedNotes.size > journalNotes.size) persistedNotes else journalNotes
+        val updated = baseNotes + note
+        if (saveJournalNotesToPrefs(shiftJournalPrefs, updated)) {
+            journalNotes = updated
+            return true
+        } else {
+            Toast.makeText(context, "Vuoropäiväkirjamerkintää ei voitu tallentaa.", Toast.LENGTH_LONG).show()
+            return false
+        }
     }
 
     fun startCurrentWorktime() {
@@ -862,10 +952,101 @@ private fun SignedInApp(
         signOutPin = ""
         signOutPinError = null
         sellerSwitchDialogVisible = false
-        sellerSwitchSelectedStaff = null
+        sellerSwitchAuthStaff = null
         sellerSwitchPin = ""
         sellerSwitchPinError = null
         signOutDialogVisible = true
+    }
+
+    fun handleStaffMenuStaffTap(staff: StaffMember) {
+        if (staff.id == currentStaffId) {
+            sellerSwitchDialogVisible = false
+            navController.navigate(Routes.Shift) {
+                launchSingleTop = true
+            }
+            return
+        }
+        sellerSwitchDialogVisible = false
+        sellerSwitchAuthStaff = staff
+        sellerSwitchPin = ""
+        sellerSwitchPinError = null
+    }
+
+    fun submitSellerSwitchPin(staff: StaffMember, pin: String) {
+        if (staffPanelAttendanceBusy) return
+        val isClockedIn = staffPanelClockedInStaff.any { it.staffId == staff.id }
+        val hasPlannedShiftToday = staff.id in staffMenuPlannedTodayStaffIds
+        scope.launch {
+            staffPanelAttendanceBusy = true
+            try {
+                when (val signInResult = appContainer.authRepository.signInWithPin(staff.id, pin)) {
+                    is PosResult.Success -> {
+                        if (hasPlannedShiftToday && !isClockedIn) {
+                            when (val clockInResult = appContainer.worktimeAttendanceRepository.clockIn(staff.id, staff.displayName)) {
+                                is PosResult.Success -> addShiftJournalNote(
+                                    text = "${staff.displayName} työvuorossa",
+                                    authorName = staff.displayName,
+                                )
+                                is PosResult.Failure -> {
+                                    Toast.makeText(context, clockInResult.message, Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
+                        sellerSwitchAuthStaff = null
+                        sellerSwitchPin = ""
+                        sellerSwitchPinError = null
+                        Toast.makeText(
+                            context,
+                            "${strings[CashierStringKey.StaffMenuSellerToastPrefix]}: ${staff.displayName}",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                    is PosResult.Failure -> {
+                        sellerSwitchPin = ""
+                        sellerSwitchPinError = signInResult.message
+                    }
+                }
+            } finally {
+                staffPanelAttendanceBusy = false
+            }
+        }
+    }
+
+    fun handleNfcSellerSwitch(staffId: String, staffName: String) {
+        if (staffPanelAttendanceBusy) return
+        val isClockedIn = staffPanelClockedInStaff.any { it.staffId == staffId }
+        val hasPlannedShiftToday = staffId in staffMenuPlannedTodayStaffIds
+        scope.launch {
+            staffPanelAttendanceBusy = true
+            try {
+                when (val signInResult = appContainer.authRepository.signInWithNfc(staffId)) {
+                    is PosResult.Success -> {
+                        if (hasPlannedShiftToday && !isClockedIn) {
+                            when (val clockInResult = appContainer.worktimeAttendanceRepository.clockIn(staffId, staffName)) {
+                                is PosResult.Success -> addShiftJournalNote(
+                                    text = "$staffName työvuorossa",
+                                    authorName = staffName,
+                                )
+                                is PosResult.Failure -> {
+                                    Toast.makeText(context, clockInResult.message, Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
+                        sellerSwitchDialogVisible = false
+                        Toast.makeText(
+                            context,
+                            "${strings[CashierStringKey.StaffMenuSellerToastPrefix]}: $staffName",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                    is PosResult.Failure -> {
+                        Toast.makeText(context, signInResult.message, Toast.LENGTH_LONG).show()
+                    }
+                }
+            } finally {
+                staffPanelAttendanceBusy = false
+            }
+        }
     }
 
     // Capture each successful authentication / recognition as a factual event:
@@ -950,8 +1131,8 @@ private fun SignedInApp(
         }
     }
 
-    // NFC badge while already signed in changes the active seller only.
-    // It must not clock anyone in or out of worktime.
+    // NFC badge while already signed in authenticates the next seller. Worktime starts
+    // only when real current planned-shift truth exists for that staff member.
     val sellerSwitchContext = LocalContext.current
     LaunchedEffect(currentStaffId) {
         NfcProbe.status.drop(1).collect { status ->
@@ -959,18 +1140,13 @@ private fun SignedInApp(
             val r = status.lastStaffResolution as? NfcStaffResolution.Matched ?: return@collect
             val match = r.match
             if (match.staffId == currentStaffId) {
-                Toast.makeText(sellerSwitchContext, "Already signed in as ${match.displayName}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    sellerSwitchContext,
+                    "${strings[CashierStringKey.StaffMenuAlreadyActivePrefix]}: ${match.displayName}",
+                    Toast.LENGTH_SHORT,
+                ).show()
             } else {
-                scope.launch {
-                    when (val result = appContainer.authRepository.signInWithNfc(match.staffId)) {
-                        is PosResult.Success -> {
-                            Toast.makeText(sellerSwitchContext, "Seller: ${match.displayName}", Toast.LENGTH_SHORT).show()
-                        }
-                        is PosResult.Failure -> {
-                            Toast.makeText(sellerSwitchContext, result.message, Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                }
+                handleNfcSellerSwitch(match.staffId, match.displayName)
             }
         }
     }
@@ -1029,12 +1205,8 @@ private fun SignedInApp(
     ) {
         AppRail(
             navController = navController,
-            currentStaffName = currentStaffName,
             onSellerSwitchRequested = {
                 if (!signOutDialogVisible) {
-                    sellerSwitchSelectedStaff = null
-                    sellerSwitchPin = ""
-                    sellerSwitchPinError = null
                     sellerSwitchDialogVisible = true
                 }
             },
@@ -1243,9 +1415,7 @@ private fun SignedInApp(
                         attendanceMessage = attendanceSyncBlockedMessage ?: attendanceMessage,
                         onClockIn = ::startCurrentWorktime,
                         onClockOut = {
-                            signOutPin = ""
-                            signOutPinError = null
-                            signOutDialogVisible = true
+                            endWorktimeForStaff(currentStaffId, currentStaffName)
                         },
                         journalNotes = journalNotes,
                         onNoteAdded = { text -> addShiftJournalNote(text) },
@@ -2441,12 +2611,19 @@ private fun SignedInApp(
                     )
                 }
                 }
-                ShellNowStamp(
-                    now = now,
+                Row(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(top = 4.dp, end = 8.dp),
-                )
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ShellActiveSellerStamp(
+                        label = strings[CashierStringKey.RailActive],
+                        currentStaffName = currentStaffName,
+                    )
+                    ShellNowStamp(now = now)
+                }
             }
         }
     }
@@ -2484,14 +2661,70 @@ private fun SignedInApp(
             offset = sellerSwitchPopupOffset,
             onDismissRequest = {
                 sellerSwitchDialogVisible = false
-                sellerSwitchSelectedStaff = null
-                sellerSwitchPin = ""
-                sellerSwitchPinError = null
             },
             properties = PopupProperties(focusable = true),
         ) {
             Surface(
-                modifier = Modifier.width(360.dp),
+                modifier = Modifier.width(STAFF_MENU_WIDTH),
+                shape = RoundedCornerShape(16.dp),
+                color = AppShellPanelColor,
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    Text(
+                        text = strings[CashierStringKey.StaffMenuTitle],
+                        style = MaterialTheme.typography.titleMedium,
+                        color = AppShellTextPrimary,
+                    )
+                    Text(
+                        text = strings[CashierStringKey.StaffMenuPrompt],
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AppShellTextSecondary,
+                    )
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = STAFF_MENU_MAX_HEIGHT)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        staffMenuStaff.forEach { staff ->
+                            StaffMenuRow(
+                                staff = staff,
+                                scheduledToday = staff.id in staffMenuPlannedTodayStaffIds,
+                                enabled = !staffPanelAttendanceBusy,
+                                onClick = { handleStaffMenuStaffTap(staff) },
+                            )
+                        }
+                    }
+                    Button(
+                        onClick = { requestSignOut() },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = AppShellButtonMutedColor,
+                            contentColor = AppShellTextSecondary,
+                        ),
+                    ) {
+                        Text(strings[CashierStringKey.StaffMenuSignOut])
+                    }
+                }
+            }
+        }
+    }
+
+    sellerSwitchAuthStaff?.let { staff ->
+        Dialog(
+            onDismissRequest = {
+                if (!staffPanelAttendanceBusy) {
+                    sellerSwitchAuthStaff = null
+                    sellerSwitchPin = ""
+                    sellerSwitchPinError = null
+                }
+            },
+        ) {
+            Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = AppShellPanelColor,
             ) {
@@ -2500,146 +2733,62 @@ private fun SignedInApp(
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
                     Text(
-                        text = "Switch seller",
+                        text = strings[CashierStringKey.StaffMenuAuthTitle],
                         style = MaterialTheme.typography.titleMedium,
                         color = AppShellTextPrimary,
                     )
-                    if (sellerSwitchSelectedStaff == null) {
+                    Text(
+                        text = staff.displayName,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = AppShellAccentText,
+                    )
+                    Text(
+                        text = strings[CashierStringKey.StaffMenuAuthPrompt],
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AppShellTextSecondary,
+                    )
+                    Text(
+                        text = "●".repeat(sellerSwitchPin.length).padEnd(4, '○'),
+                        style = MaterialTheme.typography.titleLarge,
+                        color = AppShellTextPrimary,
+                    )
+                    sellerSwitchPinError?.let {
                         Text(
-                            text = "Who is taking over?",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = AppShellTextSecondary,
+                            text = it,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
                         )
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(max = 260.dp)
-                                .verticalScroll(rememberScrollState()),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            quickSelectStaff.forEach { staff ->
-                                Button(
-                                    onClick = {
-                                        sellerSwitchSelectedStaff = staff
-                                        sellerSwitchPin = ""
-                                        sellerSwitchPinError = null
-                                    },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = AppShellButtonColor,
-                                        contentColor = AppShellTextPrimary,
-                                    ),
-                                ) {
-                                    Row(
-                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        StaffMiniAvatar(
-                                            staffName = staff.displayName,
-                                            photoPainter = staffPhotoPainterFor(staff),
-                                            modifier = Modifier.size(30.dp),
-                                        )
-                                        Text(staff.displayName)
-                                    }
+                    }
+                    NumericPinPad(
+                        onDigit = { digit ->
+                            if (!staffPanelAttendanceBusy && sellerSwitchPin.length < 4) {
+                                val updated = sellerSwitchPin + digit
+                                sellerSwitchPin = updated
+                                if (updated.length == 4) {
+                                    submitSellerSwitchPin(staff, updated)
                                 }
                             }
-                        }
-                        Button(
-                            onClick = { requestSignOut() },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = AppShellButtonMutedColor,
-                                contentColor = AppShellTextSecondary,
-                            ),
-                        ) {
-                            Text("Sign out")
-                        }
-                    } else {
-                        val selectedStaff = sellerSwitchSelectedStaff!!
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            StaffMiniAvatar(
-                                staffName = selectedStaff.displayName,
-                                photoPainter = staffPhotoPainterFor(selectedStaff),
-                                modifier = Modifier.size(34.dp),
-                            )
-                            Text(
-                                text = selectedStaff.displayName,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = AppShellTextSecondary,
-                            )
-                        }
-                        Text(
-                            text = "●".repeat(sellerSwitchPin.length).padEnd(4, '○'),
-                            style = MaterialTheme.typography.titleLarge,
-                            color = AppShellTextPrimary,
-                        )
-                        sellerSwitchPinError?.let {
-                            Text(
-                                text = it,
-                                color = MaterialTheme.colorScheme.error,
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                        }
-                        NumericPinPad(
-                            onDigit = { digit ->
-                                if (sellerSwitchPin.length < 4) {
-                                    val updated = sellerSwitchPin + digit
-                                    sellerSwitchPin = updated
-                                    if (updated.length == 4) {
-                                        val isSamePerson = selectedStaff.id == currentStaffId
-                                        scope.launch {
-                                            when (val result = appContainer.authRepository.signInWithPin(selectedStaff.id, updated)) {
-                                                is PosResult.Success -> {
-                                                    sellerSwitchDialogVisible = false
-                                                    sellerSwitchPin = ""
-                                                    sellerSwitchPinError = null
-                                                    sellerSwitchSelectedStaff = null
-                                                    if (isSamePerson) {
-                                                        Toast.makeText(
-                                                            sellerSwitchContext,
-                                                            "Already signed in as ${selectedStaff.displayName}",
-                                                            Toast.LENGTH_SHORT,
-                                                        ).show()
-                                                    } else {
-                                                        Toast.makeText(
-                                                            sellerSwitchContext,
-                                                            "Seller: ${selectedStaff.displayName}",
-                                                            Toast.LENGTH_SHORT,
-                                                        ).show()
-                                                    }
-                                                }
-                                                is PosResult.Failure -> {
-                                                    sellerSwitchPin = ""
-                                                    sellerSwitchPinError = result.message
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            },
-                            onBackspace = {
-                                if (sellerSwitchPin.isNotEmpty()) sellerSwitchPin = sellerSwitchPin.dropLast(1)
-                            },
-                        )
-                        Text(
-                            text = "← Change staff",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = AppShellTextMuted,
-                            modifier = Modifier.clickable {
-                                sellerSwitchSelectedStaff = null
-                                sellerSwitchPin = ""
-                                sellerSwitchPinError = null
-                            },
-                        )
-                        Text(
-                            text = "Sign out",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = AppShellTextMuted,
-                            modifier = Modifier.clickable { requestSignOut() },
-                        )
+                        },
+                        onBackspace = {
+                            if (!staffPanelAttendanceBusy && sellerSwitchPin.isNotEmpty()) {
+                                sellerSwitchPin = sellerSwitchPin.dropLast(1)
+                            }
+                        },
+                    )
+                    Button(
+                        onClick = {
+                            sellerSwitchAuthStaff = null
+                            sellerSwitchPin = ""
+                            sellerSwitchPinError = null
+                        },
+                        enabled = !staffPanelAttendanceBusy,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = AppShellButtonMutedColor,
+                            contentColor = AppShellTextSecondary,
+                        ),
+                    ) {
+                        Text(strings[CashierStringKey.StaffMenuAuthCancel])
                     }
                 }
             }
@@ -3238,7 +3387,6 @@ private suspend fun fetchCamerasPageFrameBitmap(urlString: String): Bitmap = wit
 @Composable
 private fun AppRail(
     navController: NavHostController,
-    currentStaffName: String,
     onSellerSwitchRequested: () -> Unit,
     isQuickSaleDirty: Boolean = false,
     onNavigationBlocked: ((String) -> Unit)? = null,
@@ -3309,46 +3457,58 @@ private fun AppRail(
 
             Spacer(modifier = Modifier.weight(1f))
 
-            // Active seller indicator — tappable to open seller-switch PIN dialog.
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 6.dp)
-                    .clickable(onClick = onSellerSwitchRequested),
-                shape = RoundedCornerShape(12.dp),
-                color = AppShellButtonMutedColor,
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 8.dp, horizontal = 4.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Text(
-                        text = strings[CashierStringKey.RailActive],
-                        style = MaterialTheme.typography.labelSmall,
-                        color = AppShellTextMuted,
-                    )
-                    Text(
-                        text = currentStaffName,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = AppShellAccentText,
-                        textAlign = TextAlign.Center,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            }
-
             RailButton(
-                label = "MYYJÄ",
+                label = strings[CashierStringKey.RailStaff],
                 icon = Icons.Filled.Person,
                 iconContainerColor = Color(0xFF243A2F),
                 iconTint = Color(0xFFB7F3C8),
                 selected = isRailDestinationSelected(currentRoute, Routes.Shift),
                 onClick = onSellerSwitchRequested,
             )
+        }
+    }
+}
+
+@Composable
+private fun StaffMenuRow(
+    staff: StaffMember,
+    scheduledToday: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onClick),
+        shape = RoundedCornerShape(14.dp),
+        color = AppShellButtonColor,
+        border = androidx.compose.foundation.BorderStroke(1.dp, AppShellBorderColor),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            StaffMiniAvatar(
+                staffName = staff.displayName,
+                photoPainter = staffPhotoPainterFor(staff),
+                modifier = Modifier.size(STAFF_MENU_AVATAR_SIZE),
+            )
+            Text(
+                text = staff.displayName,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.titleMedium,
+                color = AppShellTextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (scheduledToday) {
+                Box(
+                    modifier = Modifier
+                        .size(STAFF_MENU_SCHEDULE_DOT_SIZE)
+                        .background(Color(0xFF7DD88F), CircleShape),
+                )
+            }
         }
     }
 }
@@ -3444,6 +3604,11 @@ private fun staffInitials(displayName: String): String {
         .ifBlank { "AI" }
 }
 
+private fun staffSurnameSortKey(displayName: String): String {
+    val parts = displayName.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+    return (parts.lastOrNull() ?: displayName).lowercase()
+}
+
 @Composable
 private fun RailButton(
     label: String,
@@ -3516,7 +3681,7 @@ private fun loadJournalNotesFromPrefs(prefs: SharedPreferences): List<JournalNot
     }.getOrDefault(emptyList())
 }
 
-private fun saveJournalNotesToPrefs(prefs: SharedPreferences, notes: List<JournalNote>) {
+private fun saveJournalNotesToPrefs(prefs: SharedPreferences, notes: List<JournalNote>): Boolean {
     val arr = JSONArray()
     notes.forEach { note ->
         arr.put(
@@ -3527,7 +3692,7 @@ private fun saveJournalNotesToPrefs(prefs: SharedPreferences, notes: List<Journa
             },
         )
     }
-    prefs.edit().putString("notes_json", arr.toString()).apply()
+    return prefs.edit().putString("notes_json", arr.toString()).commit()
 }
 
 private fun loadLastSeenEventsFromPrefs(prefs: SharedPreferences): List<LastSeenAuthEvent> {
