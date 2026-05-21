@@ -1195,7 +1195,7 @@ private fun WorktimeSummaryCard(
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 52.dp),
+                    .heightIn(min = 40.dp),
                 shape = ShiftInnerShape,
                 color = ShiftPanelDeepColor.copy(alpha = 0.30f),
                 border = BorderStroke(1.dp, ShiftBorderColor.copy(alpha = 0.14f)),
@@ -1204,13 +1204,17 @@ private fun WorktimeSummaryCard(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 10.dp, vertical = 7.dp),
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Text(
-                            text = "Työaika alkoi",
+                            text = "Alkoi",
                             style = MaterialTheme.typography.labelSmall,
                             color = ShiftTextMuted,
                             maxLines = 1,
@@ -1225,7 +1229,11 @@ private fun WorktimeSummaryCard(
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
-                    Column(modifier = Modifier.weight(0.70f)) {
+                    Row(
+                        modifier = Modifier.weight(0.70f),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Text(
                             text = "Kesto",
                             style = MaterialTheme.typography.labelSmall,
