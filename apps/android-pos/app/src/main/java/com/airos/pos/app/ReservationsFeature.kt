@@ -69,6 +69,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.OffsetMapping
@@ -76,6 +77,8 @@ import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.intl.Locale as ComposeLocale
+import androidx.compose.ui.text.intl.LocaleList as ComposeLocaleList
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -89,6 +92,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.model.RestaurantTable
 import com.airos.pos.core.model.ServiceSpotType
+import com.airos.pos.core.model.StaffUiLanguage
 import com.airos.pos.core.ui.PosPane
 import com.airos.pos.core.ui.StatusBanner
 import com.airos.pos.domain.TableRepository
@@ -838,6 +842,7 @@ fun ReservationsRoute(
     title: String,
     selectTableLabel: String,
     noTableSelectedLabel: String,
+    textInputLanguage: StaffUiLanguage = StaffUiLanguage.FI,
     pickedTableId: String?,
     pickedTableLabel: String?,
     onPickedTableConsumed: () -> Unit,
@@ -862,6 +867,7 @@ fun ReservationsRoute(
         state = state,
         selectTableLabel = selectTableLabel,
         noTableSelectedLabel = noTableSelectedLabel,
+        textInputLanguage = textInputLanguage,
         onPreviousDay = viewModel::previousDay,
         onToday = viewModel::today,
         onNextDay = viewModel::nextDay,
@@ -916,6 +922,7 @@ private fun ReservationsScreen(
     state: ReservationsUiState,
     selectTableLabel: String,
     noTableSelectedLabel: String,
+    textInputLanguage: StaffUiLanguage,
     onPreviousDay: () -> Unit,
     onToday: () -> Unit,
     onNextDay: () -> Unit,
@@ -1001,6 +1008,7 @@ private fun ReservationsScreen(
             state = state,
             selection = selection,
             reservations = reservationsForPulseSelection(state, selection),
+            textInputLanguage = textInputLanguage,
             onDismiss = onCloseSlotWorkbench,
             onCustomerNameChange = onCustomerNameChange,
             onCustomerPhoneChange = onCustomerPhoneChange,
@@ -1022,6 +1030,7 @@ private fun ReservationsScreen(
             state = state,
             selectTableLabel = selectTableLabel,
             noTableSelectedLabel = noTableSelectedLabel,
+            textInputLanguage = textInputLanguage,
             onDismiss = onCloseWizard,
             onStepChange = onWizardStepChange,
             onCalendarClick = { showDatePicker = true },
@@ -1585,11 +1594,37 @@ private fun reservationPulseSlotDisplayColor(
     }
 }
 
+private fun staffTextKeyboardOptions(
+    language: StaffUiLanguage,
+    capitalization: KeyboardCapitalization = KeyboardCapitalization.None,
+    keyboardType: KeyboardType = KeyboardType.Text,
+    imeAction: ImeAction = ImeAction.Default,
+): KeyboardOptions {
+    return KeyboardOptions(
+        capitalization = capitalization,
+        keyboardType = keyboardType,
+        imeAction = imeAction,
+        hintLocales = language.keyboardLocaleList(),
+    )
+}
+
+private fun StaffUiLanguage.keyboardLocaleList(): ComposeLocaleList {
+    return ComposeLocaleList(
+        ComposeLocale(
+            when (this) {
+                StaffUiLanguage.FI -> "fi-FI"
+                StaffUiLanguage.EN -> "en-US"
+            },
+        ),
+    )
+}
+
 @Composable
 private fun ReservationSlotWorkbenchDialog(
     state: ReservationsUiState,
     selection: ReservationPulseSlotSelection,
     reservations: List<BackendReservation>,
+    textInputLanguage: StaffUiLanguage,
     onDismiss: () -> Unit,
     onCustomerNameChange: (String) -> Unit,
     onCustomerPhoneChange: (String) -> Unit,
@@ -1701,6 +1736,7 @@ private fun ReservationSlotWorkbenchDialog(
 
                         ReservationSlotWorkbenchGuestSection(
                             form = form,
+                            textInputLanguage = textInputLanguage,
                             onCustomerNameChange = onCustomerNameChange,
                             onCustomerPhoneChange = onCustomerPhoneChange,
                             onCustomerEmailChange = onCustomerEmailChange,
@@ -1980,6 +2016,7 @@ private fun formatReservationDuration(minutes: Int): String {
 @Composable
 private fun ReservationSlotWorkbenchGuestSection(
     form: ReservationFormState,
+    textInputLanguage: StaffUiLanguage,
     onCustomerNameChange: (String) -> Unit,
     onCustomerPhoneChange: (String) -> Unit,
     onCustomerEmailChange: (String) -> Unit,
@@ -2013,7 +2050,8 @@ private fun ReservationSlotWorkbenchGuestSection(
                     onValueChange = onCustomerNameChange,
                     label = { Text("Nimi *") },
                     singleLine = true,
-                    keyboardOptions = KeyboardOptions(
+                    keyboardOptions = staffTextKeyboardOptions(
+                        language = textInputLanguage,
                         capitalization = KeyboardCapitalization.Words,
                         keyboardType = KeyboardType.Text,
                     ),
@@ -2024,7 +2062,10 @@ private fun ReservationSlotWorkbenchGuestSection(
                     onValueChange = onCustomerPhoneChange,
                     label = { Text("Puhelin (vapaaehtoinen)") },
                     singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                    keyboardOptions = staffTextKeyboardOptions(
+                        language = textInputLanguage,
+                        keyboardType = KeyboardType.Phone,
+                    ),
                     visualTransformation = FinnishPhoneVisualTransformation,
                     modifier = Modifier.weight(1f),
                 )
@@ -2044,6 +2085,10 @@ private fun ReservationSlotWorkbenchGuestSection(
                 OutlinedTextField(
                     value = form.customerEmail,
                     onValueChange = onCustomerEmailChange,
+                    keyboardOptions = staffTextKeyboardOptions(
+                        language = textInputLanguage,
+                        keyboardType = KeyboardType.Email,
+                    ),
                     label = { Text("Sähköposti (vapaaehtoinen)") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
@@ -2052,7 +2097,8 @@ private fun ReservationSlotWorkbenchGuestSection(
                     value = form.allergies,
                     onValueChange = onAllergiesChange,
                     label = { Text("Allergiat (vapaaehtoinen)") },
-                    keyboardOptions = KeyboardOptions(
+                    keyboardOptions = staffTextKeyboardOptions(
+                        language = textInputLanguage,
                         capitalization = KeyboardCapitalization.Sentences,
                         keyboardType = KeyboardType.Text,
                     ),
@@ -2064,7 +2110,8 @@ private fun ReservationSlotWorkbenchGuestSection(
                     value = form.notes,
                     onValueChange = onNotesChange,
                     label = { Text("Muistiinpanot (vapaaehtoinen)") },
-                    keyboardOptions = KeyboardOptions(
+                    keyboardOptions = staffTextKeyboardOptions(
+                        language = textInputLanguage,
                         capitalization = KeyboardCapitalization.Sentences,
                         keyboardType = KeyboardType.Text,
                     ),
@@ -3177,6 +3224,7 @@ private fun ReservationWizardDialog(
     state: ReservationsUiState,
     selectTableLabel: String,
     noTableSelectedLabel: String,
+    textInputLanguage: StaffUiLanguage,
     onDismiss: () -> Unit,
     onStepChange: (ReservationWizardStep) -> Unit,
     onCalendarClick: () -> Unit,
@@ -3262,6 +3310,7 @@ private fun ReservationWizardDialog(
                     )
                     ReservationWizardStep.GUEST -> ReservationWizardGuestStep(
                         form = form,
+                        textInputLanguage = textInputLanguage,
                         onCustomerNameChange = onCustomerNameChange,
                         onCustomerPhoneChange = onCustomerPhoneChange,
                         onCustomerEmailChange = onCustomerEmailChange,
@@ -3477,6 +3526,7 @@ private fun ReservationWizardPartyStep(
 @Composable
 private fun ReservationWizardGuestStep(
     form: ReservationFormState,
+    textInputLanguage: StaffUiLanguage,
     onCustomerNameChange: (String) -> Unit,
     onCustomerPhoneChange: (String) -> Unit,
     onCustomerEmailChange: (String) -> Unit,
@@ -3493,7 +3543,8 @@ private fun ReservationWizardGuestStep(
             onValueChange = onCustomerNameChange,
             label = { Text("Nimi *") },
             singleLine = true,
-            keyboardOptions = KeyboardOptions(
+            keyboardOptions = staffTextKeyboardOptions(
+                language = textInputLanguage,
                 capitalization = KeyboardCapitalization.Words,
                 keyboardType = KeyboardType.Text,
             ),
@@ -3504,7 +3555,10 @@ private fun ReservationWizardGuestStep(
             onValueChange = onCustomerPhoneChange,
             label = { Text("Puhelin, vapaaehtoinen") },
             singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+            keyboardOptions = staffTextKeyboardOptions(
+                language = textInputLanguage,
+                keyboardType = KeyboardType.Phone,
+            ),
             visualTransformation = FinnishPhoneVisualTransformation,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -3537,6 +3591,10 @@ private fun ReservationWizardGuestStep(
             OutlinedTextField(
                 value = form.customerEmail,
                 onValueChange = onCustomerEmailChange,
+                keyboardOptions = staffTextKeyboardOptions(
+                    language = textInputLanguage,
+                    keyboardType = KeyboardType.Email,
+                ),
                 label = { Text("Sähköposti, vapaaehtoinen") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
@@ -3545,7 +3603,8 @@ private fun ReservationWizardGuestStep(
                 value = form.allergies,
                 onValueChange = onAllergiesChange,
                 label = { Text("Allergiat, vapaaehtoinen") },
-                keyboardOptions = KeyboardOptions(
+                keyboardOptions = staffTextKeyboardOptions(
+                    language = textInputLanguage,
                     capitalization = KeyboardCapitalization.Sentences,
                     keyboardType = KeyboardType.Text,
                 ),
@@ -3557,7 +3616,8 @@ private fun ReservationWizardGuestStep(
                 value = form.notes,
                 onValueChange = onNotesChange,
                 label = { Text("Muistiinpanot, vapaaehtoinen") },
-                keyboardOptions = KeyboardOptions(
+                keyboardOptions = staffTextKeyboardOptions(
+                    language = textInputLanguage,
                     capitalization = KeyboardCapitalization.Sentences,
                     keyboardType = KeyboardType.Text,
                 ),
@@ -3640,6 +3700,7 @@ private fun ReservationForm(
     modifier: Modifier,
     selectTableLabel: String,
     noTableSelectedLabel: String,
+    textInputLanguage: StaffUiLanguage = StaffUiLanguage.FI,
     onCustomerNameChange: (String) -> Unit,
     onCustomerPhoneChange: (String) -> Unit,
     onPersonsChange: (String) -> Unit,
@@ -3692,7 +3753,8 @@ private fun ReservationForm(
             onValueChange = onCustomerNameChange,
             label = { Text("Asiakkaan nimi") },
             singleLine = true,
-            keyboardOptions = KeyboardOptions(
+            keyboardOptions = staffTextKeyboardOptions(
+                language = textInputLanguage,
                 capitalization = KeyboardCapitalization.Words,
                 keyboardType = KeyboardType.Text,
             ),
@@ -3703,7 +3765,10 @@ private fun ReservationForm(
             onValueChange = onCustomerPhoneChange,
             label = { Text("Asiakkaan puhelin") },
             singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+            keyboardOptions = staffTextKeyboardOptions(
+                language = textInputLanguage,
+                keyboardType = KeyboardType.Phone,
+            ),
             visualTransformation = FinnishPhoneVisualTransformation,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -3784,7 +3849,8 @@ private fun ReservationForm(
             value = form.notes,
             onValueChange = onNotesChange,
             label = { Text("Muistiinpanot") },
-            keyboardOptions = KeyboardOptions(
+            keyboardOptions = staffTextKeyboardOptions(
+                language = textInputLanguage,
                 capitalization = KeyboardCapitalization.Sentences,
                 keyboardType = KeyboardType.Text,
             ),

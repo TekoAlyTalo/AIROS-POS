@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -24,6 +25,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
+private val PosPanelColor = Color(0xFF131E29)
+private val PosPanelAltColor = Color(0xFF182633)
+private val PosTextPrimary = Color(0xFFFBFEFF)
+private val PosTextMuted = Color(0xFFC0CCD6)
+
 @Composable
 fun PosPane(
     title: String,
@@ -34,19 +40,29 @@ fun PosPane(
     Card(
         modifier = modifier,
         shape = RoundedCornerShape(28.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = PosPanelColor,
+            contentColor = PosTextPrimary,
+        ),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .background(PosPanelColor)
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             content = {
-                Text(text = title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = PosTextPrimary,
+                    fontWeight = FontWeight.Bold,
+                )
                 supportingText?.let {
                     Text(
                         text = it,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = PosTextMuted,
                     )
                 }
                 content()
@@ -59,12 +75,13 @@ fun PosPane(
 fun MetricChip(label: String, value: String, modifier: Modifier = Modifier) {
     Surface(
         modifier = modifier,
-        color = MaterialTheme.colorScheme.surfaceVariant,
+        color = PosPanelAltColor,
+        contentColor = PosTextPrimary,
         shape = RoundedCornerShape(20.dp),
     ) {
         Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-            Text(text = label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(text = value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(text = label, style = MaterialTheme.typography.labelMedium, color = PosTextMuted)
+            Text(text = value, style = MaterialTheme.typography.titleMedium, color = PosTextPrimary, fontWeight = FontWeight.SemiBold)
         }
     }
 }
@@ -228,7 +245,7 @@ fun KeyValueRow(label: String, value: String, modifier: Modifier = Modifier) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(text = label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(text = value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Text(text = label, style = MaterialTheme.typography.bodyMedium, color = PosTextMuted)
+        Text(text = value, style = MaterialTheme.typography.titleMedium, color = PosTextPrimary, fontWeight = FontWeight.SemiBold)
     }
 }

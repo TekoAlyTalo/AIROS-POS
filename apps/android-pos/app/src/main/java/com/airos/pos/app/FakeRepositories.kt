@@ -36,6 +36,7 @@ import com.airos.pos.core.model.TableStatus
 import com.airos.pos.core.model.TableTruthSource
 import com.airos.pos.core.model.TerminalSettings
 import com.airos.pos.core.model.StaffUiPreferences
+import com.airos.pos.core.model.StaffUiLanguage
 import com.airos.pos.core.model.StaffTableMapViewPreference
 import com.airos.pos.core.model.Ticket
 import com.airos.pos.core.model.TicketLine
@@ -911,6 +912,10 @@ class DataStoreStaffUiPreferencesRepository(
         return preferencesStore.observeTableMapViewMode(staffId)
     }
 
+    override fun observeUiLanguage(staffId: String): Flow<StaffUiLanguage> {
+        return preferencesStore.observeUiLanguage(staffId)
+    }
+
     override suspend fun setTableMapViewMode(
         staffId: String,
         mode: StaffTableMapViewPreference,
@@ -923,6 +928,13 @@ class DataStoreStaffUiPreferencesRepository(
         viewport: StaffFloorPlanViewportPreference,
     ) {
         preferencesStore.setFloorPlanViewport(staffId, viewport)
+    }
+
+    override suspend fun setUiLanguage(
+        staffId: String,
+        language: StaffUiLanguage,
+    ) {
+        preferencesStore.setUiLanguage(staffId, language)
     }
 }
 

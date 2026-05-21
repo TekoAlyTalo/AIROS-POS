@@ -125,8 +125,7 @@ internal class CashierStrings(private val language: CashierLanguage) {
 }
 
 @Composable
-internal fun rememberCashierStrings(): CashierStrings {
-    val language = remember { CashierLanguage.FI }
+internal fun rememberCashierStrings(language: CashierLanguage = CashierLanguage.FI): CashierStrings {
     return remember(language) { CashierStrings(language) }
 }
 

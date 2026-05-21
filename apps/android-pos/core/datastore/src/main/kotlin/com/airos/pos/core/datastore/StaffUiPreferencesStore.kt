@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.airos.pos.core.model.StaffFloorPlanViewportPreference
 import com.airos.pos.core.model.StaffUiPreferences
+import com.airos.pos.core.model.StaffUiLanguage
 import com.airos.pos.core.model.StaffTableMapViewPreference
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -40,12 +41,19 @@ class StaffUiPreferencesStore(
                         panX = preferences[floorPlanPanXKey(staffId)],
                         panY = preferences[floorPlanPanYKey(staffId)],
                     ),
+                    uiLanguage = preferences[uiLanguageKey(staffId)]
+                        ?.toStaffUiLanguage()
+                        ?: StaffUiLanguage.FI,
                 )
             }
     }
 
     fun observeTableMapViewMode(staffId: String): Flow<StaffTableMapViewPreference> {
         return observeStaffUiPreferences(staffId).map { it.tableMapViewMode }
+    }
+
+    fun observeUiLanguage(staffId: String): Flow<StaffUiLanguage> {
+        return observeStaffUiPreferences(staffId).map { it.uiLanguage }
     }
 
     suspend fun setTableMapViewMode(
@@ -71,8 +79,21 @@ class StaffUiPreferencesStore(
         }
     }
 
+    suspend fun setUiLanguage(
+        staffId: String,
+        language: StaffUiLanguage,
+    ) {
+        context.staffUiPreferencesDataStore.edit { preferences ->
+            preferences[uiLanguageKey(staffId)] = language.name
+        }
+    }
+
     private fun tableMapViewModeKey(staffId: String): Preferences.Key<String> {
         return stringPreferencesKey("table_map_view_mode_${staffId.trim()}")
+    }
+
+    private fun uiLanguageKey(staffId: String): Preferences.Key<String> {
+        return stringPreferencesKey("ui_language_${staffId.trim()}")
     }
 
     private fun floorPlanZoomScaleKey(staffId: String): Preferences.Key<Float> {
@@ -90,5 +111,10 @@ class StaffUiPreferencesStore(
     private fun String.toStaffTableMapViewPreference(): StaffTableMapViewPreference {
         return runCatching { StaffTableMapViewPreference.valueOf(this) }
             .getOrDefault(StaffTableMapViewPreference.FLOOR_PLAN)
+    }
+
+    private fun String.toStaffUiLanguage(): StaffUiLanguage {
+        return runCatching { StaffUiLanguage.valueOf(this) }
+            .getOrDefault(StaffUiLanguage.FI)
     }
 }

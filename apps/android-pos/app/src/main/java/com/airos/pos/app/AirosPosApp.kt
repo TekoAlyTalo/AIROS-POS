@@ -77,6 +77,8 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import com.airos.pos.core.model.StaffMember
+import com.airos.pos.core.model.StaffUiLanguage
+import com.airos.pos.core.model.StaffUiPreferences
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -154,12 +156,12 @@ import java.net.URL
 import java.net.URLEncoder
 import androidx.compose.ui.unit.IntOffset
 
-private val AppShellBackground = Color(0xFF060C12)
-private val AppShellRailColor = Color(0xFF09121A)
-private val AppShellPanelColor = Color(0xFF101A23)
-private val AppShellBorderColor = Color(0x18FFFFFF)
-private val AppShellButtonColor = Color(0xFF121C27)
-private val AppShellButtonMutedColor = Color(0xFF0F171F)
+private val AppShellBackground = Color(0xFF0D151E)
+private val AppShellRailColor = Color(0xFF131E29)
+private val AppShellPanelColor = Color(0xFF131E29)
+private val AppShellBorderColor = Color(0x14FFFFFF)
+private val AppShellButtonColor = Color(0xFF182633)
+private val AppShellButtonMutedColor = Color(0xFF131E29)
 private val AppShellButtonActiveColor = Color(0xFF163847)
 private val AppShellTextPrimary = Color(0xFFFBFEFF)
 private val AppShellTextSecondary = Color(0xFFE1EBF2)
@@ -794,7 +796,12 @@ private fun SignedInApp(
 ) {
     val navController = rememberNavController()
     val scope = rememberCoroutineScope()
-    val strings = rememberCashierStrings()
+    val staffUiPreferencesFlow = remember(appContainer.staffUiPreferencesRepository, currentStaffId) {
+        appContainer.staffUiPreferencesRepository.observeStaffUiPreferences(currentStaffId)
+    }
+    val staffUiPreferences by staffUiPreferencesFlow.collectAsState(initial = StaffUiPreferences())
+    val staffUiLanguage = staffUiPreferences.uiLanguage
+    val strings = rememberCashierStrings(staffUiLanguage.toCashierLanguage())
     var useRichFloorPlanStyle by rememberSaveable { mutableStateOf(false) }
     val terminalSettings by appContainer.settingsRepository.observeSettings().collectAsState(
         initial = TerminalSettings(
@@ -1291,6 +1298,7 @@ private fun SignedInApp(
     ) {
         AppRail(
             navController = navController,
+            strings = strings,
             onSellerSwitchRequested = {
                 if (!signOutDialogVisible) {
                     sellerSwitchDialogVisible = true
@@ -1493,6 +1501,7 @@ private fun SignedInApp(
                         scheduleLoading = scheduleLoading,
                         scheduleMessage = scheduleMessage,
                         ownSchedule = ownScheduleSnapshot,
+                        textInputLanguage = staffUiLanguage,
                         ownScheduleLoading = ownScheduleLoading,
                         ownScheduleMessage = ownScheduleMessage,
                         attendanceStateLoading = false,
@@ -2150,7 +2159,6 @@ private fun SignedInApp(
                 }
 
                 composable(Routes.Reservations) { entry ->
-                    val strings = rememberCashierStrings()
                     val reservationPlaceId by entry.savedStateHandle
                         .getStateFlow<String?>(ReservationPlaceResultTableIdKey, null)
                         .collectAsState()
@@ -2163,6 +2171,7 @@ private fun SignedInApp(
                         title = strings[CashierStringKey.ReservationsTitle],
                         selectTableLabel = strings[CashierStringKey.ReservationsSelectTable],
                         noTableSelectedLabel = strings[CashierStringKey.ReservationsNoTableSelected],
+                        textInputLanguage = staffUiLanguage,
                         pickedTableId = reservationPlaceId,
                         pickedTableLabel = reservationPlaceLabel,
                         onPickedTableConsumed = {
@@ -2639,10 +2648,17 @@ private fun SignedInApp(
                     }
                     SettingsScreen(
                         state = state,
+                        currentStaffName = currentStaffName,
+                        staffUiLanguage = staffUiLanguage,
                         onTerminalNameChanged = viewModel::updateTerminalNameInput,
                         onEdgeBaseUrlChanged = viewModel::updateEdgeBaseUrlInput,
                         onRestaurantKeyChanged = viewModel::updateRestaurantKeyInput,
                         onDefaultOpeningFloatChanged = viewModel::updateDefaultOpeningFloatInput,
+                        onStaffUiLanguageChanged = { language ->
+                            scope.launch {
+                                appContainer.staffUiPreferencesRepository.setUiLanguage(currentStaffId, language)
+                            }
+                        },
                         onSaveSettings = viewModel::saveSettings,
                         onOfflineModeChanged = viewModel::setOfflineMode,
                         onNfcDirectLoginChanged = viewModel::setNfcDirectLoginEnabled,
@@ -3446,6 +3462,13 @@ private fun CamerasPageRole.sortOrder(): Int {
     }
 }
 
+private fun StaffUiLanguage.toCashierLanguage(): CashierLanguage {
+    return when (this) {
+        StaffUiLanguage.FI -> CashierLanguage.FI
+        StaffUiLanguage.EN -> CashierLanguage.EN
+    }
+}
+
 private fun camerasPageLatestFrameUrl(
     edgeBaseUrl: String,
     cameraId: String,
@@ -3483,13 +3506,13 @@ private suspend fun fetchCamerasPageFrameBitmap(urlString: String): Bitmap = wit
 @Composable
 private fun AppRail(
     navController: NavHostController,
+    strings: CashierStrings,
     onSellerSwitchRequested: () -> Unit,
     isQuickSaleDirty: Boolean = false,
     onNavigationBlocked: ((String) -> Unit)? = null,
     onNavigateToMenu: (() -> Unit)? = null,
     onWillNavigateAway: (() -> Unit)? = null,
 ) {
-    val strings = rememberCashierStrings()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
 

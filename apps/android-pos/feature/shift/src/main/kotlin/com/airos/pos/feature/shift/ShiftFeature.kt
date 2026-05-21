@@ -53,8 +53,12 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.intl.Locale as ComposeLocale
+import androidx.compose.ui.text.intl.LocaleList as ComposeLocaleList
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -76,6 +80,7 @@ import com.airos.pos.core.model.ShiftScheduleDay
 import com.airos.pos.core.model.ShiftSchedulePublicationStatus
 import com.airos.pos.core.model.ShiftScheduleSnapshot
 import com.airos.pos.core.model.ShiftStatus
+import com.airos.pos.core.model.StaffUiLanguage
 import com.airos.pos.core.model.WorktimeAttendanceSnapshot
 import com.airos.pos.core.ui.NumericMoneyPad
 import com.airos.pos.domain.CashLedgerRepository
@@ -96,14 +101,14 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 private val ShiftPageBackground = Color(0xFF0D151E)
-private val ShiftPanelColor = Color(0xFF111B25)
-private val ShiftPanelRaisedColor = Color(0xFF152231)
-private val ShiftPanelDeepColor = Color(0xFF09111A)
-private val ShiftBorderColor = Color(0x2637D6C8)
+private val ShiftPanelColor = Color(0xFF131E29)
+private val ShiftPanelRaisedColor = Color(0xFF182633)
+private val ShiftPanelDeepColor = Color(0xFF0D151E)
+private val ShiftBorderColor = Color(0x14FFFFFF)
 private val ShiftBorderWarmColor = Color(0x38D6A557)
-private val ShiftTextPrimary = Color(0xFFF8FBFF)
-private val ShiftTextSecondary = Color(0xFFDDE8EF)
-private val ShiftTextMuted = Color(0xFF9FB0BD)
+private val ShiftTextPrimary = Color(0xFFFBFEFF)
+private val ShiftTextSecondary = Color(0xFFE8F0F6)
+private val ShiftTextMuted = Color(0xFFC0CCD6)
 private val ShiftCyan = Color(0xFF85F5E0)
 private val ShiftCyanSoft = Color(0xFF2C7C80)
 private val ShiftGold = Color(0xFFD6A557)
@@ -119,6 +124,32 @@ private val ShiftJournalDayFormatter: DateTimeFormatter = DateTimeFormatter.ofPa
 private val ShiftJournalTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm", Locale.getDefault())
 private val ShiftCardShape = RoundedCornerShape(26.dp)
 private val ShiftInnerShape = RoundedCornerShape(18.dp)
+
+private fun staffTextKeyboardOptions(
+    language: StaffUiLanguage,
+    capitalization: KeyboardCapitalization = KeyboardCapitalization.None,
+    keyboardType: KeyboardType = KeyboardType.Text,
+    imeAction: ImeAction = ImeAction.Default,
+): KeyboardOptions {
+    return KeyboardOptions(
+        capitalization = capitalization,
+        keyboardType = keyboardType,
+        imeAction = imeAction,
+        hintLocales = language.keyboardLocaleList(),
+    )
+}
+
+private fun StaffUiLanguage.keyboardLocaleList(): ComposeLocaleList {
+    return ComposeLocaleList(
+        ComposeLocale(
+            when (this) {
+                StaffUiLanguage.FI -> "fi-FI"
+                StaffUiLanguage.EN -> "en-US"
+            },
+        ),
+    )
+}
+
 data class ShiftUiState(
     val currentShift: PosShift? = null,
     val openingFloatInput: String = "50,00",
@@ -383,6 +414,7 @@ fun ShiftScreen(
     scheduleLoading: Boolean = false,
     scheduleMessage: String? = null,
     ownSchedule: ShiftScheduleSnapshot? = null,
+    textInputLanguage: StaffUiLanguage = StaffUiLanguage.FI,
     ownScheduleLoading: Boolean = false,
     ownScheduleMessage: String? = null,
     attendanceStateLoading: Boolean = false,
@@ -516,6 +548,7 @@ fun ShiftScreen(
                         onNoteAdded = onNoteAdded,
                         onNoteUpdated = onNoteUpdated,
                         onNoteDeleted = onNoteDeleted,
+                        textInputLanguage = textInputLanguage,
                         modifier = Modifier
                             .weight(0.90f)
                             .fillMaxHeight(),
@@ -1758,6 +1791,7 @@ private fun ShiftJournalCard(
     onNoteAdded: (String) -> Boolean = { false },
     onNoteUpdated: (JournalNote, String) -> Boolean = { _, _ -> false },
     onNoteDeleted: (JournalNote) -> Boolean = { false },
+    textInputLanguage: StaffUiLanguage = StaffUiLanguage.FI,
     modifier: Modifier = Modifier,
 ) {
     ShiftCard(
@@ -1901,7 +1935,11 @@ private fun ShiftJournalCard(
                     modifier = Modifier.weight(1f),
                     textStyle = MaterialTheme.typography.bodySmall.copy(color = ShiftTextPrimary),
                     singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardOptions = staffTextKeyboardOptions(
+                        language = textInputLanguage,
+                        capitalization = KeyboardCapitalization.Sentences,
+                        imeAction = ImeAction.Send,
+                    ),
                     keyboardActions = KeyboardActions(onSend = { submitNoteInput() }),
                     decorationBox = { inner ->
                         Box {

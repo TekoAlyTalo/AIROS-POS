@@ -32,6 +32,7 @@ import com.airos.pos.core.model.SyncItem
 import com.airos.pos.core.model.SyncState
 import com.airos.pos.core.model.TerminalSettings
 import com.airos.pos.core.model.StaffUiPreferences
+import com.airos.pos.core.model.StaffUiLanguage
 import com.airos.pos.core.model.StaffTableMapViewPreference
 import com.airos.pos.core.model.Ticket
 import java.time.LocalDate
@@ -205,6 +206,7 @@ interface SettingsRepository {
 interface StaffUiPreferencesRepository {
     fun observeStaffUiPreferences(staffId: String): Flow<StaffUiPreferences>
     fun observeTableMapViewMode(staffId: String): Flow<StaffTableMapViewPreference>
+    fun observeUiLanguage(staffId: String): Flow<StaffUiLanguage>
     suspend fun setTableMapViewMode(
         staffId: String,
         mode: StaffTableMapViewPreference,
@@ -212,6 +214,10 @@ interface StaffUiPreferencesRepository {
     suspend fun setFloorPlanViewport(
         staffId: String,
         viewport: StaffFloorPlanViewportPreference,
+    )
+    suspend fun setUiLanguage(
+        staffId: String,
+        language: StaffUiLanguage,
     )
 }
 

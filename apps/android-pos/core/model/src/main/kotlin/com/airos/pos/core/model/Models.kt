@@ -64,6 +64,11 @@ enum class StaffTableMapViewPreference {
     GRID,
 }
 
+enum class StaffUiLanguage {
+    FI,
+    EN,
+}
+
 data class StaffFloorPlanViewportPreference(
     val zoomScale: Float? = null,
     val panX: Float? = null,
@@ -73,6 +78,7 @@ data class StaffFloorPlanViewportPreference(
 data class StaffUiPreferences(
     val tableMapViewMode: StaffTableMapViewPreference = StaffTableMapViewPreference.FLOOR_PLAN,
     val floorPlanViewport: StaffFloorPlanViewportPreference = StaffFloorPlanViewportPreference(),
+    val uiLanguage: StaffUiLanguage = StaffUiLanguage.FI,
 )
 
 enum class NfcLinkedEntityType {

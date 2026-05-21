@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -17,6 +18,12 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.intl.Locale as ComposeLocale
+import androidx.compose.ui.text.intl.LocaleList as ComposeLocaleList
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -28,6 +35,7 @@ import com.airos.pos.core.model.NfcIdentityEvent
 import com.airos.pos.core.model.NfcIdentityRecord
 import com.airos.pos.core.model.NfcReceiptHandoffRecord
 import com.airos.pos.core.model.StaffMember
+import com.airos.pos.core.model.StaffUiLanguage
 import com.airos.pos.core.model.TerminalSettings
 import com.airos.pos.core.ui.KeyValueRow
 import com.airos.pos.core.ui.PosPane
@@ -42,6 +50,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+
+private val SettingsPanelAltColor = Color(0xFF182633)
+private val SettingsTextPrimary = Color(0xFFFBFEFF)
+private val SettingsTextMuted = Color(0xFFC0CCD6)
 
 data class SettingsNfcStaffRow(
     val staff: StaffMember,
@@ -432,10 +444,13 @@ class SettingsViewModel(
 @Composable
 fun SettingsScreen(
     state: SettingsUiState,
+    currentStaffName: String?,
+    staffUiLanguage: StaffUiLanguage,
     onTerminalNameChanged: (String) -> Unit,
     onEdgeBaseUrlChanged: (String) -> Unit,
     onRestaurantKeyChanged: (String) -> Unit,
     onDefaultOpeningFloatChanged: (String) -> Unit,
+    onStaffUiLanguageChanged: (StaffUiLanguage) -> Unit,
     onSaveSettings: () -> Unit,
     onOfflineModeChanged: (Boolean) -> Unit,
     onNfcDirectLoginChanged: (Boolean) -> Unit,
@@ -471,9 +486,19 @@ fun SettingsScreen(
                 )
             }
 
+            StaffLanguagePreferenceCard(
+                currentStaffName = currentStaffName,
+                selectedLanguage = staffUiLanguage,
+                onLanguageSelected = onStaffUiLanguageChanged,
+            )
+
             OutlinedTextField(
                 value = state.terminalNameInput,
                 onValueChange = onTerminalNameChanged,
+                keyboardOptions = staffTextKeyboardOptions(
+                    language = staffUiLanguage,
+                    capitalization = KeyboardCapitalization.Words,
+                ),
                 label = { Text("Päätteen nimi") },
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -584,6 +609,10 @@ fun SettingsScreen(
             OutlinedTextField(
                 value = state.customerEnrollmentLabelInput,
                 onValueChange = onCustomerEnrollmentLabelChanged,
+                keyboardOptions = staffTextKeyboardOptions(
+                    language = staffUiLanguage,
+                    capitalization = KeyboardCapitalization.Words,
+                ),
                 label = { Text("Asiakkaan nimi") },
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -649,6 +678,73 @@ fun SettingsScreen(
 }
 
 @Composable
+private fun StaffLanguagePreferenceCard(
+    currentStaffName: String?,
+    selectedLanguage: StaffUiLanguage,
+    onLanguageSelected: (StaffUiLanguage) -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        color = SettingsPanelAltColor,
+        contentColor = SettingsTextPrimary,
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                text = "Oma kieli",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                text = currentStaffName?.takeIf { it.isNotBlank() }?.let { staff ->
+                    "Käyttöliittymän kieli henkilölle $staff. Ei muuta kuitin tai ravintolan kieltä."
+                } ?: "Käyttöliittymän kieli aktiiviselle myyjälle. Ei muuta kuitin tai ravintolan kieltä.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = SettingsTextMuted,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                StaffLanguageOptionButton(
+                    label = "Suomi",
+                    selected = selectedLanguage == StaffUiLanguage.FI,
+                    onClick = { onLanguageSelected(StaffUiLanguage.FI) },
+                    modifier = Modifier.weight(1f),
+                )
+                StaffLanguageOptionButton(
+                    label = "English",
+                    selected = selectedLanguage == StaffUiLanguage.EN,
+                    onClick = { onLanguageSelected(StaffUiLanguage.EN) },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StaffLanguageOptionButton(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (selected) {
+        Button(onClick = onClick, modifier = modifier) {
+            Text(label)
+        }
+    } else {
+        OutlinedButton(onClick = onClick, modifier = modifier) {
+            Text(label)
+        }
+    }
+}
+
+@Composable
 private fun StaffNfcEnrollmentCard(
     row: SettingsNfcStaffRow,
     isPending: Boolean,
@@ -658,7 +754,8 @@ private fun StaffNfcEnrollmentCard(
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
-        color = MaterialTheme.colorScheme.surfaceVariant,
+        color = SettingsPanelAltColor,
+        contentColor = SettingsTextPrimary,
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -717,7 +814,8 @@ private fun CustomerNfcEnrollmentCard(
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
-        color = MaterialTheme.colorScheme.surfaceVariant,
+        color = SettingsPanelAltColor,
+        contentColor = SettingsTextPrimary,
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -743,6 +841,29 @@ private fun CustomerNfcEnrollmentCard(
             }
         }
     }
+}
+
+private fun staffTextKeyboardOptions(
+    language: StaffUiLanguage,
+    capitalization: KeyboardCapitalization = KeyboardCapitalization.None,
+    keyboardType: KeyboardType = KeyboardType.Text,
+): KeyboardOptions {
+    return KeyboardOptions(
+        capitalization = capitalization,
+        keyboardType = keyboardType,
+        hintLocales = language.keyboardLocaleList(),
+    )
+}
+
+private fun StaffUiLanguage.keyboardLocaleList(): ComposeLocaleList {
+    return ComposeLocaleList(
+        ComposeLocale(
+            when (this) {
+                StaffUiLanguage.FI -> "fi-FI"
+                StaffUiLanguage.EN -> "en-US"
+            },
+        ),
+    )
 }
 
 private fun euroInputToCents(input: String): Int? {
