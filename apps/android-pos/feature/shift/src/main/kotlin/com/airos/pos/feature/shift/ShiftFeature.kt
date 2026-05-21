@@ -1195,21 +1195,21 @@ private fun WorktimeSummaryCard(
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 68.dp),
+                    .heightIn(min = 58.dp),
                 shape = ShiftInnerShape,
-                color = ShiftPanelDeepColor.copy(alpha = 0.72f),
-                border = BorderStroke(1.dp, ShiftBorderColor),
+                color = ShiftPanelDeepColor.copy(alpha = 0.42f),
+                border = BorderStroke(1.dp, ShiftBorderColor.copy(alpha = 0.24f)),
                 contentColor = ShiftTextPrimary,
             ) {
                 Column(
-                    modifier = Modifier.padding(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
                 ) {
                     Text(
                         text = "Oma työaika",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = ShiftTextPrimary,
-                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = ShiftTextMuted,
+                        fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                     )
                     ShiftKeyValueRow("Työaika alkoi", if (isClockedIn) startedAt ?: "Ei saatavilla" else "Ei käynnissä")
@@ -1694,35 +1694,52 @@ private fun ShiftSchedulePulseCard(
                         ) {
                             val windowLabel = "${formatPulseWindowTime(windowStart)}-${formatPulseWindowTime(windowEnd)}"
                             val operationalSource = operationalDay.source?.takeIf { it.isNotBlank() }
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(2.dp),
-                            ) {
-                                Text(
-                                    text = "Pulssi · ${formatPulseScheduleDate(selectedDay.date)}",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = ShiftTextPrimary,
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Text(
-                                    text = if (operationalSource != null) "$windowLabel · $operationalSource" else windowLabel,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = ShiftTextMuted,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
                             Row(
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.weight(1f),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                ShiftRhombusMark(size = 16.dp, alpha = 0.82f)
                                 Text(
-                                    text = "= viimeksi nähty",
-                                    style = MaterialTheme.typography.labelLarge.copy(fontSize = 15.sp),
-                                    color = ShiftTextMuted,
+                                    text = formatPulseScheduleDate(selectedDay.date),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = ShiftTextPrimary,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Surface(
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = ShiftPanelDeepColor.copy(alpha = 0.54f),
+                                    border = BorderStroke(1.dp, ShiftBorderColor.copy(alpha = 0.24f)),
+                                    contentColor = ShiftTextMuted,
+                                ) {
+                                    Text(
+                                        text = windowLabel,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = ShiftTextMuted,
+                                        maxLines = 1,
+                                    )
+                                }
+                                operationalSource?.let { source ->
+                                    Text(
+                                        text = source,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = ShiftTextMuted.copy(alpha = 0.78f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                ShiftRhombusMark(size = 10.dp, alpha = 0.70f)
+                                Text(
+                                    text = "viimeksi nähty",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = ShiftTextMuted.copy(alpha = 0.82f),
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
@@ -2016,8 +2033,8 @@ private fun ShiftJournalCard(
                 modifier = Modifier
                     .weight(1f, fill = true)
                     .fillMaxWidth()
-                    .background(ShiftPanelDeepColor.copy(alpha = 0.42f), RoundedCornerShape(14.dp))
-                    .border(BorderStroke(1.dp, ShiftBorderColor.copy(alpha = 0.72f)), RoundedCornerShape(14.dp))
+                    .background(ShiftPanelDeepColor.copy(alpha = 0.24f), RoundedCornerShape(14.dp))
+                    .border(BorderStroke(1.dp, ShiftBorderColor.copy(alpha = 0.20f)), RoundedCornerShape(14.dp))
                     .padding(10.dp)
                     .verticalScroll(journalScrollState),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
