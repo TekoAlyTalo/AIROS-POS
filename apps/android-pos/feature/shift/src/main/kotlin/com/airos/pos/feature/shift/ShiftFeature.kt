@@ -1195,25 +1195,53 @@ private fun WorktimeSummaryCard(
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 58.dp),
+                    .heightIn(min = 52.dp),
                 shape = ShiftInnerShape,
-                color = ShiftPanelDeepColor.copy(alpha = 0.42f),
-                border = BorderStroke(1.dp, ShiftBorderColor.copy(alpha = 0.24f)),
+                color = ShiftPanelDeepColor.copy(alpha = 0.30f),
+                border = BorderStroke(1.dp, ShiftBorderColor.copy(alpha = 0.14f)),
                 contentColor = ShiftTextPrimary,
             ) {
-                Column(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 7.dp),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        text = "Oma työaika",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = ShiftTextMuted,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                    )
-                    ShiftKeyValueRow("Työaika alkoi", if (isClockedIn) startedAt ?: "Ei saatavilla" else "Ei käynnissä")
-                    ShiftKeyValueRow("Kesto", if (isClockedIn) durationText ?: "Ei saatavilla" else "--")
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Työaika alkoi",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = ShiftTextMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = if (isClockedIn) startedAt ?: "Ei saatavilla" else "Ei käynnissä",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ShiftTextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Column(modifier = Modifier.weight(0.70f)) {
+                        Text(
+                            text = "Kesto",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = ShiftTextMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = if (isClockedIn) durationText ?: "Ei saatavilla" else "--",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (isClockedIn) ShiftGold else ShiftTextSecondary,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
             OwnShiftsCompactPanel(
