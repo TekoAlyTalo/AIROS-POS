@@ -448,7 +448,6 @@ fun AuthScreen(
     onDigit: (String) -> Unit,
     onBackspace: () -> Unit,
     onClearPin: () -> Unit,
-    onSubmitPin: () -> Unit,
     onShowManagerOverride: () -> Unit,
     onManagerSelected: (String) -> Unit,
     onManagerDigit: (String) -> Unit,
@@ -468,7 +467,7 @@ fun AuthScreen(
     ) {
         PosPane(
             title = "Henkilöstön pikavalinta",
-            supportingText = "Valitse profiili ja avaa kassa 4-numeroisella POS-PINillä.",
+            supportingText = "Valitse profiili ja kirjaudu 4-numeroisella POS-PINillä.",
             modifier = Modifier.weight(1.1f),
         ) {
             LazyVerticalGrid(
@@ -542,14 +541,6 @@ fun AuthScreen(
                 onDigit = onDigit,
                 onBackspace = onBackspace,
             )
-
-            Button(
-                onClick = onSubmitPin,
-                enabled = state.canSubmit,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(if (state.isAuthenticating) "Kirjaudutaan..." else "Avaa kassa")
-            }
         }
     }
 

@@ -114,6 +114,7 @@ import com.airos.pos.feature.payment.PaymentScreen
 import com.airos.pos.feature.payment.PaymentViewModel
 import com.airos.pos.feature.payment.RefundScreen
 import com.airos.pos.feature.payment.RefundViewModel
+import com.airos.pos.device.printer.ShiftSchedulePrinter
 import com.airos.pos.feature.scanner.ScannerScreen
 import com.airos.pos.feature.scanner.ScannerViewModel
 import com.airos.pos.feature.settings.SettingsScreen
@@ -206,6 +207,72 @@ private const val CAMERAS_GRID_THREE_COLUMNS = 3
 private const val CAMERAS_GRID_BALANCED_CAMERA_COUNT = 4
 private const val CAMERAS_DIALOG_WIDTH_FRACTION = 0.90f
 private const val CAMERAS_DIALOG_HEIGHT_FRACTION = 0.86f
+
+private fun findShiftReceiptLogoResId(context: android.content.Context): Int {
+    val names = listOf(
+        "barlast_logo",
+        "barlast",
+        "bar_last_logo",
+        "barlast_receipt_logo",
+        "receipt_logo_barlast",
+        "barlast_logo_receipt",
+        "barlast_receipt",
+        "restaurant_logo_barlast",
+        "airos_demo_restaurant_logo",
+        "demo_restaurant_logo",
+        "receipt_logo",
+        "restaurant_logo",
+        "logo_barlast",
+        "barlast_black_logo",
+    )
+    return names.firstNotNullOfOrNull { name ->
+        context.resources.getIdentifier(name, "drawable", context.packageName).takeIf { it != 0 }
+    } ?: names.firstNotNullOfOrNull { name ->
+        context.resources.getIdentifier(name, "mipmap", context.packageName).takeIf { it != 0 }
+    } ?: 0
+}
+
+private fun decodeShiftReceiptLogoBitmap(
+    context: android.content.Context,
+    resId: Int,
+    maxSidePx: Int = 420,
+): Bitmap? {
+    if (resId == 0) return null
+    return try {
+        val bounds = BitmapFactory.Options().apply {
+            inJustDecodeBounds = true
+        }
+        BitmapFactory.decodeResource(context.resources, resId, bounds)
+        val sourceWidth = bounds.outWidth
+        val sourceHeight = bounds.outHeight
+        if (sourceWidth <= 0 || sourceHeight <= 0) return null
+
+        var sampleSize = 1
+        while ((sourceWidth / sampleSize) > maxSidePx * 2 || (sourceHeight / sampleSize) > maxSidePx * 2) {
+            sampleSize *= 2
+        }
+
+        val decodeOptions = BitmapFactory.Options().apply {
+            inSampleSize = sampleSize
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        val decoded = BitmapFactory.decodeResource(context.resources, resId, decodeOptions) ?: return null
+        val longestSide = maxOf(decoded.width, decoded.height)
+        if (longestSide <= maxSidePx) {
+            decoded
+        } else {
+            val scale = maxSidePx.toFloat() / longestSide.toFloat()
+            val targetWidth = maxOf(1, (decoded.width * scale).toInt())
+            val targetHeight = maxOf(1, (decoded.height * scale).toInt())
+            val scaled = Bitmap.createScaledBitmap(decoded, targetWidth, targetHeight, true)
+            if (scaled !== decoded) decoded.recycle()
+            scaled
+        }
+    } catch (t: Throwable) {
+        Log.w("AIROS_SHIFT_PRINT", "receipt logo decode failed: ${t.javaClass.simpleName}: ${t.message}")
+        null
+    }
+}
 
 private object Routes {
     const val Auth = "auth"
@@ -461,7 +528,6 @@ fun AirosPosApp(
                 onDigit = authViewModel::appendPin,
                 onBackspace = authViewModel::removePinDigit,
                 onClearPin = authViewModel::clearPin,
-                onSubmitPin = authViewModel::submitPin,
                 onShowManagerOverride = authViewModel::showManagerOverrideDialog,
                 onManagerSelected = authViewModel::selectManager,
                 onManagerDigit = authViewModel::appendManagerPin,
@@ -486,15 +552,16 @@ fun AirosPosApp(
     // Collect current-user attendance state at app-shell level so the offline/syncing
     // notice is visible on every screen, not only when the Shift tab is open.
     // This is the same flow the Shift composable collects; hoisting it here ensures
-    // auto-clock-in (which fires on sign-in, before the user navigates to Shift) also
-    // surfaces its pending sync state in the global banner.
+    // a sign-in refresh can surface existing attendance sync state before the user
+    // navigates to Shift. Authentication itself never starts or ends worktime.
+    val currentSessionId = session!!.sessionId
     val currentStaffId = session!!.staffId
     var cashierLocked by remember(currentStaffId) { mutableStateOf(false) }
     var lastCashierActivityAtMillis by remember(currentStaffId) {
         mutableStateOf(System.currentTimeMillis())
     }
 
-    LaunchedEffect(currentStaffId) {
+    LaunchedEffect(currentStaffId, currentSessionId) {
         Log.w(
             CashierLockDebugTag,
             "auto-lock timer started staffId=$currentStaffId timeoutMillis=$AUTO_LOCK_TIMEOUT_MILLIS",
@@ -523,7 +590,7 @@ fun AirosPosApp(
         }
     }
 
-    val attendanceGlobalStateFlow = remember(appContainer.worktimeAttendanceRepository, currentStaffId) {
+    val attendanceGlobalStateFlow = remember(appContainer.worktimeAttendanceRepository, currentStaffId, currentSessionId) {
         appContainer.worktimeAttendanceRepository.observeCurrentUserState(currentStaffId)
     }
     val attendanceGlobalState by attendanceGlobalStateFlow.collectAsState(
@@ -554,6 +621,7 @@ fun AirosPosApp(
     ) {
         SignedInApp(
             appContainer = appContainer,
+            currentSessionId = currentSessionId,
             currentStaffId = currentStaffId,
             currentStaffName = session!!.displayName,
             now = shellNow,
@@ -790,6 +858,7 @@ private fun ShellActiveSellerStamp(
 @Composable
 private fun SignedInApp(
     appContainer: AppContainer,
+    currentSessionId: String,
     currentStaffId: String,
     currentStaffName: String,
     now: LocalDateTime,
@@ -843,7 +912,7 @@ private fun SignedInApp(
     var lastSeenEvents by remember {
         mutableStateOf(loadLastSeenEventsFromPrefs(lastSeenPrefs))
     }
-    val staffPanelAttendanceFlow = remember(appContainer.worktimeAttendanceRepository, currentStaffId) {
+    val staffPanelAttendanceFlow = remember(appContainer.worktimeAttendanceRepository, currentStaffId, currentSessionId) {
         appContainer.worktimeAttendanceRepository.observeCurrentUserState(currentStaffId)
     }
     val staffPanelAttendanceState by staffPanelAttendanceFlow.collectAsState(
@@ -870,6 +939,8 @@ private fun SignedInApp(
             staffPanelAttendanceSnapshot.currentlyOnSite.none { it.staffId == currentStaffId }
         ) {
             listOf(localCurrentEntry) + staffPanelAttendanceSnapshot.currentlyOnSite
+        } else if (localCurrentEntry == null && currentStaffId.isNotBlank()) {
+            staffPanelAttendanceSnapshot.currentlyOnSite.filterNot { it.staffId == currentStaffId }
         } else {
             staffPanelAttendanceSnapshot.currentlyOnSite
         }
@@ -974,6 +1045,7 @@ private fun SignedInApp(
                             editable = false,
                         )
                         Toast.makeText(context, "Työaika aloitettu", Toast.LENGTH_SHORT).show()
+                        appContainer.worktimeAttendanceRepository.syncAndRefreshCurrentUser(currentStaffId, currentStaffName)
                     }
                     is PosResult.Failure -> {
                         Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
@@ -999,6 +1071,7 @@ private fun SignedInApp(
                             editable = false,
                         )
                         Toast.makeText(context, "Työaika päätetty", Toast.LENGTH_SHORT).show()
+                        appContainer.worktimeAttendanceRepository.syncAndRefreshCurrentUser(staffId, staffName)
                     }
                     is PosResult.Failure -> {
                         Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
@@ -1057,26 +1130,12 @@ private fun SignedInApp(
 
     fun submitSellerSwitchPin(staff: StaffMember, pin: String) {
         if (staffPanelAttendanceBusy) return
-        val isClockedIn = staffPanelClockedInStaff.any { it.staffId == staff.id }
-        val hasPlannedShiftToday = staff.id in staffMenuPlannedTodayStaffIds
         scope.launch {
             staffPanelAttendanceBusy = true
             try {
                 when (val signInResult = appContainer.authRepository.signInWithPin(staff.id, pin)) {
                     is PosResult.Success -> {
-                        if (hasPlannedShiftToday && !isClockedIn) {
-                            when (val clockInResult = appContainer.worktimeAttendanceRepository.clockIn(staff.id, staff.displayName)) {
-                                is PosResult.Success -> addShiftJournalNote(
-                                    text = "${staff.displayName} työvuorossa",
-                                    authorName = staff.displayName,
-                                    source = JOURNAL_NOTE_SOURCE_SYSTEM,
-                                    editable = false,
-                                )
-                                is PosResult.Failure -> {
-                                    Toast.makeText(context, clockInResult.message, Toast.LENGTH_LONG).show()
-                                }
-                            }
-                        }
+                        appContainer.worktimeAttendanceRepository.syncAndRefreshCurrentUser(staff.id, staff.displayName)
                         sellerSwitchAuthStaff = null
                         sellerSwitchPin = ""
                         sellerSwitchPinError = null
@@ -1099,26 +1158,12 @@ private fun SignedInApp(
 
     fun handleNfcSellerSwitch(staffId: String, staffName: String) {
         if (staffPanelAttendanceBusy) return
-        val isClockedIn = staffPanelClockedInStaff.any { it.staffId == staffId }
-        val hasPlannedShiftToday = staffId in staffMenuPlannedTodayStaffIds
         scope.launch {
             staffPanelAttendanceBusy = true
             try {
                 when (val signInResult = appContainer.authRepository.signInWithNfc(staffId)) {
                     is PosResult.Success -> {
-                        if (hasPlannedShiftToday && !isClockedIn) {
-                            when (val clockInResult = appContainer.worktimeAttendanceRepository.clockIn(staffId, staffName)) {
-                                is PosResult.Success -> addShiftJournalNote(
-                                    text = "$staffName työvuorossa",
-                                    authorName = staffName,
-                                    source = JOURNAL_NOTE_SOURCE_SYSTEM,
-                                    editable = false,
-                                )
-                                is PosResult.Failure -> {
-                                    Toast.makeText(context, clockInResult.message, Toast.LENGTH_LONG).show()
-                                }
-                            }
-                        }
+                        appContainer.worktimeAttendanceRepository.syncAndRefreshCurrentUser(staffId, staffName)
                         sellerSwitchDialogVisible = false
                         Toast.makeText(
                             context,
@@ -1170,42 +1215,11 @@ private fun SignedInApp(
         }
     }
 
-    // Auto worktime clock-in on authentication. Only fires when an authoritative planned
-    // shift for this staff exists and is currently within its grace window. We never
-    // invent a planned shift, never stretch the operational-day window, and never use the
-    // active-seller fact alone as attendance truth.
-    LaunchedEffect(currentStaffId) {
+    // Authentication changes active seller only. Refresh existing attendance truth for
+    // the active staff member, but never create or end worktime from auth.
+    LaunchedEffect(currentStaffId, currentSessionId) {
         if (currentStaffId.isBlank()) return@LaunchedEffect
-        val today = LocalDate.now()
-        val now = LocalDateTime.now()
-        val scheduleResult = appContainer.shiftScheduleRepository.fetchPosSchedule(today, today)
-        val schedule = (scheduleResult as? PosResult.Success)?.value ?: return@LaunchedEffect
-        val graceMinutes = 30L
-        val match = schedule.days
-            .filter { day ->
-                day.publicationStatus == ShiftSchedulePublicationStatus.PUBLISHED ||
-                    day.publicationStatus == ShiftSchedulePublicationStatus.CLOSED
-            }
-            .flatMap { it.plannedShifts }
-            .firstOrNull { shift ->
-                shift.staffId == currentStaffId &&
-                    !now.isBefore(shift.startsAt.minusMinutes(graceMinutes)) &&
-                    now.isBefore(shift.endsAt)
-            }
-        if (match == null) return@LaunchedEffect
         appContainer.worktimeAttendanceRepository.syncAndRefreshCurrentUser(currentStaffId, currentStaffName)
-        val currentState = appContainer.worktimeAttendanceRepository
-            .observeCurrentUserState(currentStaffId)
-            .first()
-        if (currentState.activeSession != null) return@LaunchedEffect
-        when (val result = appContainer.worktimeAttendanceRepository.clockIn(currentStaffId, currentStaffName)) {
-            is PosResult.Success -> addShiftJournalNote(
-                "$currentStaffName työvuorossa",
-                source = JOURNAL_NOTE_SOURCE_SYSTEM,
-                editable = false,
-            )
-            is PosResult.Failure -> Log.w("AIROS", "Auto clock-in failed: ${result.message}")
-        }
     }
 
     // NFC fast-path: current staff's badge confirms sign-out identity without PIN entry.
@@ -1224,8 +1238,8 @@ private fun SignedInApp(
         }
     }
 
-    // NFC badge while already signed in authenticates the next seller. Worktime starts
-    // only when real current planned-shift truth exists for that staff member.
+    // NFC badge while already signed in authenticates the next seller only. Existing
+    // worktime is refreshed from attendance truth, but auth never starts worktime.
     val sellerSwitchContext = LocalContext.current
     LaunchedEffect(currentStaffId) {
         NfcProbe.status.drop(1).collect { status ->
@@ -1362,6 +1376,23 @@ private fun SignedInApp(
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     composable(Routes.Shift) {
+                    val shiftRouteContext = LocalContext.current
+                    val shiftReceiptLogoResId = remember(shiftRouteContext) {
+                        findShiftReceiptLogoResId(shiftRouteContext)
+                    }
+                    val shiftReceiptLogoPainter: Painter? = null
+                    val shiftReceiptLogoBitmap = remember(shiftRouteContext, shiftReceiptLogoResId) {
+                        shiftReceiptLogoResId.takeIf { it != 0 }?.let { logoResId ->
+                            decodeShiftReceiptLogoBitmap(
+                                context = shiftRouteContext,
+                                resId = logoResId,
+                                maxSidePx = 420,
+                            )
+                        }
+                    }
+                    val shiftSchedulePrinter = remember(shiftRouteContext) {
+                        ShiftSchedulePrinter(shiftRouteContext.applicationContext)
+                    }
                     val viewModel: ShiftViewModel = viewModel(
                         factory = ShiftViewModel.factory(
                             shiftRepository = appContainer.shiftRepository,
@@ -1383,13 +1414,15 @@ private fun SignedInApp(
                     var ownScheduleSnapshot by remember(currentStaffId) { mutableStateOf<ShiftScheduleSnapshot?>(null) }
                     var ownScheduleLoading by remember(currentStaffId) { mutableStateOf(false) }
                     var ownScheduleMessage by remember(currentStaffId) { mutableStateOf<String?>(null) }
-                    val currentUserStateFlow = remember(attendanceRepository, currentStaffId) { attendanceRepository.observeCurrentUserState(currentStaffId) }
+                    val currentUserStateFlow = remember(attendanceRepository, currentStaffId, currentSessionId) {
+                        attendanceRepository.observeCurrentUserState(currentStaffId)
+                    }
                     val currentAttendance by currentUserStateFlow.collectAsState(initial = WorktimeEffectiveAttendanceState())
                     val attendanceScope = rememberCoroutineScope()
-                    var attendanceBusy by remember { mutableStateOf(false) }
+                    var attendanceBusy by remember(currentStaffId, currentSessionId) { mutableStateOf(false) }
                     var attendanceMessage by remember { mutableStateOf<String?>(null) }
 
-                    LaunchedEffect(attendanceRepository, currentStaffId, currentStaffName) {
+                    LaunchedEffect(attendanceRepository, currentStaffId, currentStaffName, currentSessionId) {
                         attendanceRepository.syncAndRefreshCurrentUser(currentStaffId, currentStaffName)
                     }
 
@@ -1454,23 +1487,28 @@ private fun SignedInApp(
                     // Step 1 — offline-first: if the current user is locally clocked in but
                     //   absent from the backend on-site list (backend stale/offline), prepend
                     //   a synthetic local entry so they remain visible.
-                    // Step 2 — deduplicate on-site by staffId (first/active entry wins).
-                    // Step 3 — strip from clockedInToday any staffId already in on-site;
+                    // Step 2 — if the current user is locally clocked out, remove their
+                    //   stale backend on-site row until the next attendance poll catches up.
+                    // Step 3 — deduplicate on-site by staffId (first/active entry wins).
+                    // Step 4 — strip from clockedInToday any staffId already in on-site;
                     //   this removes the ghost "done · 0min" row that appears when the
                     //   backend returns the same person in both lists simultaneously.
-                    // Step 4 — deduplicate clockedInToday by staffId, keeping the entry with
+                    // Step 5 — deduplicate clockedInToday by staffId, keeping the entry with
                     //   the highest durationMinutes (the most meaningful completed session).
                     val effectiveAttendance = run {
-                        val rawOnSite = if (currentAttendance.activeSession != null &&
-                            attendance.currentlyOnSite.none { it.staffId == currentStaffId }
-                        ) {
-                            val localEntry = currentAttendance.activeSession!!.toAttendanceEntry(
-                                fallbackStaffName = currentStaffName,
-                                fallbackDurationMinutes = 0.0,
-                            )
-                            listOf(localEntry) + attendance.currentlyOnSite
-                        } else {
-                            attendance.currentlyOnSite
+                        val rawOnSite = when {
+                            currentAttendance.activeSession != null &&
+                                attendance.currentlyOnSite.none { it.staffId == currentStaffId } -> {
+                                val localEntry = currentAttendance.activeSession!!.toAttendanceEntry(
+                                    fallbackStaffName = currentStaffName,
+                                    fallbackDurationMinutes = 0.0,
+                                )
+                                listOf(localEntry) + attendance.currentlyOnSite
+                            }
+                            currentAttendance.activeSession == null && currentStaffId.isNotBlank() -> {
+                                attendance.currentlyOnSite.filterNot { it.staffId == currentStaffId }
+                            }
+                            else -> attendance.currentlyOnSite
                         }
                         val dedupedOnSite = rawOnSite.distinctBy { it.staffId }
                         val onSiteIds = dedupedOnSite.mapTo(mutableSetOf()) { it.staffId }
@@ -1525,6 +1563,9 @@ private fun SignedInApp(
                         onNoteDeleted = ::deleteShiftJournalNote,
                         lastSeenEvents = lastSeenEvents,
                         onPulseStaffSelected = ::handlePulseStaffTap,
+                        receiptLogoPainter = shiftReceiptLogoPainter,
+                        receiptLogoBitmap = shiftReceiptLogoBitmap,
+                        onPrintShiftReceiptBitmap = shiftSchedulePrinter::printBitmap,
                     )
 
                     }
