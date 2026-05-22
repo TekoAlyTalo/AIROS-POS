@@ -108,12 +108,19 @@ class WorktimeAttendanceRepository(
     suspend fun clockIn(staffId: String, staffName: String): PosResult<Unit> {
         val scope = currentScope()
         val sessionKey = scope.sessionKey(staffId)
-        val active = attendanceDao.loadActiveSession(sessionKey)
-        if (active == null) {
-            appendLocalEvent(scope, staffId, staffName, AttendanceActionClockIn)
+        val previousActive = attendanceDao.loadActiveSession(sessionKey)
+        if (previousActive != null) {
+            return syncAndRefreshCurrentUser(staffId, staffName)
         }
-        syncPendingNow()
-        return PosResult.Success(Unit)
+
+        val event = appendLocalEvent(scope, staffId, staffName, AttendanceActionClockIn)
+        return when (val sync = syncPendingNow()) {
+            is PosResult.Success -> PosResult.Success(Unit)
+            is PosResult.Failure -> {
+                rollbackLocalAttendanceChange(scope, staffId, event, previousActive, sync.message)
+                PosResult.Failure(blockingAttendanceError(sync.message))
+            }
+        }
     }
 
     suspend fun clockOut(staffId: String, staffName: String): PosResult<Unit> {
@@ -124,16 +131,21 @@ class WorktimeAttendanceRepository(
             when (val refresh = refreshActiveSessionFromBackend(scope, staffId, staffName)) {
                 is PosResult.Success -> active = attendanceDao.loadActiveSession(sessionKey)
                 is PosResult.Failure -> {
-                    return PosResult.Failure("Työvuoroa ei voi päättää: aktiivista työaikatietoa ei löytynyt")
+                    return PosResult.Failure("Työaikaa ei voi lopettaa: aktiivista työaikatietoa ei voitu vahvistaa palvelimelta.")
                 }
             }
         }
-        if (active == null) {
-            return PosResult.Failure("Työvuoroa ei voi päättää: aktiivista työaikatietoa ei löytynyt")
+        val previousActive = active
+            ?: return PosResult.Failure("Työaikaa ei voi lopettaa: aktiivista työaikaa ei löytynyt tälle henkilölle.")
+
+        val event = appendLocalEvent(scope, staffId, staffName, AttendanceActionClockOut)
+        return when (val sync = syncPendingNow()) {
+            is PosResult.Success -> PosResult.Success(Unit)
+            is PosResult.Failure -> {
+                rollbackLocalAttendanceChange(scope, staffId, event, previousActive, sync.message)
+                PosResult.Failure(blockingAttendanceError(sync.message))
+            }
         }
-        appendLocalEvent(scope, staffId, staffName, AttendanceActionClockOut)
-        syncPendingNow()
-        return PosResult.Success(Unit)
     }
 
     suspend fun syncAndRefreshCurrentUser(staffId: String, staffName: String): PosResult<Unit> {
@@ -293,6 +305,42 @@ class WorktimeAttendanceRepository(
                 ),
             )
             event
+        }
+    }
+
+    private suspend fun rollbackLocalAttendanceChange(
+        scope: AttendanceScope,
+        staffId: String,
+        event: AttendanceEventLocalEntity,
+        previousActiveSession: AttendanceActiveSessionLocalEntity?,
+        reason: String,
+    ) {
+        database.withTransaction {
+            val now = System.currentTimeMillis()
+            attendanceDao.deleteEvent(event.eventId)
+            if (previousActiveSession == null) {
+                attendanceDao.deleteActiveSession(scope.sessionKey(staffId))
+            } else {
+                attendanceDao.upsertActiveSession(previousActiveSession.copy(updatedAtEpochMillis = now))
+            }
+            val metadata = attendanceDao.loadSyncMetadata(scope.metadataKey) ?: scope.emptyMetadata(now)
+            attendanceDao.upsertSyncMetadata(
+                metadata.copy(
+                    lastSeenTerminalSequence = attendanceDao.maxTerminalSequence(scope.metadataKey),
+                    lastError = blockingAttendanceError(reason),
+                    syncState = AttendanceSyncStateIdle,
+                    updatedAtEpochMillis = now,
+                ),
+            )
+        }
+    }
+
+    private fun blockingAttendanceError(reason: String): String {
+        val detail = reason.trim().takeIf { it.isNotBlank() }
+        return if (detail == null) {
+            "Työaikatapahtumaa ei voitu vahvistaa. Toiminto estetty."
+        } else {
+            "Työaikatapahtumaa ei voitu vahvistaa. Toiminto estetty: $detail"
         }
     }
 

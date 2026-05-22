@@ -204,6 +204,9 @@ interface AttendanceDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertEvent(entity: AttendanceEventLocalEntity)
 
+    @Query("DELETE FROM attendance_events WHERE eventId = :eventId")
+    suspend fun deleteEvent(eventId: String)
+
     @Query("SELECT COALESCE(MAX(terminalSequenceNumber), 0) FROM attendance_events WHERE metadataKey = :metadataKey")
     suspend fun maxTerminalSequence(metadataKey: String): Long
 

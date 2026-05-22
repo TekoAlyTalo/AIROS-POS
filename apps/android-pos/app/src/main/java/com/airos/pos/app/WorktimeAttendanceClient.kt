@@ -132,17 +132,15 @@ class WorktimeAttendanceClient(
     suspend fun syncAttendanceEvent(event: WorktimeAttendanceSyncEvent): AttendanceSyncOutcome = withContext(Dispatchers.IO) {
         val baseUrl = backendBaseUrlProvider().trim().trimEnd('/')
         if (baseUrl.isBlank()) {
-            return@withContext AttendanceSyncOutcome.NonRetriableFailure("No backend URL configured")
+            return@withContext AttendanceSyncOutcome.NonRetriableFailure("Työaikatapahtumaa ei voi vahvistaa: backend-osoitetta ei ole määritetty.")
         }
         when (val primary = postAttendanceEventSync(baseUrl, event)) {
             is PrimaryEndpointResult.Final -> primary.outcome
-            PrimaryEndpointResult.FallbackToLegacy -> postLegacyAttendanceAction(baseUrl, event)
         }
     }
 
     private sealed class PrimaryEndpointResult {
         data class Final(val outcome: AttendanceSyncOutcome) : PrimaryEndpointResult()
-        object FallbackToLegacy : PrimaryEndpointResult()
     }
 
     private fun postAttendanceEventSync(
@@ -173,26 +171,28 @@ class WorktimeAttendanceClient(
             when {
                 statusCode in 200..299 -> PrimaryEndpointResult.Final(AttendanceSyncOutcome.Delivered)
                 statusCode == 404 || statusCode == 405 || statusCode == 409 -> {
-                    // Primary endpoint absent or conflicting — fall back to legacy clock-in/clock-out
-                    // where 409 can be authoritatively reconciled against the active-session snapshot.
                     Log.d("AIROS", "[WorktimeAttendanceClient] event sync endpoint unavailable/conflict status=$statusCode body=$body")
-                    PrimaryEndpointResult.FallbackToLegacy
+                    PrimaryEndpointResult.Final(
+                        AttendanceSyncOutcome.NonRetriableFailure(
+                            "Työaikatapahtumaa ei voitu vahvistaa palvelimella (HTTP $statusCode). Toiminto estetty.",
+                        ),
+                    )
                 }
                 statusCode in 500..599 -> {
                     Log.d("AIROS", "[WorktimeAttendanceClient] event sync server error status=$statusCode body=$body")
-                    PrimaryEndpointResult.Final(AttendanceSyncOutcome.RetriableServerFailure("Attendance sync server error (HTTP $statusCode)"))
+                    PrimaryEndpointResult.Final(AttendanceSyncOutcome.RetriableServerFailure("Työaikatapahtumaa ei voitu vahvistaa palvelimella (HTTP $statusCode). Toiminto estetty."))
                 }
                 else -> {
                     Log.d("AIROS", "[WorktimeAttendanceClient] event sync non-retriable status=$statusCode body=$body")
-                    PrimaryEndpointResult.Final(AttendanceSyncOutcome.NonRetriableFailure("Attendance sync rejected (HTTP $statusCode)"))
+                    PrimaryEndpointResult.Final(AttendanceSyncOutcome.NonRetriableFailure("Työaikatapahtuma hylättiin palvelimella (HTTP $statusCode). Toiminto estetty."))
                 }
             }
         } catch (t: IOException) {
             Log.d("AIROS", "[WorktimeAttendanceClient] event sync transient: ${t.javaClass.simpleName}: ${t.message.orEmpty()}")
-            PrimaryEndpointResult.Final(AttendanceSyncOutcome.TransientFailure("Attendance sync offline: ${t.message.orEmpty()}"))
+            PrimaryEndpointResult.Final(AttendanceSyncOutcome.TransientFailure("Työaikatapahtumaa ei voitu vahvistaa: yhteys palvelimeen epäonnistui. Toiminto estetty."))
         } catch (t: Throwable) {
             Log.d("AIROS", "[WorktimeAttendanceClient] event sync error: ${t.javaClass.simpleName}: ${t.message.orEmpty()}")
-            PrimaryEndpointResult.Final(AttendanceSyncOutcome.NonRetriableFailure("Attendance sync failed: ${t.message.orEmpty()}"))
+            PrimaryEndpointResult.Final(AttendanceSyncOutcome.NonRetriableFailure("Työaikatapahtumaa ei voitu vahvistaa: ${t.message.orEmpty()}"))
         } finally {
             connection?.disconnect()
         }

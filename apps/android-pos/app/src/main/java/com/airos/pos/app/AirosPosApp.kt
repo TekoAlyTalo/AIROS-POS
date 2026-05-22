@@ -605,7 +605,7 @@ fun AirosPosApp(
         else -> null
     }
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .pointerInput(currentStaffId, cashierLocked) {
@@ -619,16 +619,16 @@ fun AirosPosApp(
                 }
             },
     ) {
-        MenuSyncBanner(syncState = syncState)
-        AttendanceSyncBanner(message = attendanceSyncNotice)
-        Box(modifier = Modifier.weight(1f)) {
-            SignedInApp(
-                appContainer = appContainer,
-                currentSessionId = currentSessionId,
-                currentStaffId = currentStaffId,
-                currentStaffName = session!!.displayName,
-                now = shellNow,
-            )
+        SignedInApp(
+            appContainer = appContainer,
+            currentSessionId = currentSessionId,
+            currentStaffId = currentStaffId,
+            currentStaffName = session!!.displayName,
+            now = shellNow,
+        )
+        Column(modifier = Modifier.fillMaxWidth()) {
+            MenuSyncBanner(syncState = syncState)
+            AttendanceSyncBanner(message = attendanceSyncNotice)
         }
     }
 }
@@ -1483,32 +1483,25 @@ private fun SignedInApp(
                         else -> null
                     }
 
-                    // Build a deterministic, deduplicated snapshot for the UI:
-                    // Step 1 — offline-first: if the current user is locally clocked in but
-                    //   absent from the backend on-site list (backend stale/offline), prepend
-                    //   a synthetic local entry so they remain visible.
-                    // Step 2 — if the current user is locally clocked out, remove their
-                    //   stale backend on-site row until the next attendance poll catches up.
-                    // Step 3 — deduplicate on-site by staffId (first/active entry wins).
-                    // Step 4 — strip from clockedInToday any staffId already in on-site;
-                    //   this removes the ghost "done · 0min" row that appears when the
-                    //   backend returns the same person in both lists simultaneously.
-                    // Step 5 — deduplicate clockedInToday by staffId, keeping the entry with
-                    //   the highest durationMinutes (the most meaningful completed session).
+                    // Build a deterministic, deduplicated snapshot for the UI.
+                    // Active seller/authentication is separate from attendance truth: changing
+                    // the active POS user must never remove anyone from the on-site/worktime
+                    // list. If the current user's local active session has just been confirmed
+                    // from backend but the global attendance poll has not caught up yet, we may
+                    // add that confirmed session for display. We do not subtract backend rows
+                    // based on the current active seller's local state.
                     val effectiveAttendance = run {
-                        val rawOnSite = when {
+                        val rawOnSite = if (
                             currentAttendance.activeSession != null &&
-                                attendance.currentlyOnSite.none { it.staffId == currentStaffId } -> {
-                                val localEntry = currentAttendance.activeSession!!.toAttendanceEntry(
-                                    fallbackStaffName = currentStaffName,
-                                    fallbackDurationMinutes = 0.0,
-                                )
-                                listOf(localEntry) + attendance.currentlyOnSite
-                            }
-                            currentAttendance.activeSession == null && currentStaffId.isNotBlank() -> {
-                                attendance.currentlyOnSite.filterNot { it.staffId == currentStaffId }
-                            }
-                            else -> attendance.currentlyOnSite
+                            attendance.currentlyOnSite.none { it.staffId == currentStaffId }
+                        ) {
+                            val localEntry = currentAttendance.activeSession!!.toAttendanceEntry(
+                                fallbackStaffName = currentStaffName,
+                                fallbackDurationMinutes = 0.0,
+                            )
+                            listOf(localEntry) + attendance.currentlyOnSite
+                        } else {
+                            attendance.currentlyOnSite
                         }
                         val dedupedOnSite = rawOnSite.distinctBy { it.staffId }
                         val onSiteIds = dedupedOnSite.mapTo(mutableSetOf()) { it.staffId }
