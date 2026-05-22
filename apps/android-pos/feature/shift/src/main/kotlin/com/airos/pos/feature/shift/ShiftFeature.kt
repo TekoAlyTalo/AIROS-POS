@@ -52,6 +52,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.Painter
@@ -474,6 +475,9 @@ fun ShiftScreen(
     var pendingCashCloseJournalText by remember { mutableStateOf<String?>(null) }
     var selectedPulseDate by remember { mutableStateOf<LocalDate?>(null) }
     var showPrintPreview by remember { mutableStateOf(false) }
+    var isJournalInputFocused by remember { mutableStateOf(false) }
+    val rootFocusManager = LocalFocusManager.current
+    val rootKeyboardController = LocalSoftwareKeyboardController.current
 
     LaunchedEffect(state.journalEventId) {
         val text = state.journalEventText
@@ -601,6 +605,7 @@ fun ShiftScreen(
                         onNoteUpdated = onNoteUpdated,
                         onNoteDeleted = onNoteDeleted,
                         textInputLanguage = textInputLanguage,
+                        onJournalFocusChanged = { isJournalInputFocused = it },
                         modifier = Modifier
                             .weight(0.80f)
                             .fillMaxHeight(),
@@ -705,6 +710,40 @@ fun ShiftScreen(
                         .fillMaxSize()
                         .zIndex(3f),
                 )
+            }
+
+            if (isJournalInputFocused && cashWorkspaceMode == null && !showPrintPreview) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .imePadding()
+                        .zIndex(4f),
+                    contentAlignment = Alignment.BottomEnd,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .padding(end = 6.dp)
+                            .size(width = 44.dp, height = 36.dp)
+                            .clip(RoundedCornerShape(topStart = 10.dp, topEnd = 10.dp))
+                            .background(Color(0xFFE8E8E8))
+                            .border(
+                                BorderStroke(1.dp, Color(0xFF6E6E6E)),
+                                RoundedCornerShape(topStart = 10.dp, topEnd = 10.dp),
+                            )
+                            .clickable {
+                                rootKeyboardController?.hide()
+                                rootFocusManager.clearFocus()
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "✕",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF202020),
+                        )
+                    }
+                }
             }
         }
     }
@@ -1977,6 +2016,7 @@ private fun ShiftJournalCard(
     onNoteUpdated: (JournalNote, String) -> Boolean = { _, _ -> false },
     onNoteDeleted: (JournalNote) -> Boolean = { false },
     textInputLanguage: StaffUiLanguage = StaffUiLanguage.FI,
+    onJournalFocusChanged: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     ShiftCard(
@@ -2164,6 +2204,9 @@ private fun ShiftJournalCard(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 10.dp, vertical = 8.dp)
+                            .onFocusChanged { focusState ->
+                                onJournalFocusChanged(focusState.isFocused)
+                            }
                             .onPreviewKeyEvent { event ->
                                 if (event.type == KeyEventType.KeyUp && event.key == Key.Enter) {
                                     submitNoteInput()
