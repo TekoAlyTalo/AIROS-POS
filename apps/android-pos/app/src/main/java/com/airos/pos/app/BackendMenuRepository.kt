@@ -110,6 +110,8 @@ class BackendMenuRepository(
             var entities = parseMenuItemEntities(body, restaurantKey, baseUrl, subcategoryVisuals)
 
             // Download product and subcategory images to durable local cache.
+            // Image caching is best-effort: a failed image download must not turn a
+            // successful live menu refresh into a misleading FromCache state.
             if (imageCache != null) {
                 entities = cacheImages(entities)
             }
@@ -123,9 +125,14 @@ class BackendMenuRepository(
             menuCacheDao.replaceAll(restaurantKey, entities, metadata)
 
             // Prune images that are no longer referenced by any menu item.
+            // Pruning is also best-effort for the same reason: product truth is live
+            // even if a local image-cache maintenance task fails.
             if (imageCache != null) {
                 val activeUrls = entities.flatMap { listOfNotNull(it.imageUrl, it.subcategoryImageUrl) }.toSet()
-                imageCache.pruneUnused(activeUrls)
+                runCatching { imageCache.pruneUnused(activeUrls) }
+                    .onFailure { t ->
+                        log("image cache prune failed: ${t.javaClass.simpleName}: ${t.message}")
+                    }
             }
 
             log("synced ${entities.size} items to cache")
@@ -149,14 +156,29 @@ class BackendMenuRepository(
     ): List<BackendMenuItemEntity> {
         val cache = imageCache ?: return entities
         return entities.map { entity ->
-            val cachedProduct = entity.imageUrl?.let { cache.ensureCached(it) }
-            val cachedSubcategory = entity.subcategoryImageUrl?.let { cache.ensureCached(it) }
+            val cachedProduct = entity.imageUrl?.let { url ->
+                cacheImageBestEffort(cache, url, entity.id, "product")
+            }
+            val cachedSubcategory = entity.subcategoryImageUrl?.let { url ->
+                cacheImageBestEffort(cache, url, entity.id, "subcategory")
+            }
             entity.copy(
                 cachedImagePath = cachedProduct,
                 cachedSubcategoryImagePath = cachedSubcategory,
             )
         }
     }
+
+    private suspend fun cacheImageBestEffort(
+        cache: ProductImageCache,
+        imageUrl: String,
+        itemId: String,
+        imageKind: String,
+    ): String? = runCatching {
+        cache.ensureCached(imageUrl)
+    }.onFailure { t ->
+        log("image cache failed kind=$imageKind item=$itemId url='$imageUrl': ${t.javaClass.simpleName}: ${t.message}")
+    }.getOrNull()
 
     private suspend fun fallbackOrNoData(restaurantKey: String, reason: String): MenuSyncResult {
         val meta = menuCacheDao.getMetadata(restaurantKey)

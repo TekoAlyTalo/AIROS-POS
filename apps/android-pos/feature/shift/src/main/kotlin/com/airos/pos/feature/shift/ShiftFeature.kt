@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -758,24 +759,22 @@ private fun ShiftHeader() {
             .fillMaxWidth()
             .height(58.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(
-                    text = "Vuoro",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = ShiftTextPrimary,
-                )
-                ShiftRhombusMark(size = 12.dp)
-            }
-            Text(
-                text = "Hallitse pohjakassaa, työaikaa ja henkilöstöä.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = ShiftTextMuted,
-            )
-        }
+        Text(
+            text = "Vuoro",
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+            color = ShiftTextPrimary,
+        )
+        ShiftRhombusMark(size = 12.dp)
+        Text(
+            text = "Hallitse pohjakassaa, työaikaa ja henkilöstöä.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = ShiftTextMuted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -1212,98 +1211,74 @@ private fun WorktimeSummaryCard(
         ?.let(::formatJournalTime)
         ?.takeIf { it != "--:--" }
     val durationText = myAttendanceEntry?.durationMinutes?.let(::formatDuration)
+    val statusLabel = when {
+        attendanceStateLoading -> "Päivitetään"
+        isClockedIn -> "Käynnissä"
+        else -> "Ei käynnissä"
+    }
+    val statusColor = when {
+        attendanceStateLoading -> ShiftWarning
+        isClockedIn -> ShiftSuccess
+        else -> ShiftTextMuted
+    }
 
     ShiftCard(
         title = "Työaika",
         icon = "◷",
         modifier = modifier,
-        statusLabel = when {
-            attendanceStateLoading -> "Päivitetään"
-            isClockedIn -> "Käynnissä"
-            else -> "Ei käynnissä"
-        },
-        statusColor = when {
-            attendanceStateLoading -> ShiftWarning
-            isClockedIn -> ShiftSuccess
-            else -> ShiftTextMuted
+        statusLabel = statusLabel,
+        statusColor = statusColor,
+        headerMiddleContent = {
+            WorktimeHeaderMetric(
+                label = "Alkoi",
+                value = if (isClockedIn) startedAt ?: "Ei saatavilla" else "Ei käynnissä",
+            )
+            WorktimeHeaderMetric(
+                label = "Kesto",
+                value = if (isClockedIn) durationText ?: "Ei saatavilla" else "--",
+                valueColor = if (isClockedIn) ShiftGold else ShiftTextSecondary,
+            )
         },
     ) {
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 40.dp),
-                shape = ShiftInnerShape,
-                color = ShiftPanelDeepColor.copy(alpha = 0.30f),
-                border = BorderStroke(1.dp, ShiftBorderColor.copy(alpha = 0.14f)),
-                contentColor = ShiftTextPrimary,
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Row(
-                        modifier = Modifier.weight(1f),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "Alkoi",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = ShiftTextMuted,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            text = if (isClockedIn) startedAt ?: "Ei saatavilla" else "Ei käynnissä",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = ShiftTextPrimary,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    Row(
-                        modifier = Modifier.weight(0.70f),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "Kesto",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = ShiftTextMuted,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            text = if (isClockedIn) durationText ?: "Ei saatavilla" else "--",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (isClockedIn) ShiftGold else ShiftTextSecondary,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-            }
-            OwnShiftsCompactPanel(
-                schedule = ownSchedule,
-                currentStaffId = currentStaffId,
-                loading = ownScheduleLoading,
-                message = ownScheduleMessage,
-                selectedScheduleDate = selectedScheduleDate,
-                onScheduleDateSelected = onScheduleDateSelected,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-            )
-        }
+        OwnShiftsCompactPanel(
+            schedule = ownSchedule,
+            currentStaffId = currentStaffId,
+            loading = ownScheduleLoading,
+            message = ownScheduleMessage,
+            selectedScheduleDate = selectedScheduleDate,
+            onScheduleDateSelected = onScheduleDateSelected,
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun WorktimeHeaderMetric(
+    label: String,
+    value: String,
+    valueColor: Color = ShiftTextPrimary,
+) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = ShiftTextMuted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            color = valueColor,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -1621,38 +1596,80 @@ private fun ShiftSchedulePulseCard(
     onStaffSelected: (String, String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
+    var now by remember { mutableStateOf(LocalDateTime.now()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            now = LocalDateTime.now()
+            val millisIntoMinute = System.currentTimeMillis() % 60_000L
+            delay((60_000L - millisIntoMinute).coerceAtLeast(1_000L))
+        }
+    }
+    val allDays = schedule?.days.orEmpty()
+    val publishedDays = allDays.filter { it.hasPublishedScheduleTruth() }
+    val selectedDay = if (selectedScheduleDate != null) {
+        allDays.firstOrNull { it.date == selectedScheduleDate }
+    } else {
+        publishedDays
+            .firstOrNull { day ->
+                val od = day.operationalDay
+                od.truthAvailable && !od.isClosed &&
+                    od.opensAt != null && od.closesAt != null &&
+                    !now.isBefore(od.opensAt) && !now.isAfter(od.closesAt)
+            }
+            ?: publishedDays.firstOrNull { it.plannedShifts.isNotEmpty() }
+            ?: publishedDays.firstOrNull()
+    }
+    val operationalDay = selectedDay?.operationalDay
+    val operationalWindowStart = operationalDay?.opensAt
+    val operationalWindowEnd = operationalDay?.closesAt
+    val pulseHeaderWindowLabel =
+        if (
+            operationalDay != null &&
+            operationalDay.truthAvailable &&
+            !operationalDay.isClosed &&
+            operationalWindowStart != null &&
+            operationalWindowEnd != null &&
+            operationalWindowEnd.isAfter(operationalWindowStart)
+        ) {
+            "Aukiolo ${formatPulseWindowTime(operationalWindowStart)}-${formatPulseWindowTime(operationalWindowEnd)}"
+        } else {
+            null
+        }
+
     ShiftCard(
         title = "Työvuoropulssi",
         icon = "⌁",
         modifier = modifier,
-    ) {
-        var now by remember { mutableStateOf(LocalDateTime.now()) }
-        LaunchedEffect(Unit) {
-            while (true) {
-                now = LocalDateTime.now()
-                val millisIntoMinute = System.currentTimeMillis() % 60_000L
-                delay((60_000L - millisIntoMinute).coerceAtLeast(1_000L))
+        headerMiddleContent = {
+            selectedDay?.let { day ->
+                Text(
+                    text = formatPulseScheduleDate(day.date),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = ShiftTextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
-        }
-        var pulseZoom by remember { mutableStateOf(1f) }
-        val allDays = schedule?.days.orEmpty()
-        val publishedDays = allDays.filter { it.hasPublishedScheduleTruth() }
-        val selectedDay = if (selectedScheduleDate != null) {
-            allDays.firstOrNull { it.date == selectedScheduleDate }
-        } else {
-            publishedDays
-                .firstOrNull { day ->
-                    val od = day.operationalDay
-                    od.truthAvailable && !od.isClosed &&
-                        od.opensAt != null && od.closesAt != null &&
-                        !now.isBefore(od.opensAt) && !now.isAfter(od.closesAt)
+            pulseHeaderWindowLabel?.let { label ->
+                Surface(
+                    shape = RoundedCornerShape(999.dp),
+                    color = ShiftPanelDeepColor.copy(alpha = 0.54f),
+                    border = BorderStroke(1.dp, ShiftBorderColor.copy(alpha = 0.24f)),
+                    contentColor = ShiftTextMuted,
+                ) {
+                    Text(
+                        text = label,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ShiftTextMuted,
+                        maxLines = 1,
+                    )
                 }
-                ?: publishedDays.firstOrNull { it.plannedShifts.isNotEmpty() }
-                ?: publishedDays.firstOrNull()
-        }
-        val operationalDay = selectedDay?.operationalDay
-        val operationalWindowStart = operationalDay?.opensAt
-        val operationalWindowEnd = operationalDay?.closesAt
+            }
+        },
+    ) {
+        var pulseZoom by remember { mutableStateOf(1f) }
 
         Column(
             modifier = Modifier.fillMaxSize(),
@@ -1765,48 +1782,9 @@ private fun ShiftSchedulePulseCard(
                         }
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            horizontalArrangement = Arrangement.End,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            val windowLabel = "${formatPulseWindowTime(windowStart)}-${formatPulseWindowTime(windowEnd)}"
-                            val operationalSource = operationalDay.source?.takeIf { it.isNotBlank() }
-                            Row(
-                                modifier = Modifier.weight(1f),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    text = formatPulseScheduleDate(selectedDay.date),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = ShiftTextPrimary,
-                                    fontWeight = FontWeight.SemiBold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Surface(
-                                    shape = RoundedCornerShape(999.dp),
-                                    color = ShiftPanelDeepColor.copy(alpha = 0.54f),
-                                    border = BorderStroke(1.dp, ShiftBorderColor.copy(alpha = 0.24f)),
-                                    contentColor = ShiftTextMuted,
-                                ) {
-                                    Text(
-                                        text = windowLabel,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = ShiftTextMuted,
-                                        maxLines = 1,
-                                    )
-                                }
-                                operationalSource?.let { source ->
-                                    Text(
-                                        text = source,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = ShiftTextMuted.copy(alpha = 0.78f),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                            }
                             Row(
                                 horizontalArrangement = Arrangement.spacedBy(5.dp),
                                 verticalAlignment = Alignment.CenterVertically,
@@ -2280,6 +2258,7 @@ private fun ShiftCard(
     modifier: Modifier = Modifier,
     statusLabel: String? = null,
     statusColor: Color = ShiftCyan,
+    headerMiddleContent: (@Composable RowScope.() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Surface(
@@ -2313,6 +2292,7 @@ private fun ShiftCard(
                     icon = icon,
                     statusLabel = statusLabel,
                     statusColor = statusColor,
+                    headerMiddleContent = headerMiddleContent,
                 )
                 content()
             }
@@ -2326,6 +2306,7 @@ private fun ShiftCardHeader(
     icon: String,
     statusLabel: String?,
     statusColor: Color,
+    headerMiddleContent: (@Composable RowScope.() -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -2348,13 +2329,21 @@ private fun ShiftCardHeader(
         }
         Text(
             text = title,
-            modifier = Modifier.weight(1f),
+            modifier = if (headerMiddleContent == null) Modifier.weight(1f) else Modifier,
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
             color = ShiftTextPrimary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
+        if (headerMiddleContent != null) {
+            Row(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                content = headerMiddleContent,
+            )
+        }
         statusLabel?.let {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Box(

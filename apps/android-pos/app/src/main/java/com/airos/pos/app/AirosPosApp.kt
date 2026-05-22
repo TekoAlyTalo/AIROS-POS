@@ -605,7 +605,7 @@ fun AirosPosApp(
         else -> null
     }
 
-    Box(
+    Column(
         modifier = Modifier
             .fillMaxSize()
             .pointerInput(currentStaffId, cashierLocked) {
@@ -619,16 +619,16 @@ fun AirosPosApp(
                 }
             },
     ) {
-        SignedInApp(
-            appContainer = appContainer,
-            currentSessionId = currentSessionId,
-            currentStaffId = currentStaffId,
-            currentStaffName = session!!.displayName,
-            now = shellNow,
-        )
-        Column(modifier = Modifier.fillMaxWidth()) {
-            MenuSyncBanner(syncState = syncState)
-            AttendanceSyncBanner(message = attendanceSyncNotice)
+        MenuSyncBanner(syncState = syncState)
+        AttendanceSyncBanner(message = attendanceSyncNotice)
+        Box(modifier = Modifier.weight(1f)) {
+            SignedInApp(
+                appContainer = appContainer,
+                currentSessionId = currentSessionId,
+                currentStaffId = currentStaffId,
+                currentStaffName = session!!.displayName,
+                now = shellNow,
+            )
         }
     }
 }
