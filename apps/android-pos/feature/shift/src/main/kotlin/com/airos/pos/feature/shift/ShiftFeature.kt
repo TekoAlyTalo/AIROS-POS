@@ -50,6 +50,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -2579,8 +2580,7 @@ private fun PulseCurrentTimeOverlay(
 ) {
     val density = LocalDensity.current
     val lineX = with(density) {
-        val chartX = pulseTimelineX(chartWidth, fraction).toPx() - horizontalScrollState.value
-        PulseLeftColumnWidth.toPx() + PulseTimelineGap.toPx() + chartX
+        pulseTimelineX(chartWidth, fraction).toPx() - horizontalScrollState.value
     }
     Box(
         modifier = modifier
@@ -2588,11 +2588,19 @@ private fun PulseCurrentTimeOverlay(
     ) {
         Box(
             modifier = Modifier
-                .offset(x = with(density) { lineX.toDp() } - 2.dp)
-                .width(4.dp)
+                .offset(x = PulseLeftColumnWidth + PulseTimelineGap)
+                .width(chartWidth)
                 .fillMaxHeight()
-                .background(ShiftGold),
-        )
+                .clipToBounds(),
+        ) {
+            Box(
+                modifier = Modifier
+                    .offset(x = with(density) { lineX.toDp() } - 2.dp)
+                    .width(4.dp)
+                    .fillMaxHeight()
+                    .background(ShiftGold),
+            )
+        }
     }
 }
 
@@ -3465,10 +3473,20 @@ private fun formatJournalTime(raw: String?): String {
                 .format(ShiftJournalTimeFormatter)
         }.getOrDefault("--:--")
     }
-    val tIndex = value.indexOf('T')
-    if (tIndex >= 0 && value.length >= tIndex + 6) {
-        return value.substring(tIndex + 1, tIndex + 6)
-    }
+    runCatching {
+        java.time.OffsetDateTime.parse(value)
+            .atZoneSameInstant(ZoneId.systemDefault())
+            .format(ShiftJournalTimeFormatter)
+    }.getOrNull()?.let { return it }
+    runCatching {
+        Instant.parse(value)
+            .atZone(ZoneId.systemDefault())
+            .format(ShiftJournalTimeFormatter)
+    }.getOrNull()?.let { return it }
+    runCatching {
+        LocalDateTime.parse(value)
+            .format(ShiftJournalTimeFormatter)
+    }.getOrNull()?.let { return it }
     val timeMatch = Regex("\\b\\d{1,2}:\\d{2}\\b").find(value)
     return timeMatch?.value ?: "--:--"
 }
