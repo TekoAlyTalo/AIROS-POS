@@ -13,6 +13,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -31,17 +32,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Dashboard
-import androidx.compose.material.icons.filled.List
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.ReceiptLong
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -58,10 +50,16 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.Painter
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -98,13 +96,17 @@ import com.airos.pos.core.model.FloorMapObject
 import com.airos.pos.core.model.RestaurantTable
 import com.airos.pos.core.model.WorktimeAttendanceSnapshot
 import com.airos.pos.core.model.ManagerOverrideReason
+import com.airos.pos.core.model.PlannedStaffShift
 import com.airos.pos.core.model.ScanEvent
 import com.airos.pos.core.model.ServiceSpotType
+import com.airos.pos.core.model.ShiftScheduleDay
 import com.airos.pos.core.model.ShiftSchedulePublicationStatus
 import com.airos.pos.core.model.ShiftScheduleSnapshot
 import com.airos.pos.core.model.TerminalSettings
 import com.airos.pos.domain.MenuSyncResult
+import com.airos.pos.feature.auth.AuthScheduleStatus
 import com.airos.pos.feature.auth.AuthScreen
+import com.airos.pos.feature.auth.AuthStaffStatus
 import com.airos.pos.feature.auth.AuthViewModel
 import com.airos.pos.feature.kitchen.KitchenScreen
 import com.airos.pos.feature.kitchen.KitchenViewModel
@@ -329,54 +331,75 @@ private object Routes {
     fun refund(ticketId: String): String = "refund/$ticketId"
 }
 
+private enum class RailIconKind {
+    TABLES,
+    PRODUCTS,
+    SALES,
+    RESERVATIONS,
+    CAMERAS,
+    SETTINGS,
+    STAFF,
+}
+
 private data class RailDestination(
     val route: String,
     val labelKey: CashierStringKey,
-    val icon: ImageVector,
+    val iconKind: RailIconKind,
     val iconContainerColor: Color,
     val iconTint: Color,
 )
+
+
+private fun railIconDrawableRes(kind: RailIconKind): Int = when (kind) {
+    RailIconKind.TABLES -> R.drawable.airos_rail_icon_tables_v1
+    RailIconKind.PRODUCTS -> R.drawable.airos_rail_icon_products_v1
+    RailIconKind.SALES -> R.drawable.airos_rail_icon_sales_v1
+    RailIconKind.RESERVATIONS -> R.drawable.airos_rail_icon_reservations_v1
+    RailIconKind.CAMERAS -> R.drawable.airos_rail_icon_camera_v1
+    RailIconKind.SETTINGS -> R.drawable.airos_rail_icon_settings_v1
+    RailIconKind.STAFF -> R.drawable.airos_rail_icon_staff_v1
+}
 
 private val mainRailDestinations = listOf(
     RailDestination(
         route = Routes.TableMap,
         labelKey = CashierStringKey.RailTables,
-        icon = Icons.Filled.Dashboard,
+        iconKind = RailIconKind.TABLES,
         iconContainerColor = Color(0xFF143A45),
         iconTint = Color(0xFF8DF2E0),
     ),
     RailDestination(
         route = Routes.Menu,
         labelKey = CashierStringKey.RailMenu,
-        icon = Icons.Filled.List,
+        iconKind = RailIconKind.PRODUCTS,
         iconContainerColor = Color(0xFF1D3143),
         iconTint = Color(0xFFB8D8F5),
     ),
     RailDestination(
         route = Routes.Transactions,
         labelKey = CashierStringKey.RailTransactions,
-        icon = Icons.Filled.ReceiptLong,
+        iconKind = RailIconKind.SALES,
         iconContainerColor = Color(0xFF2F2748),
         iconTint = Color(0xFFE2CCFF),
     ),
     RailDestination(
         route = Routes.Reservations,
         labelKey = CashierStringKey.RailReservations,
-        icon = Icons.Filled.ReceiptLong,
+        iconKind = RailIconKind.RESERVATIONS,
         iconContainerColor = Color(0xFF243A2F),
         iconTint = Color(0xFFB7F3C8),
     ),
     RailDestination(
         route = Routes.Cameras,
         labelKey = CashierStringKey.RailCameras,
-        icon = Icons.Filled.Search,
+        iconKind = RailIconKind.CAMERAS,
         iconContainerColor = Color(0xFF26384B),
         iconTint = Color(0xFFC7E7FF),
     ),
     RailDestination(
         route = Routes.Settings,
         labelKey = CashierStringKey.RailSettings,
-        icon = Icons.Filled.Settings,
+        iconKind = RailIconKind.SETTINGS,
         iconContainerColor = Color(0xFF2D353F),
         iconTint = Color(0xFFE5EEF6),
     ),
@@ -482,6 +505,32 @@ fun AirosPosApp(
             ),
         )
         val nfcDirectLoginEnabled = terminalSettings.nfcDirectLoginEnabled
+        var authScheduleSnapshot by remember { mutableStateOf<ShiftScheduleSnapshot?>(null) }
+        val authScheduleAnchorDate = remember(shellNow) { shellNow.toLocalDate() }
+        val authScheduleStartDate = remember(authScheduleAnchorDate) { authScheduleAnchorDate.minusDays(1) }
+        val authScheduleEndDate = remember(authScheduleAnchorDate) { authScheduleAnchorDate.plusDays(1) }
+
+        LaunchedEffect(appContainer.shiftScheduleRepository, authScheduleStartDate, authScheduleEndDate) {
+            authScheduleSnapshot = when (
+                val result = appContainer.shiftScheduleRepository.fetchPosSchedule(
+                    authScheduleStartDate,
+                    authScheduleEndDate,
+                )
+            ) {
+                is PosResult.Success -> result.value
+                is PosResult.Failure -> {
+                    Log.d("AIROS", "[AirosPosApp] auth screen schedule truth unavailable: ${result.message}")
+                    null
+                }
+            }
+        }
+
+        val authStaffStatusById = remember(authScheduleSnapshot, shellNow) {
+            scheduleStatusByStaffIdForAuthScreen(
+                schedule = authScheduleSnapshot,
+                now = shellNow,
+            )
+        }
 
         // Signed-out auth screen NFC handling.
         // When direct-login is OFF: keep preselect + notice behavior.
@@ -524,6 +573,7 @@ fun AirosPosApp(
         Box(modifier = Modifier.fillMaxSize()) {
             AuthScreen(
                 state = authState,
+                staffStatusById = authStaffStatusById,
                 onStaffSelected = authViewModel::selectStaff,
                 onDigit = authViewModel::appendPin,
                 onBackspace = authViewModel::removePinDigit,
@@ -756,33 +806,81 @@ private fun formatFinnishNowStamp(now: LocalDateTime): String {
     return "$day ${now.dayOfMonth}.${now.monthValue}. ${now.format(ShellNowFormatter)}"
 }
 
-private fun plannedShiftStaffIdsForScheduleDate(
+private fun scheduleStatusByStaffIdForAuthScreen(
     schedule: ShiftScheduleSnapshot?,
-    date: LocalDate,
-): Set<String> {
-    if (schedule == null) return emptySet()
-    return schedule.days
+    now: LocalDateTime,
+): Map<String, AuthStaffStatus> {
+    val scheduleDay = schedule?.authScheduleDayFor(now) ?: return emptyMap()
+    return scheduleDay.plannedShifts
         .asSequence()
-        .filter { day -> day.date == date }
-        .filter { day ->
-            day.publicationStatus == ShiftSchedulePublicationStatus.PUBLISHED ||
-                day.publicationStatus == ShiftSchedulePublicationStatus.CLOSED
-        }
-        .flatMap { it.plannedShifts.asSequence() }
         .filter { shift -> shift.staffId.isNotBlank() }
-        .map { it.staffId }
-        .toSet()
+        .filterNot { shift -> shift.isIgnoredForAuthScheduleStatus() }
+        .groupBy { it.staffId }
+        .mapValuesNotNull { (_, shifts) ->
+            when {
+                shifts.any { shift -> shift.isActiveAt(now) } -> AuthStaffStatus(AuthScheduleStatus.ACTIVE)
+                shifts.any { shift -> shift.startsAt.isAfter(now) } -> AuthStaffStatus(AuthScheduleStatus.UPCOMING)
+                shifts.any { shift -> !shift.endsAt.isAfter(now) } -> AuthStaffStatus(AuthScheduleStatus.ENDED)
+                else -> null
+            }
+        }
+}
+
+private fun ShiftScheduleSnapshot.authScheduleDayFor(now: LocalDateTime): ShiftScheduleDay? {
+    val publishedDays = days.filter { it.hasPublishedAuthScheduleTruth() }
+    return publishedDays.firstOrNull { day ->
+        val operationalDay = day.operationalDay
+        operationalDay.truthAvailable &&
+            !operationalDay.isClosed &&
+            operationalDay.opensAt != null &&
+            operationalDay.closesAt != null &&
+            !now.isBefore(operationalDay.opensAt) &&
+            now.isBefore(operationalDay.closesAt)
+    } ?: publishedDays.firstOrNull { day -> day.date == now.toLocalDate() }
+}
+
+private fun ShiftScheduleDay.hasPublishedAuthScheduleTruth(): Boolean {
+    return publicationStatus == ShiftSchedulePublicationStatus.PUBLISHED ||
+        publicationStatus == ShiftSchedulePublicationStatus.CLOSED
+}
+
+private fun PlannedStaffShift.isActiveAt(now: LocalDateTime): Boolean {
+    return !now.isBefore(startsAt) && now.isBefore(endsAt)
+}
+
+private fun PlannedStaffShift.isIgnoredForAuthScheduleStatus(): Boolean {
+    val normalized = status?.trim()?.lowercase().orEmpty()
+    return normalized in setOf("absent", "away", "off", "poissa", "no_show", "cancelled", "canceled")
+}
+
+private inline fun <K, V, R : Any> Map<K, V>.mapValuesNotNull(transform: (Map.Entry<K, V>) -> R?): Map<K, R> {
+    return mapNotNull { entry ->
+        transform(entry)?.let { value -> entry.key to value }
+    }.toMap()
 }
 
 @Composable
 private fun staffPhotoPainterFor(staff: StaffMember): Painter? {
     return staffPhotoPainterForStaffId(staff.id)
+        ?: staffPhotoPainterForDisplayName(staff.displayName)
 }
 
 @Composable
 private fun staffPhotoPainterForStaffId(staffId: String): Painter? {
     return when (staffId) {
         "demo-miikka-martsalo" -> painterResource(id = R.drawable.staff_miikka_martsalo)
+        else -> null
+    }
+}
+
+@Composable
+private fun staffPhotoPainterForDisplayName(displayName: String): Painter? {
+    return when (displayName.trim().lowercase()) {
+        "aino korhonen" -> painterResource(id = R.drawable.airos_staff_avatar_aino_korhonen_v1)
+        "lauri niemi" -> painterResource(id = R.drawable.airos_staff_avatar_lauri_niemi_v1)
+        "salla virtanen" -> painterResource(id = R.drawable.airos_staff_avatar_salla_virtanen_v1)
+        "oona lehtinen" -> painterResource(id = R.drawable.airos_staff_avatar_oona_lehtinen_v1)
+        "miikka martsalo" -> painterResource(id = R.drawable.staff_miikka_martsalo)
         else -> null
     }
 }
@@ -939,31 +1037,15 @@ private fun SignedInApp(
             staffPanelAttendanceSnapshot.currentlyOnSite.none { it.staffId == currentStaffId }
         ) {
             listOf(localCurrentEntry) + staffPanelAttendanceSnapshot.currentlyOnSite
-        } else if (localCurrentEntry == null && currentStaffId.isNotBlank()) {
-            staffPanelAttendanceSnapshot.currentlyOnSite.filterNot { it.staffId == currentStaffId }
         } else {
             staffPanelAttendanceSnapshot.currentlyOnSite
         }
         entries.distinctBy { it.staffId }
     }
-    var staffMenuScheduleSnapshot by remember { mutableStateOf<ShiftScheduleSnapshot?>(null) }
-    val staffMenuScheduleDate = remember(now) { now.toLocalDate() }
-    LaunchedEffect(appContainer.shiftScheduleRepository, staffMenuScheduleDate) {
-        staffMenuScheduleSnapshot = when (
-            val result = appContainer.shiftScheduleRepository.fetchPosSchedule(
-                staffMenuScheduleDate,
-                staffMenuScheduleDate,
-            )
-        ) {
-            is PosResult.Success -> result.value
-            is PosResult.Failure -> {
-                Log.d("AIROS", "[AirosPosApp] staff menu schedule truth unavailable: ${result.message}")
-                null
-            }
-        }
-    }
-    val staffMenuPlannedTodayStaffIds = remember(staffMenuScheduleSnapshot, staffMenuScheduleDate) {
-        plannedShiftStaffIdsForScheduleDate(staffMenuScheduleSnapshot, staffMenuScheduleDate)
+    val staffMenuPresentStaffIds = remember(staffPanelClockedInStaff) {
+        staffPanelClockedInStaff
+            .mapNotNull { entry -> entry.staffId.takeIf { it.isNotBlank() } }
+            .toSet()
     }
 
     fun addShiftJournalNote(
@@ -2839,7 +2921,7 @@ private fun SignedInApp(
                         staffMenuStaff.forEach { staff ->
                             StaffMenuRow(
                                 staff = staff,
-                                scheduledToday = staff.id in staffMenuPlannedTodayStaffIds,
+                                present = staff.id in staffMenuPresentStaffIds,
                                 enabled = !staffPanelAttendanceBusy,
                                 onClick = { handleStaffMenuStaffTap(staff) },
                             )
@@ -3578,7 +3660,7 @@ private fun AppRail(
             mainRailDestinations.forEach { destination ->
                 RailButton(
                     label = strings[destination.labelKey],
-                    icon = destination.icon,
+                    iconKind = destination.iconKind,
                     iconContainerColor = destination.iconContainerColor,
                     iconTint = destination.iconTint,
                     selected = isRailDestinationSelected(currentRoute, destination.route),
@@ -3612,7 +3694,7 @@ private fun AppRail(
 
             RailButton(
                 label = strings[CashierStringKey.RailStaff],
-                icon = Icons.Filled.Person,
+                iconKind = RailIconKind.STAFF,
                 iconContainerColor = Color(0xFF243A2F),
                 iconTint = Color(0xFFB7F3C8),
                 selected = isRailDestinationSelected(currentRoute, Routes.Shift),
@@ -3625,7 +3707,7 @@ private fun AppRail(
 @Composable
 private fun StaffMenuRow(
     staff: StaffMember,
-    scheduledToday: Boolean,
+    present: Boolean,
     enabled: Boolean,
     onClick: () -> Unit,
 ) {
@@ -3655,7 +3737,7 @@ private fun StaffMenuRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (scheduledToday) {
+            if (present) {
                 Box(
                     modifier = Modifier
                         .size(STAFF_MENU_SCHEDULE_DOT_SIZE)
@@ -3762,10 +3844,208 @@ private fun staffSurnameSortKey(displayName: String): String {
     return (parts.lastOrNull() ?: displayName).lowercase()
 }
 
+
+@Composable
+private fun PremiumRailIcon(
+    kind: RailIconKind,
+    tint: Color,
+    accent: Color,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val s = size.minDimension
+        val stroke = Stroke(
+            width = s * 0.078f,
+            cap = StrokeCap.Round,
+            join = StrokeJoin.Round,
+        )
+        val thinStroke = Stroke(
+            width = s * 0.055f,
+            cap = StrokeCap.Round,
+            join = StrokeJoin.Round,
+        )
+        val strongStroke = Stroke(
+            width = s * 0.092f,
+            cap = StrokeCap.Round,
+            join = StrokeJoin.Round,
+        )
+        val outline = tint.copy(alpha = if (selected) 0.96f else 0.82f)
+        val soft = accent.copy(alpha = if (selected) 0.34f else 0.20f)
+        val faint = accent.copy(alpha = if (selected) 0.18f else 0.10f)
+        drawCircle(
+            color = faint,
+            radius = s * 0.48f,
+            center = Offset(w / 2f, h / 2f),
+        )
+
+        when (kind) {
+            RailIconKind.TABLES -> {
+                drawRoundRect(
+                    color = outline,
+                    topLeft = Offset(w * 0.16f, h * 0.15f),
+                    size = Size(w * 0.68f, h * 0.68f),
+                    cornerRadius = CornerRadius(s * 0.10f, s * 0.10f),
+                    style = stroke,
+                )
+                drawLine(outline, Offset(w * 0.32f, h * 0.15f), Offset(w * 0.32f, h * 0.34f), strokeWidth = s * 0.06f, cap = StrokeCap.Round)
+                drawLine(outline, Offset(w * 0.16f, h * 0.48f), Offset(w * 0.35f, h * 0.48f), strokeWidth = s * 0.06f, cap = StrokeCap.Round)
+                drawLine(outline, Offset(w * 0.63f, h * 0.15f), Offset(w * 0.63f, h * 0.34f), strokeWidth = s * 0.06f, cap = StrokeCap.Round)
+                drawLine(outline, Offset(w * 0.63f, h * 0.66f), Offset(w * 0.84f, h * 0.66f), strokeWidth = s * 0.06f, cap = StrokeCap.Round)
+                drawCircle(soft, radius = s * 0.18f, center = Offset(w * 0.50f, h * 0.55f))
+                drawCircle(outline, radius = s * 0.16f, center = Offset(w * 0.50f, h * 0.55f), style = thinStroke)
+                drawRoundRect(outline, Offset(w * 0.43f, h * 0.79f), Size(w * 0.14f, h * 0.06f), CornerRadius(s * 0.03f, s * 0.03f))
+                drawRoundRect(outline, Offset(w * 0.43f, h * 0.25f), Size(w * 0.14f, h * 0.06f), CornerRadius(s * 0.03f, s * 0.03f))
+                drawRoundRect(outline, Offset(w * 0.21f, h * 0.50f), Size(w * 0.06f, h * 0.14f), CornerRadius(s * 0.03f, s * 0.03f))
+                drawRoundRect(outline, Offset(w * 0.73f, h * 0.50f), Size(w * 0.06f, h * 0.14f), CornerRadius(s * 0.03f, s * 0.03f))
+            }
+            RailIconKind.PRODUCTS -> {
+                val boxSize = s * 0.25f
+                val gap = s * 0.12f
+                val startX = w * 0.20f
+                val startY = h * 0.20f
+                listOf(
+                    Offset(startX, startY),
+                    Offset(startX + boxSize + gap, startY),
+                    Offset(startX, startY + boxSize + gap),
+                    Offset(startX + boxSize + gap, startY + boxSize + gap),
+                ).forEachIndexed { index, topLeft ->
+                    drawRoundRect(
+                        color = if (index == 0 && selected) soft else Color.Transparent,
+                        topLeft = topLeft,
+                        size = Size(boxSize, boxSize),
+                        cornerRadius = CornerRadius(s * 0.07f, s * 0.07f),
+                    )
+                    drawRoundRect(
+                        color = outline,
+                        topLeft = topLeft,
+                        size = Size(boxSize, boxSize),
+                        cornerRadius = CornerRadius(s * 0.07f, s * 0.07f),
+                        style = thinStroke,
+                    )
+                }
+                drawLine(outline, Offset(w * 0.20f, h * 0.86f), Offset(w * 0.80f, h * 0.86f), strokeWidth = s * 0.055f, cap = StrokeCap.Round)
+            }
+            RailIconKind.SALES -> {
+                val receipt = Path().apply {
+                    moveTo(w * 0.26f, h * 0.15f)
+                    lineTo(w * 0.74f, h * 0.15f)
+                    quadraticBezierTo(w * 0.82f, h * 0.15f, w * 0.82f, h * 0.23f)
+                    lineTo(w * 0.82f, h * 0.76f)
+                    lineTo(w * 0.70f, h * 0.84f)
+                    lineTo(w * 0.60f, h * 0.76f)
+                    lineTo(w * 0.50f, h * 0.84f)
+                    lineTo(w * 0.40f, h * 0.76f)
+                    lineTo(w * 0.30f, h * 0.84f)
+                    lineTo(w * 0.18f, h * 0.76f)
+                    lineTo(w * 0.18f, h * 0.23f)
+                    quadraticBezierTo(w * 0.18f, h * 0.15f, w * 0.26f, h * 0.15f)
+                    close()
+                }
+                drawPath(receipt, soft)
+                drawPath(receipt, outline, style = stroke)
+                drawLine(outline, Offset(w * 0.35f, h * 0.42f), Offset(w * 0.68f, h * 0.42f), strokeWidth = s * 0.06f, cap = StrokeCap.Round)
+                drawLine(outline.copy(alpha = 0.76f), Offset(w * 0.33f, h * 0.57f), Offset(w * 0.70f, h * 0.57f), strokeWidth = s * 0.045f, cap = StrokeCap.Round)
+                drawCircle(outline, radius = s * 0.09f, center = Offset(w * 0.43f, h * 0.30f), style = thinStroke)
+                drawLine(outline, Offset(w * 0.40f, h * 0.30f), Offset(w * 0.55f, h * 0.30f), strokeWidth = s * 0.045f, cap = StrokeCap.Round)
+            }
+            RailIconKind.RESERVATIONS -> {
+                drawRoundRect(
+                    color = soft,
+                    topLeft = Offset(w * 0.17f, h * 0.22f),
+                    size = Size(w * 0.66f, h * 0.58f),
+                    cornerRadius = CornerRadius(s * 0.09f, s * 0.09f),
+                )
+                drawRoundRect(
+                    color = outline,
+                    topLeft = Offset(w * 0.17f, h * 0.22f),
+                    size = Size(w * 0.66f, h * 0.58f),
+                    cornerRadius = CornerRadius(s * 0.09f, s * 0.09f),
+                    style = stroke,
+                )
+                drawLine(outline, Offset(w * 0.28f, h * 0.13f), Offset(w * 0.28f, h * 0.29f), strokeWidth = s * 0.07f, cap = StrokeCap.Round)
+                drawLine(outline, Offset(w * 0.72f, h * 0.13f), Offset(w * 0.72f, h * 0.29f), strokeWidth = s * 0.07f, cap = StrokeCap.Round)
+                drawLine(outline, Offset(w * 0.18f, h * 0.39f), Offset(w * 0.82f, h * 0.39f), strokeWidth = s * 0.055f, cap = StrokeCap.Round)
+                listOf(0.32f to 0.53f, 0.50f to 0.53f, 0.32f to 0.68f).forEach { (x, y) ->
+                    drawCircle(outline, radius = s * 0.035f, center = Offset(w * x, h * y))
+                }
+                drawPath(Path().apply {
+                    moveTo(w * 0.62f, h * 0.70f)
+                    quadraticBezierTo(w * 0.71f, h * 0.68f, w * 0.72f, h * 0.56f)
+                    lineTo(w * 0.72f, h * 0.50f)
+                    lineTo(w * 0.78f, h * 0.50f)
+                    lineTo(w * 0.78f, h * 0.74f)
+                    lineTo(w * 0.62f, h * 0.74f)
+                    close()
+                }, outline, style = thinStroke)
+            }
+            RailIconKind.CAMERAS -> {
+                drawRoundRect(
+                    color = soft,
+                    topLeft = Offset(w * 0.17f, h * 0.33f),
+                    size = Size(w * 0.66f, h * 0.42f),
+                    cornerRadius = CornerRadius(s * 0.10f, s * 0.10f),
+                )
+                drawRoundRect(
+                    color = outline,
+                    topLeft = Offset(w * 0.17f, h * 0.33f),
+                    size = Size(w * 0.66f, h * 0.42f),
+                    cornerRadius = CornerRadius(s * 0.10f, s * 0.10f),
+                    style = stroke,
+                )
+                drawPath(Path().apply {
+                    moveTo(w * 0.32f, h * 0.33f)
+                    lineTo(w * 0.40f, h * 0.24f)
+                    lineTo(w * 0.61f, h * 0.24f)
+                    lineTo(w * 0.69f, h * 0.33f)
+                }, outline, style = stroke)
+                drawCircle(outline, radius = s * 0.15f, center = Offset(w * 0.50f, h * 0.54f), style = stroke)
+                drawCircle(outline.copy(alpha = 0.55f), radius = s * 0.035f, center = Offset(w * 0.70f, h * 0.43f))
+            }
+            RailIconKind.SETTINGS -> {
+                drawCircle(soft, radius = s * 0.24f, center = Offset(w * 0.50f, h * 0.50f))
+                drawCircle(outline, radius = s * 0.21f, center = Offset(w * 0.50f, h * 0.50f), style = strongStroke)
+                drawCircle(AppShellRailColor.copy(alpha = 0.92f), radius = s * 0.095f, center = Offset(w * 0.50f, h * 0.50f))
+                drawCircle(outline, radius = s * 0.090f, center = Offset(w * 0.50f, h * 0.50f), style = thinStroke)
+                listOf(0f, 45f, 90f, 135f, 180f, 225f, 270f, 315f).forEach { angle ->
+                    val radians = Math.toRadians(angle.toDouble()).toFloat()
+                    val dx = kotlin.math.cos(radians)
+                    val dy = kotlin.math.sin(radians)
+                    drawLine(
+                        outline,
+                        Offset(w * 0.50f + dx * s * 0.27f, h * 0.50f + dy * s * 0.27f),
+                        Offset(w * 0.50f + dx * s * 0.37f, h * 0.50f + dy * s * 0.37f),
+                        strokeWidth = s * 0.065f,
+                        cap = StrokeCap.Round,
+                    )
+                }
+            }
+            RailIconKind.STAFF -> {
+                drawCircle(soft, radius = s * 0.17f, center = Offset(w * 0.50f, h * 0.31f))
+                drawCircle(outline, radius = s * 0.15f, center = Offset(w * 0.50f, h * 0.31f), style = stroke)
+                drawPath(Path().apply {
+                    moveTo(w * 0.22f, h * 0.82f)
+                    quadraticBezierTo(w * 0.26f, h * 0.57f, w * 0.50f, h * 0.57f)
+                    quadraticBezierTo(w * 0.74f, h * 0.57f, w * 0.78f, h * 0.82f)
+                    close()
+                }, soft)
+                drawPath(Path().apply {
+                    moveTo(w * 0.22f, h * 0.82f)
+                    quadraticBezierTo(w * 0.26f, h * 0.57f, w * 0.50f, h * 0.57f)
+                    quadraticBezierTo(w * 0.74f, h * 0.57f, w * 0.78f, h * 0.82f)
+                }, outline, style = stroke)
+                drawLine(outline.copy(alpha = 0.72f), Offset(w * 0.39f, h * 0.68f), Offset(w * 0.61f, h * 0.68f), strokeWidth = s * 0.055f, cap = StrokeCap.Round)
+            }
+        }
+    }
+}
+
 @Composable
 private fun RailButton(
     label: String,
-    icon: ImageVector,
+    iconKind: RailIconKind,
     iconContainerColor: Color,
     iconTint: Color,
     selected: Boolean,
@@ -3789,24 +4069,12 @@ private fun RailButton(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(
-                        if (selected) iconContainerColor.copy(alpha = 0.95f) else iconContainerColor.copy(alpha = 0.72f),
-                    )
-                    .size(42.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = label,
-                    tint = if (selected) AppShellTextPrimary else iconTint,
-                    modifier = Modifier.size(24.dp),
-                )
-            }
-
-            Spacer(modifier = Modifier.width(1.dp))
+            Image(
+                painter = painterResource(id = railIconDrawableRes(iconKind)),
+                contentDescription = label,
+                modifier = Modifier.size(58.dp),
+                contentScale = ContentScale.Fit,
+            )
 
             Text(
                 text = label,
