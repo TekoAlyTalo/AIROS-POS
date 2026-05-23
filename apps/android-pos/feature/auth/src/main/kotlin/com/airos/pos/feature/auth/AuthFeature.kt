@@ -28,12 +28,15 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -75,6 +78,19 @@ data class ManagerOverrideUiState(
     val canSubmit: Boolean
         get() = selectedManagerId != null && pin.length == PosPinLength && !isAuthorizing
 }
+
+enum class AuthScheduleStatus(
+    val label: String,
+    val color: Color,
+) {
+    ACTIVE("Vuorossa", Color(0xFFA3E635)),
+    UPCOMING("Tulossa vuoroon", Color(0xFF5CAEFF)),
+    ENDED("Vuoro päättynyt", Color(0xFFC0CCD6)),
+}
+
+data class AuthStaffStatus(
+    val scheduleStatus: AuthScheduleStatus? = null,
+)
 
 data class AuthUiState(
     val staff: List<StaffMember> = emptyList(),
@@ -444,6 +460,7 @@ class AuthViewModel(
 @Composable
 fun AuthScreen(
     state: AuthUiState,
+    staffStatusById: Map<String, AuthStaffStatus> = emptyMap(),
     onStaffSelected: (String) -> Unit,
     onDigit: (String) -> Unit,
     onBackspace: () -> Unit,
@@ -458,6 +475,9 @@ fun AuthScreen(
     staffPhotoPainter: @Composable (StaffMember) -> Painter? = { null },
 ) {
     val selectedStaff = state.staff.firstOrNull { it.id == state.selectedStaffId }
+    val resolvedStaffPhotoPainter: @Composable (StaffMember) -> Painter? = { staff ->
+        staffPhotoPainter(staff) ?: defaultStaffAvatarPainter(staff)
+    }
 
     Row(
         modifier = Modifier
@@ -481,8 +501,9 @@ fun AuthScreen(
                     StaffQuickSelectCard(
                         staff = staff,
                         selected = staff.id == state.selectedStaffId,
+                        staffStatus = staffStatusById[staff.id] ?: AuthStaffStatus(),
                         onSelect = { onStaffSelected(staff.id) },
-                        photoPainter = staffPhotoPainter,
+                        photoPainter = resolvedStaffPhotoPainter,
                     )
                 }
             }
@@ -496,7 +517,7 @@ fun AuthScreen(
             title = "Turvallinen kirjautuminen",
             modifier = Modifier.weight(0.95f),
         ) {
-            SelectedStaffSummary(selectedStaff = selectedStaff, photoPainter = staffPhotoPainter)
+            SelectedStaffSummary(selectedStaff = selectedStaff, photoPainter = resolvedStaffPhotoPainter)
 
             Surface(
                 modifier = Modifier.fillMaxWidth(),
@@ -553,8 +574,35 @@ fun AuthScreen(
             onClearManagerPin = onClearManagerPin,
             onConfirmManagerOverride = onConfirmManagerOverride,
             onDismiss = onDismissManagerOverride,
-            staffPhotoPainter = staffPhotoPainter,
+            staffPhotoPainter = resolvedStaffPhotoPainter,
         )
+    }
+}
+
+
+@Composable
+private fun defaultStaffAvatarPainter(staff: StaffMember): Painter? {
+    val resourceName = staffAvatarResourceName(staff) ?: return null
+    val context = LocalContext.current
+    val resourceId = remember(context, resourceName) {
+        context.resources.getIdentifier(resourceName, "drawable", context.packageName)
+    }
+    return if (resourceId != 0) {
+        painterResource(id = resourceId)
+    } else {
+        null
+    }
+}
+
+private fun staffAvatarResourceName(staff: StaffMember): String? {
+    val identity = "${staff.id} ${staff.displayName}".lowercase()
+    return when {
+        "aino" in identity || "korhonen" in identity -> "airos_staff_avatar_aino_korhonen_v1"
+        "lauri" in identity || "niemi" in identity -> "airos_staff_avatar_lauri_niemi_v1"
+        "salla" in identity || "virtanen" in identity -> "airos_staff_avatar_salla_virtanen_v1"
+        "oona" in identity || "lehtinen" in identity -> "airos_staff_avatar_oona_lehtinen_v1"
+        "miikka" in identity || "martsalo" in identity -> "airos_staff_avatar_miikka_martsalo_v1"
+        else -> null
     }
 }
 
@@ -562,10 +610,13 @@ fun AuthScreen(
 private fun StaffQuickSelectCard(
     staff: StaffMember,
     selected: Boolean,
+    staffStatus: AuthStaffStatus = AuthStaffStatus(),
     onSelect: () -> Unit,
     photoPainter: @Composable (StaffMember) -> Painter? = { null },
 ) {
     val accentColor = Color(parseColor(staff.quickColorHex).toLong())
+    val scheduleStatus = staffStatus.scheduleStatus
+    val showStatusChips = staff.id != "test-guest" && scheduleStatus != null
 
     Surface(
         modifier = Modifier
@@ -610,15 +661,59 @@ private fun StaffQuickSelectCard(
                     )
                 }
             }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = when {
+                        !staff.isEnabled -> "Pois käytöstä"
+                        staff.isManager -> "Päällikköoikeus"
+                        else -> "POS-oikeus"
+                    },
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Medium,
+                    color = if (selected) MaterialTheme.colorScheme.primary else accentColor,
+                )
+                if (showStatusChips && scheduleStatus != null) {
+                    StaffStatusChip(
+                        label = scheduleStatus.label,
+                        color = scheduleStatus.color,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StaffStatusChip(
+    label: String,
+    color: Color,
+) {
+    Surface(
+        shape = RoundedCornerShape(999.dp),
+        color = color.copy(alpha = 0.16f),
+        border = BorderStroke(1.dp, color.copy(alpha = 0.45f)),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(color),
+            )
             Text(
-                text = when {
-                    !staff.isEnabled -> "Pois käytöstä"
-                    staff.isManager -> "Päällikköoikeus"
-                    else -> "POS-oikeus"
-                },
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Medium,
-                color = if (selected) MaterialTheme.colorScheme.primary else accentColor,
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = color,
+                maxLines = 1,
             )
         }
     }

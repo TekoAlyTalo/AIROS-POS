@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -34,6 +35,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -61,12 +63,12 @@ private val PaymentDialogVoucherRed = Color(0xFFE06A6A)
 private val PaymentDialogCoinGold = Color(0xFFE5C56B)
 private val PaymentDialogCashGreen = Color(0xFF77D6B7)
 private val PaymentDialogCardBlue = Color(0xFF6FD3FF)
-private val PaymentDialogBrandLight = Color(0xFFF7F2E8)
-private val PaymentDialogBrandLightAlt = Color(0xFFF2EEE8)
+private val PaymentDialogBrandDark = Color(0xFF111C27)
+private val PaymentDialogBrandDarkAlt = Color(0xFF142231)
 
 private enum class VoucherProviderUi(
     val label: String,
-    val logoRes: Int,
+    val logoRes: Int?,
     val containerColor: Color,
     val selectedContainerColor: Color,
     val borderColor: Color,
@@ -74,23 +76,30 @@ private enum class VoucherProviderUi(
     SMARTUM(
         label = "Smartum",
         logoRes = R.drawable.pay_logo_smartum,
-        containerColor = PaymentDialogBrandLight,
-        selectedContainerColor = Color(0xFFF5E2B8),
+        containerColor = PaymentDialogBrandDark,
+        selectedContainerColor = Color(0xFF1D2B38),
         borderColor = Color(0xFFC68D2D),
     ),
     EDENRED(
         label = "Edenred",
         logoRes = R.drawable.pay_logo_edenred,
-        containerColor = PaymentDialogBrandLightAlt,
-        selectedContainerColor = Color(0xFFF8DDD5),
+        containerColor = PaymentDialogBrandDarkAlt,
+        selectedContainerColor = Color(0xFF1F2635),
         borderColor = Color(0xFFE96B46),
     ),
     EPASSI(
         label = "ePassi",
         logoRes = R.drawable.pay_logo_epassi,
-        containerColor = PaymentDialogBrandLightAlt,
-        selectedContainerColor = Color(0xFFDDEFE7),
+        containerColor = PaymentDialogBrandDarkAlt,
+        selectedContainerColor = Color(0xFF162A28),
         borderColor = Color(0xFF25A370),
+    ),
+    WOLT(
+        label = "Wolt",
+        logoRes = R.drawable.pay_logo_wolt,
+        containerColor = PaymentDialogBrandDarkAlt,
+        selectedContainerColor = Color(0xFF103246),
+        borderColor = Color(0xFF2FA9DF),
     ),
 }
 
@@ -100,7 +109,7 @@ enum class MenuPaymentMode(
     CASH("Käteinen"),
     CARD("Kortti"),
     VOUCHER("Etuseteli"),
-    SPLIT_PAYMENT("Jaa maksu"),
+    SPLIT_PAYMENT("Yhdistelmä"),
 }
 
 data class MenuPaymentDialogResult(
@@ -152,21 +161,46 @@ fun MenuPaymentDialog(
 
     val cashTenderedCents = remember(cashInput) { parseEuroInputToCents(cashInput) }
     val voucherAmountCents = remember(voucherInput) { parseEuroInputToCents(voucherInput) }
-    val splitCashCents = remember(splitCashInput) { parseEuroInputToCents(splitCashInput) ?: 0 }
-    val splitCardCents = remember(splitCardInput) { parseEuroInputToCents(splitCardInput) ?: 0 }
-    val splitVoucherCents = remember(splitVoucherInput) { parseEuroInputToCents(splitVoucherInput) ?: 0 }
-    val splitPaidCents = splitCashCents + splitCardCents + splitVoucherCents
-
     val activeTarget = remember(activeInputTarget) { PaymentInputTarget.valueOf(activeInputTarget) }
+    val splitRawCashCents = remember(splitCashInput) { parseEuroInputToCents(splitCashInput) ?: 0 }
+    val splitRawCardCents = remember(splitCardInput) { parseEuroInputToCents(splitCardInput) ?: 0 }
+    val splitManualTarget = when (activeTarget) {
+        PaymentInputTarget.SPLIT_CARD -> PaymentInputTarget.SPLIT_CARD
+        else -> PaymentInputTarget.SPLIT_CASH
+    }
+    val splitManualCents = when (splitManualTarget) {
+        PaymentInputTarget.SPLIT_CARD -> splitRawCardCents
+        else -> splitRawCashCents
+    }
+    val splitAutoCents = (finalTotalCents - splitManualCents).coerceAtLeast(0)
+    val splitOverCents = (splitManualCents - finalTotalCents).coerceAtLeast(0)
+    val splitCashCents = if (splitManualTarget == PaymentInputTarget.SPLIT_CASH) splitManualCents else splitAutoCents
+    val splitCardCents = if (splitManualTarget == PaymentInputTarget.SPLIT_CARD) splitManualCents else splitAutoCents
+    val splitVoucherCents = 0
+    val splitPaidCents = splitCashCents + splitCardCents
+    val splitCanFinalize = finalTotalCents > 0 &&
+        splitOverCents == 0 &&
+        splitManualCents > 0 &&
+        splitAutoCents > 0
+
+    val keypadVisibleForCurrentMode = when (activeTarget) {
+        PaymentInputTarget.CASH_RECEIVED -> mode == MenuPaymentMode.CASH
+        PaymentInputTarget.VOUCHER_AMOUNT -> mode == MenuPaymentMode.VOUCHER
+        PaymentInputTarget.SPLIT_CASH,
+        PaymentInputTarget.SPLIT_CARD,
+        PaymentInputTarget.SPLIT_VOUCHER,
+        -> mode == MenuPaymentMode.SPLIT_PAYMENT
+        PaymentInputTarget.DISCOUNT_PERCENT -> discountMode == BillDiscountMode.PERCENT
+        PaymentInputTarget.DISCOUNT_AMOUNT -> discountMode == BillDiscountMode.AMOUNT
+    }
     var voucherProviderName by rememberSaveable { mutableStateOf(VoucherProviderUi.SMARTUM.name) }
     val voucherProvider = remember(voucherProviderName) { VoucherProviderUi.valueOf(voucherProviderName) }
-
 
     val confirmEnabled = when (mode) {
         MenuPaymentMode.CASH -> finalTotalCents > 0 && (cashTenderedCents ?: 0) >= finalTotalCents
         MenuPaymentMode.CARD -> finalTotalCents > 0
         MenuPaymentMode.VOUCHER -> finalTotalCents > 0 && (voucherAmountCents ?: 0) >= finalTotalCents
-        MenuPaymentMode.SPLIT_PAYMENT -> finalTotalCents > 0 && splitPaidCents >= finalTotalCents && splitPaidCents > 0
+        MenuPaymentMode.SPLIT_PAYMENT -> splitCanFinalize
     }
 
     val result = MenuPaymentDialogResult(
@@ -178,7 +212,7 @@ fun MenuPaymentDialog(
         },
         voucherAmountCents = when (mode) {
             MenuPaymentMode.VOUCHER -> voucherAmountCents
-            MenuPaymentMode.SPLIT_PAYMENT -> splitVoucherCents.takeIf { it > 0 }
+            MenuPaymentMode.SPLIT_PAYMENT -> null
             else -> null
         },
         cardAmountCents = when (mode) {
@@ -193,6 +227,12 @@ fun MenuPaymentDialog(
         shouldPrintReceipt = shouldPrintReceipt,
     )
 
+    fun selectVoucherProvider(provider: VoucherProviderUi) {
+        voucherProviderName = provider.name
+        mode = MenuPaymentMode.VOUCHER
+        activeInputTarget = PaymentInputTarget.VOUCHER_AMOUNT.name
+    }
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
@@ -203,359 +243,423 @@ fun MenuPaymentDialog(
             border = BorderStroke(1.dp, PaymentDialogBorderColor),
             contentColor = PaymentDialogTextPrimary,
         ) {
-            Row(
+            Column(
                 modifier = Modifier
                     .width(1100.dp)
-                    .heightIn(max = 760.dp)
-                    .padding(20.dp),
-                horizontalArrangement = Arrangement.spacedBy(18.dp),
-                verticalAlignment = Alignment.Top,
+                    .height(682.dp)
+                    .padding(horizontal = 18.dp, vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Column(
-                    modifier = Modifier.weight(0.42f),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                Text(
+                    text = "Maksuvaihtoehdot",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = PaymentDialogTextPrimary,
+                )
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f, fill = true),
+                    horizontalArrangement = Arrangement.spacedBy(18.dp),
+                    verticalAlignment = Alignment.Top,
                 ) {
-                    Text(
-                        text = "Maksuvaihtoehdot",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = PaymentDialogTextPrimary,
-                    )
-                    PaymentSummaryCard(
-                        paymentContextLabel = paymentContextLabel,
-                        subtotalCents = subtotalCents,
-                        finalTotalCents = finalTotalCents,
-                        billDiscountAmountCents = billDiscountAmountCents,
-                        discountMode = discountMode,
-                        discountInput = discountInput,
-                        mode = mode,
-                        cashTenderedCents = cashTenderedCents,
-                        voucherAmountCents = voucherAmountCents,
-                        splitCashCents = splitCashCents,
-                        splitCardCents = splitCardCents,
-                        splitVoucherCents = splitVoucherCents,
-                        splitPaidCents = splitPaidCents,
-                    )
-
-                    PaymentHintCard(
-                        title = when (mode) {
-                            MenuPaymentMode.CASH -> "Käteismaksu"
-                            MenuPaymentMode.CARD -> "Korttimaksu"
-                            MenuPaymentMode.VOUCHER -> "${voucherProvider.label}-maksu"
-                            MenuPaymentMode.SPLIT_PAYMENT -> "Jaettu maksu"
-                        },
-                        message = when (mode) {
-                            MenuPaymentMode.CASH -> "Syötä vastaanotettu käteinen oikealla. Vaihtoraha lasketaan automaattisesti."
-                            MenuPaymentMode.CARD -> "Korttimaksu käyttää alennettua loppusummaa automaattisesti. Kassalaatikkoa ei avata, ellei mukana ole käteistä."
-                            MenuPaymentMode.VOUCHER -> "Valitse ${voucherProvider.label} yllä olevista painikkeista, syötä summa oikealla ja jätä koodikenttä valmiiksi myöhempää skannerikytkentää varten."
-                            MenuPaymentMode.SPLIT_PAYMENT -> "Kokoa maksu oikealla käteisestä, kortista ja etusetelistä, kunnes koko summa on katettu."
-                        },
-                    )
-
-                    ReceiptPrintOptionCard(
-                        shouldPrintReceipt = shouldPrintReceipt,
-                        onToggle = { shouldPrintReceipt = !shouldPrintReceipt },
-                    )
-                }
-
-                Column(
-                    modifier = Modifier.weight(0.58f),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    Column(
+                        modifier = Modifier.weight(0.34f),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
-                        PaymentUtilityButton(
-                            label = "Alennus %",
-                            selected = discountMode == BillDiscountMode.PERCENT,
-                            modifier = Modifier.weight(1f),
-                            icon = { DiscountPercentIcon(selected = discountMode == BillDiscountMode.PERCENT) },
-                            onClick = {
-                                if (discountMode == BillDiscountMode.PERCENT) {
-                                    discountModeName = BillDiscountMode.NONE.name
-                                    discountInput = ""
-                                } else {
-                                    discountModeName = BillDiscountMode.PERCENT.name
-                                    activeInputTarget = PaymentInputTarget.DISCOUNT_PERCENT.name
-                                }
+                        PaymentSummaryCard(
+                            paymentContextLabel = paymentContextLabel,
+                            subtotalCents = subtotalCents,
+                            finalTotalCents = finalTotalCents,
+                            billDiscountAmountCents = billDiscountAmountCents,
+                            discountMode = discountMode,
+                            discountInput = discountInput,
+                            mode = mode,
+                            voucherProviderLabel = voucherProvider.label,
+                            cashTenderedCents = cashTenderedCents,
+                            voucherAmountCents = voucherAmountCents,
+                            splitCashCents = splitCashCents,
+                            splitCardCents = splitCardCents,
+                            splitVoucherCents = splitVoucherCents,
+                            splitPaidCents = splitPaidCents,
+                        )
+
+                        PaymentHintCard(
+                            title = when (mode) {
+                                MenuPaymentMode.CASH -> "Valittu maksutapa"
+                                MenuPaymentMode.CARD -> "Valittu maksutapa"
+                                MenuPaymentMode.VOUCHER -> "Valittu maksutapa"
+                                MenuPaymentMode.SPLIT_PAYMENT -> "Yhdistelmämaksu"
+                            },
+                            message = when (mode) {
+                                MenuPaymentMode.CASH -> "Käteinen käyttää vastaanotettua summaa ja laskee vaihtorahan automaattisesti."
+                                MenuPaymentMode.CARD -> "Kortti veloittaa jäljellä olevan summan. Viimeistele, kun maksupääte on valmis."
+                                MenuPaymentMode.VOUCHER -> "${voucherProvider.label} kirjataan valituksi maksutavaksi. Syötä summa oikealla."
+                                MenuPaymentMode.SPLIT_PAYMENT -> "Syötä asiakkaan kertoma käteis- tai korttiosuus. Toinen maksutapa lasketaan automaattisesti."
                             },
                         )
-                        PaymentUtilityButton(
-                            label = "Alennus €",
-                            selected = discountMode == BillDiscountMode.AMOUNT,
-                            modifier = Modifier.weight(1f),
-                            icon = { DiscountCoinsIcon(selected = discountMode == BillDiscountMode.AMOUNT) },
-                            onClick = {
-                                if (discountMode == BillDiscountMode.AMOUNT) {
-                                    discountModeName = BillDiscountMode.NONE.name
-                                    discountInput = ""
-                                } else {
-                                    discountModeName = BillDiscountMode.AMOUNT.name
-                                    activeInputTarget = PaymentInputTarget.DISCOUNT_AMOUNT.name
-                                }
-                            },
+
+                        ReceiptPrintOptionCard(
+                            shouldPrintReceipt = shouldPrintReceipt,
+                            onToggle = { shouldPrintReceipt = !shouldPrintReceipt },
                         )
-                        PaymentUtilityButton(
-                            label = "Etuseteli",
-                            selected = mode == MenuPaymentMode.VOUCHER,
-                            modifier = Modifier.weight(1f),
-                            icon = { VoucherTicketIcon(selected = mode == MenuPaymentMode.VOUCHER) },
-                            onClick = {
-                                mode = MenuPaymentMode.VOUCHER
-                                activeInputTarget = PaymentInputTarget.VOUCHER_AMOUNT.name
-                            },
+                    }
+
+                    Column(
+                        modifier = Modifier.weight(0.40f),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Text(
+                            text = "Lisätoiminnot",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = PaymentDialogTextPrimary,
                         )
-                        PaymentUtilityButton(
-                            label = "Jaa maksu",
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            PaymentUtilityButton(
+                                label = "Alennus %",
+                                selected = discountMode == BillDiscountMode.PERCENT,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(80.dp),
+                                icon = { DiscountPercentIcon(selected = discountMode == BillDiscountMode.PERCENT) },
+                                onClick = {
+                                    if (discountMode == BillDiscountMode.PERCENT) {
+                                        discountModeName = BillDiscountMode.NONE.name
+                                        discountInput = ""
+                                    } else {
+                                        discountModeName = BillDiscountMode.PERCENT.name
+                                        activeInputTarget = PaymentInputTarget.DISCOUNT_PERCENT.name
+                                    }
+                                },
+                            )
+                            PaymentUtilityButton(
+                                label = "Alennus €",
+                                selected = discountMode == BillDiscountMode.AMOUNT,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(80.dp),
+                                icon = { DiscountCoinsIcon(selected = discountMode == BillDiscountMode.AMOUNT) },
+                                onClick = {
+                                    if (discountMode == BillDiscountMode.AMOUNT) {
+                                        discountModeName = BillDiscountMode.NONE.name
+                                        discountInput = ""
+                                    } else {
+                                        discountModeName = BillDiscountMode.AMOUNT.name
+                                        activeInputTarget = PaymentInputTarget.DISCOUNT_AMOUNT.name
+                                    }
+                                },
+                            )
+                        }
+
+                        Text(
+                            text = "Maksutavat",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = PaymentDialogTextSecondary,
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            PaymentModeButton(
+                                label = MenuPaymentMode.CARD.label,
+                                selected = mode == MenuPaymentMode.CARD,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(72.dp),
+                                icon = { CardTenderIcon() },
+                                onClick = {
+                                    mode = MenuPaymentMode.CARD
+                                    activeInputTarget = PaymentInputTarget.SPLIT_CARD.name
+                                },
+                            )
+                            PaymentModeButton(
+                                label = MenuPaymentMode.CASH.label,
+                                selected = mode == MenuPaymentMode.CASH,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(72.dp),
+                                icon = { CashTenderIcon() },
+                                onClick = {
+                                    mode = MenuPaymentMode.CASH
+                                    activeInputTarget = PaymentInputTarget.CASH_RECEIVED.name
+                                },
+                            )
+                        }
+                        PaymentModeButton(
+                            label = MenuPaymentMode.SPLIT_PAYMENT.label,
                             selected = mode == MenuPaymentMode.SPLIT_PAYMENT,
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(72.dp),
                             icon = { SplitPaymentIcon(selected = mode == MenuPaymentMode.SPLIT_PAYMENT) },
                             onClick = {
                                 mode = MenuPaymentMode.SPLIT_PAYMENT
                                 activeInputTarget = PaymentInputTarget.SPLIT_CASH.name
+                                splitVoucherInput = ""
                             },
                         )
+
+                        Text(
+                            text = "Tulevat integraatiot",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = PaymentDialogTextSecondary,
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            PaymentIntegrationPreviewButton(
+                                label = "Etuseteli",
+                                logoRes = null,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(58.dp),
+                                containerColor = PaymentDialogBrandDarkAlt,
+                                borderColor = Color(0xFFE17478),
+                            )
+                            PaymentIntegrationPreviewButton(
+                                label = VoucherProviderUi.SMARTUM.label,
+                                logoRes = VoucherProviderUi.SMARTUM.logoRes,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(58.dp),
+                                containerColor = VoucherProviderUi.SMARTUM.containerColor,
+                                borderColor = VoucherProviderUi.SMARTUM.borderColor,
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            PaymentIntegrationPreviewButton(
+                                label = VoucherProviderUi.EDENRED.label,
+                                logoRes = VoucherProviderUi.EDENRED.logoRes,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(58.dp),
+                                containerColor = VoucherProviderUi.EDENRED.containerColor,
+                                borderColor = VoucherProviderUi.EDENRED.borderColor,
+                            )
+                            PaymentIntegrationPreviewButton(
+                                label = VoucherProviderUi.EPASSI.label,
+                                logoRes = VoucherProviderUi.EPASSI.logoRes,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(58.dp),
+                                containerColor = VoucherProviderUi.EPASSI.containerColor,
+                                borderColor = VoucherProviderUi.EPASSI.borderColor,
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            PaymentIntegrationPreviewButton(
+                                label = VoucherProviderUi.WOLT.label,
+                                logoRes = VoucherProviderUi.WOLT.logoRes,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(58.dp),
+                                containerColor = VoucherProviderUi.WOLT.containerColor,
+                                borderColor = VoucherProviderUi.WOLT.borderColor,
+                            )
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+
                     }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+
+                    Column(
+                        modifier = Modifier
+                            .weight(0.32f)
+                            .fillMaxHeight(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        PaymentModeButton(
-                            label = MenuPaymentMode.CASH.label,
-                            selected = mode == MenuPaymentMode.CASH,
-                            modifier = Modifier.weight(1f),
-                            icon = { CashTenderIcon() },
-                            onClick = {
-                                mode = MenuPaymentMode.CASH
-                                activeInputTarget = PaymentInputTarget.CASH_RECEIVED.name
-                            },
-                        )
-                        PaymentModeButton(
-                            label = MenuPaymentMode.CARD.label,
-                            selected = mode == MenuPaymentMode.CARD,
-                            modifier = Modifier.weight(1f),
-                            icon = { CardTenderIcon() },
-                            onClick = {
-                                mode = MenuPaymentMode.CARD
-                                activeInputTarget = PaymentInputTarget.SPLIT_CARD.name
-                            },
-                        )
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        VoucherProviderUi.values().forEach { provider ->
-                            PaymentBrandButton(
-                                label = provider.label,
-                                logoRes = provider.logoRes,
-                                selected = mode == MenuPaymentMode.VOUCHER && voucherProvider == provider,
-                                modifier = Modifier.weight(1f),
-                                containerColor = provider.containerColor,
-                                selectedContainerColor = provider.selectedContainerColor,
-                                borderColor = provider.borderColor,
-                                onClick = {
-                                    voucherProviderName = provider.name
-                                    mode = MenuPaymentMode.VOUCHER
-                                    activeInputTarget = PaymentInputTarget.VOUCHER_AMOUNT.name
+                        if (mode == MenuPaymentMode.CARD) {
+                            PaymentAmountFocusCard(
+                                mode = mode,
+                                voucherProviderLabel = voucherProvider.label,
+                                finalTotalCents = finalTotalCents,
+                            )
+                            CardFullPaymentGuardCard()
+                        }
+
+                        if (mode == MenuPaymentMode.SPLIT_PAYMENT) {
+                            SplitPaymentNoScrollPanel(
+                                finalTotalCents = finalTotalCents,
+                                splitCashCents = splitCashCents,
+                                splitCardCents = splitCardCents,
+                                activeTarget = activeTarget,
+                                onSelectCash = {
+                                    if (splitManualTarget == PaymentInputTarget.SPLIT_CARD) {
+                                        splitCashInput = formatEditableMoneyInput(splitCashCents)
+                                    }
+                                    activeInputTarget = PaymentInputTarget.SPLIT_CASH.name
+                                },
+                                onSelectCard = {
+                                    if (splitManualTarget == PaymentInputTarget.SPLIT_CASH) {
+                                        splitCardInput = formatEditableMoneyInput(splitCardCents)
+                                    }
+                                    activeInputTarget = PaymentInputTarget.SPLIT_CARD.name
+                                },
+                            )
+                        }
+
+                        if (mode != MenuPaymentMode.CARD && mode != MenuPaymentMode.SPLIT_PAYMENT) {
+                            Surface(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(18.dp),
+                                color = PaymentDialogShellColor,
+                                border = BorderStroke(1.dp, PaymentDialogBorderColor),
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                                ) {
+                                    Text(
+                                        text = "Maksun syöttö",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = PaymentDialogTextPrimary,
+                                    )
+                                    when (mode) {
+                                        MenuPaymentMode.CASH -> {
+                                            PaymentInputSelector(
+                                                label = "Saatu käteinen",
+                                                value = cashInput,
+                                                hint = "Käytä pikapainikkeita tai näppäimistöä",
+                                                selected = activeTarget == PaymentInputTarget.CASH_RECEIVED,
+                                                onClick = { activeInputTarget = PaymentInputTarget.CASH_RECEIVED.name },
+                                            )
+                                            QuickCashRow(
+                                                exactAmountCents = finalTotalCents,
+                                                onSelectAmount = { amountCents ->
+                                                    activeInputTarget = PaymentInputTarget.CASH_RECEIVED.name
+                                                    cashInput = formatEditableMoneyInput(amountCents)
+                                                },
+                                            )
+                                        }
+
+                                        MenuPaymentMode.VOUCHER -> {
+                                            PaymentInputSelector(
+                                                label = "${voucherProvider.label}-summa",
+                                                value = voucherInput,
+                                                hint = "${voucherProvider.label}-summa vaaditaan",
+                                                selected = activeTarget == PaymentInputTarget.VOUCHER_AMOUNT,
+                                                onClick = { activeInputTarget = PaymentInputTarget.VOUCHER_AMOUNT.name },
+                                            )
+                                            OutlinedTextField(
+                                                value = voucherBarcodeInput,
+                                                onValueChange = { voucherBarcodeInput = it },
+                                                label = { Text("${voucherProvider.label}-viivakoodi / koodi") },
+                                                supportingText = { Text("Manuaalinen syöttö nyt. Skanneri voi täyttää tämän myöhemmin.") },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                singleLine = true,
+                                            )
+                                        }
+
+                                        MenuPaymentMode.CARD,
+                                        MenuPaymentMode.SPLIT_PAYMENT,
+                                        -> Unit
+                                    }
+                                }
+                            }
+                        }
+
+                        if (keypadVisibleForCurrentMode && mode != MenuPaymentMode.CARD) {
+                            PaymentKeypad(
+                                target = activeTarget,
+                                value = currentValueForTarget(
+                                    target = activeTarget,
+                                    cashInput = cashInput,
+                                    voucherInput = voucherInput,
+                                    splitCashInput = splitCashInput,
+                                    splitCardInput = splitCardInput,
+                                    splitVoucherInput = splitVoucherInput,
+                                    discountInput = discountInput,
+                                ),
+                                onDigit = { digit ->
+                                    when (activeTarget) {
+                                        PaymentInputTarget.CASH_RECEIVED -> cashInput = appendInputDigit(cashInput, digit, InputMode.MONEY)
+                                        PaymentInputTarget.VOUCHER_AMOUNT -> voucherInput = appendInputDigit(voucherInput, digit, InputMode.MONEY)
+                                        PaymentInputTarget.SPLIT_CASH -> splitCashInput = appendInputDigit(splitCashInput, digit, InputMode.MONEY)
+                                        PaymentInputTarget.SPLIT_CARD -> splitCardInput = appendInputDigit(splitCardInput, digit, InputMode.MONEY)
+                                        PaymentInputTarget.SPLIT_VOUCHER -> splitVoucherInput = appendInputDigit(splitVoucherInput, digit, InputMode.MONEY)
+                                        PaymentInputTarget.DISCOUNT_PERCENT -> discountInput = appendInputDigit(discountInput, digit, InputMode.PERCENT)
+                                        PaymentInputTarget.DISCOUNT_AMOUNT -> discountInput = appendInputDigit(discountInput, digit, InputMode.MONEY)
+                                    }
+                                },
+                                onDecimal = {
+                                    when (activeTarget) {
+                                        PaymentInputTarget.CASH_RECEIVED -> cashInput = appendInputDecimal(cashInput, InputMode.MONEY)
+                                        PaymentInputTarget.VOUCHER_AMOUNT -> voucherInput = appendInputDecimal(voucherInput, InputMode.MONEY)
+                                        PaymentInputTarget.SPLIT_CASH -> splitCashInput = appendInputDecimal(splitCashInput, InputMode.MONEY)
+                                        PaymentInputTarget.SPLIT_CARD -> splitCardInput = appendInputDecimal(splitCardInput, InputMode.MONEY)
+                                        PaymentInputTarget.SPLIT_VOUCHER -> splitVoucherInput = appendInputDecimal(splitVoucherInput, InputMode.MONEY)
+                                        PaymentInputTarget.DISCOUNT_PERCENT -> Unit
+                                        PaymentInputTarget.DISCOUNT_AMOUNT -> discountInput = appendInputDecimal(discountInput, InputMode.MONEY)
+                                    }
+                                },
+                                onBackspace = {
+                                    when (activeTarget) {
+                                        PaymentInputTarget.CASH_RECEIVED -> cashInput = cashInput.dropLast(1)
+                                        PaymentInputTarget.VOUCHER_AMOUNT -> voucherInput = voucherInput.dropLast(1)
+                                        PaymentInputTarget.SPLIT_CASH -> splitCashInput = splitCashInput.dropLast(1)
+                                        PaymentInputTarget.SPLIT_CARD -> splitCardInput = splitCardInput.dropLast(1)
+                                        PaymentInputTarget.SPLIT_VOUCHER -> splitVoucherInput = splitVoucherInput.dropLast(1)
+                                        PaymentInputTarget.DISCOUNT_PERCENT -> discountInput = discountInput.dropLast(1)
+                                        PaymentInputTarget.DISCOUNT_AMOUNT -> discountInput = discountInput.dropLast(1)
+                                    }
                                 },
                             )
                         }
                     }
+                }
 
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(20.dp),
-                        color = PaymentDialogShellColor,
-                        border = BorderStroke(1.dp, PaymentDialogBorderColor),
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(14.dp),
-                            horizontalArrangement = Arrangement.spacedBy(14.dp),
-                            verticalAlignment = Alignment.Top,
-                        ) {
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(12.dp),
-                            ) {
-                                Text(
-                                    text = "Maksun syöttö",
-                                    style = MaterialTheme.typography.titleLarge,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = PaymentDialogTextPrimary,
-                                )
-
-                                when (mode) {
-                                    MenuPaymentMode.CASH -> {
-                                        PaymentInputSelector(
-                                            label = "Saatu käteinen",
-                                            value = cashInput,
-                                            hint = "Käytä pikapainikkeita tai näppäimistöä",
-                                            selected = activeTarget == PaymentInputTarget.CASH_RECEIVED,
-                                            onClick = { activeInputTarget = PaymentInputTarget.CASH_RECEIVED.name },
-                                        )
-                                        QuickCashRow(
-                                            exactAmountCents = finalTotalCents,
-                                            onSelectAmount = { amountCents ->
-                                                activeInputTarget = PaymentInputTarget.CASH_RECEIVED.name
-                                                cashInput = formatEditableMoneyInput(amountCents)
-                                            },
-                                        )
-                                    }
-
-                                    MenuPaymentMode.CARD -> {
-                                        PaymentHintCard(
-                                            title = "Korttimaksu",
-                                            message = "Korttimaksu käyttää alennettua loppusummaa automaattisesti. Viimeistele maksu, kun maksupääte on valmis.",
-                                        )
-                                    }
-
-                                    MenuPaymentMode.VOUCHER -> {
-                                        PaymentInputSelector(
-                                            label = "${voucherProvider.label}-summa",
-                                            value = voucherInput,
-                                            hint = "${voucherProvider.label}-summa vaaditaan",
-                                            selected = activeTarget == PaymentInputTarget.VOUCHER_AMOUNT,
-                                            onClick = { activeInputTarget = PaymentInputTarget.VOUCHER_AMOUNT.name },
-                                        )
-                                        OutlinedTextField(
-                                            value = voucherBarcodeInput,
-                                            onValueChange = { voucherBarcodeInput = it },
-                                            label = { Text("${voucherProvider.label}-viivakoodi / koodi") },
-                                            supportingText = { Text("Manuaalinen syöttö nyt. Skanneri voi täyttää tämän myöhemmin.") },
-                                            modifier = Modifier.fillMaxWidth(),
-                                            singleLine = true,
-                                        )
-                                    }
-
-                                    MenuPaymentMode.SPLIT_PAYMENT -> {
-                                        PaymentInputSelector(
-                                            label = "Käteisosuus",
-                                            value = splitCashInput,
-                                            hint = "Avaa laatikon, jos käteistä käytetään",
-                                            selected = activeTarget == PaymentInputTarget.SPLIT_CASH,
-                                            onClick = { activeInputTarget = PaymentInputTarget.SPLIT_CASH.name },
-                                        )
-                                        QuickCashRow(
-                                            exactAmountCents = finalTotalCents,
-                                            onSelectAmount = { amountCents ->
-                                                activeInputTarget = PaymentInputTarget.SPLIT_CASH.name
-                                                splitCashInput = formatEditableMoneyInput(amountCents)
-                                            },
-                                        )
-                                        PaymentInputSelector(
-                                            label = "Korttiosuus",
-                                            value = splitCardInput,
-                                            hint = "Valinnainen",
-                                            selected = activeTarget == PaymentInputTarget.SPLIT_CARD,
-                                            onClick = { activeInputTarget = PaymentInputTarget.SPLIT_CARD.name },
-                                        )
-                                        PaymentInputSelector(
-                                            label = "Etuseteliosuus",
-                                            value = splitVoucherInput,
-                                            hint = "Valinnainen",
-                                            selected = activeTarget == PaymentInputTarget.SPLIT_VOUCHER,
-                                            onClick = { activeInputTarget = PaymentInputTarget.SPLIT_VOUCHER.name },
-                                        )
-                                        OutlinedTextField(
-                                            value = voucherBarcodeInput,
-                                            onValueChange = { voucherBarcodeInput = it },
-                                            label = { Text("Etusetelin viivakoodi / koodi") },
-                                            supportingText = { Text("Käytetään, kun jaetussa maksussa on etuseteli.") },
-                                            modifier = Modifier.fillMaxWidth(),
-                                            singleLine = true,
-                                        )
-                                    }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(18.dp),
+                ) {
+                    PaymentDialogButton(
+                        label = "Sulje",
+                        onClick = onDismiss,
+                        primary = false,
+                        modifier = Modifier.weight(0.48f),
+                    )
+                    PaymentDialogButton(
+                        label = when (mode) {
+                            MenuPaymentMode.CASH -> {
+                                val missingCents = (finalTotalCents - (cashTenderedCents ?: 0)).coerceAtLeast(0)
+                                if (missingCents > 0) "Puuttuu ${CentsFormatter.format(missingCents)}" else "Viimeistele käteismaksu"
+                            }
+                            MenuPaymentMode.CARD -> "Viimeistele korttimaksu"
+                            MenuPaymentMode.VOUCHER -> "Viimeistele ${voucherProvider.label}-maksu"
+                            MenuPaymentMode.SPLIT_PAYMENT -> {
+                                when {
+                                    splitOverCents > 0 -> "Ylittää ${CentsFormatter.format(splitOverCents)}"
+                                    splitCanFinalize -> "Viimeistele yhdistelmämaksu"
+                                    splitManualCents <= 0 -> "Syötä käteinen tai kortti"
+                                    splitAutoCents <= 0 -> "Valitse tavallinen maksutapa"
+                                    else -> "Viimeistele yhdistelmämaksu"
                                 }
                             }
-
-                            Column(
-                                modifier = Modifier.width(290.dp),
-                                verticalArrangement = Arrangement.spacedBy(12.dp),
-                            ) {
-                                Text(
-                                    text = "Näppäimistö",
-                                    style = MaterialTheme.typography.titleLarge,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = PaymentDialogTextPrimary,
-                                )
-                                PaymentKeypad(
-                                    target = activeTarget,
-                                    value = currentValueForTarget(
-                                        target = activeTarget,
-                                        cashInput = cashInput,
-                                        voucherInput = voucherInput,
-                                        splitCashInput = splitCashInput,
-                                        splitCardInput = splitCardInput,
-                                        splitVoucherInput = splitVoucherInput,
-                                        discountInput = discountInput,
-                                    ),
-                                    onDigit = { digit ->
-                                        when (activeTarget) {
-                                            PaymentInputTarget.CASH_RECEIVED -> cashInput = appendInputDigit(cashInput, digit, InputMode.MONEY)
-                                            PaymentInputTarget.VOUCHER_AMOUNT -> voucherInput = appendInputDigit(voucherInput, digit, InputMode.MONEY)
-                                            PaymentInputTarget.SPLIT_CASH -> splitCashInput = appendInputDigit(splitCashInput, digit, InputMode.MONEY)
-                                            PaymentInputTarget.SPLIT_CARD -> splitCardInput = appendInputDigit(splitCardInput, digit, InputMode.MONEY)
-                                            PaymentInputTarget.SPLIT_VOUCHER -> splitVoucherInput = appendInputDigit(splitVoucherInput, digit, InputMode.MONEY)
-                                            PaymentInputTarget.DISCOUNT_PERCENT -> discountInput = appendInputDigit(discountInput, digit, InputMode.PERCENT)
-                                            PaymentInputTarget.DISCOUNT_AMOUNT -> discountInput = appendInputDigit(discountInput, digit, InputMode.MONEY)
-                                        }
-                                    },
-                                    onDecimal = {
-                                        when (activeTarget) {
-                                            PaymentInputTarget.CASH_RECEIVED -> cashInput = appendInputDecimal(cashInput, InputMode.MONEY)
-                                            PaymentInputTarget.VOUCHER_AMOUNT -> voucherInput = appendInputDecimal(voucherInput, InputMode.MONEY)
-                                            PaymentInputTarget.SPLIT_CASH -> splitCashInput = appendInputDecimal(splitCashInput, InputMode.MONEY)
-                                            PaymentInputTarget.SPLIT_CARD -> splitCardInput = appendInputDecimal(splitCardInput, InputMode.MONEY)
-                                            PaymentInputTarget.SPLIT_VOUCHER -> splitVoucherInput = appendInputDecimal(splitVoucherInput, InputMode.MONEY)
-                                            PaymentInputTarget.DISCOUNT_PERCENT -> Unit
-                                            PaymentInputTarget.DISCOUNT_AMOUNT -> discountInput = appendInputDecimal(discountInput, InputMode.MONEY)
-                                        }
-                                    },
-                                    onBackspace = {
-                                        when (activeTarget) {
-                                            PaymentInputTarget.CASH_RECEIVED -> cashInput = cashInput.dropLast(1)
-                                            PaymentInputTarget.VOUCHER_AMOUNT -> voucherInput = voucherInput.dropLast(1)
-                                            PaymentInputTarget.SPLIT_CASH -> splitCashInput = splitCashInput.dropLast(1)
-                                            PaymentInputTarget.SPLIT_CARD -> splitCardInput = splitCardInput.dropLast(1)
-                                            PaymentInputTarget.SPLIT_VOUCHER -> splitVoucherInput = splitVoucherInput.dropLast(1)
-                                            PaymentInputTarget.DISCOUNT_PERCENT -> discountInput = discountInput.dropLast(1)
-                                            PaymentInputTarget.DISCOUNT_AMOUNT -> discountInput = discountInput.dropLast(1)
-                                        }
-                                    },
-                                )
-                            }
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        PaymentDialogButton(
-                            label = "Sulje",
-                            onClick = onDismiss,
-                            primary = false,
-                            modifier = Modifier.weight(0.42f),
-                        )
-                        PaymentDialogButton(
-                            label = when (mode) {
-                                MenuPaymentMode.CASH -> "Viimeistele käteismaksu"
-                                MenuPaymentMode.CARD -> "Viimeistele korttimaksu"
-                                MenuPaymentMode.VOUCHER -> "Viimeistele ${voucherProvider.label}-maksu"
-                                MenuPaymentMode.SPLIT_PAYMENT -> "Viimeistele jaettu maksu"
-                            },
-                            onClick = { onConfirm(result) },
-                            modifier = Modifier.weight(0.58f),
-                            enabled = confirmEnabled,
-                        )
-                    }
+                        },
+                        onClick = { onConfirm(result) },
+                        modifier = Modifier.weight(0.52f),
+                        enabled = confirmEnabled,
+                    )
                 }
             }
         }
     }
 }
+
 
 @Composable
 private fun PaymentSummaryCard(
@@ -566,6 +670,7 @@ private fun PaymentSummaryCard(
     discountMode: BillDiscountMode,
     discountInput: String,
     mode: MenuPaymentMode,
+    voucherProviderLabel: String,
     cashTenderedCents: Int?,
     voucherAmountCents: Int?,
     splitCashCents: Int,
@@ -585,6 +690,12 @@ private fun PaymentSummaryCard(
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            Text(
+                text = "Laskun yhteenveto",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = PaymentDialogTextPrimary,
+            )
             PaymentSummaryRow(label = "Lasku", value = paymentContextLabel, emphasized = true)
             PaymentSummaryRow(label = "Välisumma", value = CentsFormatter.format(subtotalCents))
             if (billDiscountAmountCents > 0) {
@@ -603,29 +714,31 @@ private fun PaymentSummaryCard(
                 MenuPaymentMode.CASH -> {
                     val changeCents = ((cashTenderedCents ?: 0) - finalTotalCents).coerceAtLeast(0)
                     val remainingCents = (finalTotalCents - (cashTenderedCents ?: 0)).coerceAtLeast(0)
+                    PaymentSummaryRow(label = "Valittu maksu", value = "Käteinen", emphasized = true)
                     PaymentSummaryRow(label = "Saatu käteinen", value = cashTenderedCents?.let(CentsFormatter::format) ?: "—")
                     PaymentSummaryRow(label = "Puuttuu", value = CentsFormatter.format(remainingCents))
                     PaymentSummaryRow(label = "Vaihtoraha", value = CentsFormatter.format(changeCents), emphasized = true)
                 }
 
                 MenuPaymentMode.CARD -> {
-                    PaymentSummaryRow(label = "Korttimaksu", value = CentsFormatter.format(finalTotalCents), emphasized = true)
+                    PaymentSummaryRow(label = "Valittu maksu", value = "Kortti", emphasized = true)
                 }
 
                 MenuPaymentMode.VOUCHER -> {
                     val voucherCents = voucherAmountCents ?: 0
                     val remainingCents = (finalTotalCents - voucherCents).coerceAtLeast(0)
-                    PaymentSummaryRow(label = "Etuseteli", value = voucherAmountCents?.let(CentsFormatter::format) ?: "—")
+                    PaymentSummaryRow(label = "Valittu maksu", value = voucherProviderLabel, emphasized = true)
+                    PaymentSummaryRow(label = voucherProviderLabel, value = voucherAmountCents?.let(CentsFormatter::format) ?: "—")
                     PaymentSummaryRow(label = "Puuttuu", value = CentsFormatter.format(remainingCents), emphasized = remainingCents == 0)
                 }
 
                 MenuPaymentMode.SPLIT_PAYMENT -> {
+                    PaymentSummaryRow(label = "Valittu maksu", value = "Yhdistelmä", emphasized = true)
                     PaymentSummaryRow(label = "Käteinen", value = CentsFormatter.format(splitCashCents))
                     PaymentSummaryRow(label = "Kortti", value = CentsFormatter.format(splitCardCents))
-                    PaymentSummaryRow(label = "Etuseteli", value = CentsFormatter.format(splitVoucherCents))
                     PaymentSummaryRow(label = "Maksettu yhteensä", value = CentsFormatter.format(splitPaidCents))
                     PaymentSummaryRow(
-                        label = if (splitPaidCents >= finalTotalCents) "Vaihtoraha / ylimaksu" else "Puuttuu",
+                        label = if (splitPaidCents > finalTotalCents) "Ylittää" else "Puuttuu",
                         value = CentsFormatter.format(abs(finalTotalCents - splitPaidCents)),
                         emphasized = true,
                     )
@@ -634,6 +747,72 @@ private fun PaymentSummaryCard(
         }
     }
 }
+
+@Composable
+private fun PaymentAmountFocusCard(
+    mode: MenuPaymentMode,
+    voucherProviderLabel: String,
+    finalTotalCents: Int,
+) {
+    val title = when (mode) {
+        MenuPaymentMode.CASH -> "Maksetaan käteisellä"
+        MenuPaymentMode.CARD -> "Maksetaan kortilla"
+        MenuPaymentMode.VOUCHER -> "$voucherProviderLabel-maksu"
+        MenuPaymentMode.SPLIT_PAYMENT -> "Yhdistelmämaksu"
+    }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = PaymentDialogShellColor,
+        border = BorderStroke(1.dp, PaymentDialogBorderColor),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = PaymentDialogTextPrimary,
+            )
+            Text(
+                text = CentsFormatter.format(finalTotalCents),
+                style = MaterialTheme.typography.headlineLarge,
+                fontWeight = FontWeight.Bold,
+                color = PaymentDialogAccentTextColor,
+            )
+        }
+    }
+}
+
+@Composable
+private fun CardFullPaymentGuardCard() {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = PaymentDialogShellColor,
+        border = BorderStroke(1.dp, PaymentDialogBorderColor),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = "Korttimaksu veloittaa koko jäljellä olevan summan.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = PaymentDialogTextSecondary,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = "Käteisosan kirjaus tehdään Yhdistelmä-toiminnolla.",
+                style = MaterialTheme.typography.bodySmall,
+                color = PaymentDialogTextMuted,
+            )
+        }
+    }
+}
+
 
 @Composable
 private fun DiscountSelectorRow(
@@ -722,6 +901,154 @@ private fun QuickCashRow(
 }
 
 @Composable
+private fun SplitPaymentNoScrollPanel(
+    finalTotalCents: Int,
+    splitCashCents: Int,
+    splitCardCents: Int,
+    activeTarget: PaymentInputTarget,
+    onSelectCash: () -> Unit,
+    onSelectCard: () -> Unit,
+) {
+    val paidCents = splitCashCents + splitCardCents
+    val overCents = (paidCents - finalTotalCents).coerceAtLeast(0)
+    val missingCents = if (overCents > 0) 0 else (finalTotalCents - paidCents).coerceAtLeast(0)
+    val activeIsCash = activeTarget != PaymentInputTarget.SPLIT_CARD
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = PaymentDialogShellColor,
+        border = BorderStroke(1.dp, PaymentDialogBorderColor),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Yhdistelmämaksu",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = PaymentDialogTextPrimary,
+                    )
+                    Text(
+                        text = "Syötä toinen osuus. AIROS laskee loput.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = PaymentDialogTextMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = if (overCents > 0) "Ylittää" else "Puuttuu",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = PaymentDialogTextMuted,
+                    )
+                    Text(
+                        text = CentsFormatter.format(if (overCents > 0) overCents else missingCents),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = if (overCents > 0) PaymentDialogVoucherRed else PaymentDialogAccentTextColor,
+                    )
+                }
+            }
+
+            SplitPaymentAmountRow(
+                label = "Käteinen",
+                valueCents = splitCashCents,
+                selected = activeIsCash,
+                badge = if (activeIsCash) "Syötä" else "Loput",
+                onClick = onSelectCash,
+            )
+            SplitPaymentAmountRow(
+                label = "Kortti",
+                valueCents = splitCardCents,
+                selected = !activeIsCash,
+                badge = if (!activeIsCash) "Syötä" else "Loput",
+                onClick = onSelectCard,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SplitPaymentAmountRow(
+    label: String,
+    valueCents: Int,
+    selected: Boolean,
+    badge: String?,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(42.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(14.dp),
+        color = if (selected) PaymentDialogPanelAltColor else PaymentDialogPanelColor,
+        border = BorderStroke(
+            1.dp,
+            if (selected) PaymentDialogAccentTextColor.copy(alpha = 0.75f) else PaymentDialogBorderColor,
+        ),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (selected) PaymentDialogAccentTextColor else PaymentDialogTextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (!badge.isNullOrBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(999.dp),
+                        color = if (selected) PaymentDialogAccentTextColor.copy(alpha = 0.16f) else PaymentDialogBorderColor.copy(alpha = 0.26f),
+                        border = BorderStroke(1.dp, if (selected) PaymentDialogAccentTextColor.copy(alpha = 0.45f) else PaymentDialogBorderColor.copy(alpha = 0.40f)),
+                    ) {
+                        Text(
+                            text = badge,
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = if (selected) PaymentDialogAccentTextColor else PaymentDialogTextMuted,
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
+            Text(
+                text = CentsFormatter.format(valueCents),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = PaymentDialogTextPrimary,
+            )
+        }
+    }
+}
+
+
+
+
+@Composable
 private fun PaymentInputSelector(
     label: String,
     value: String,
@@ -741,7 +1068,7 @@ private fun PaymentInputSelector(
         ),
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
             verticalArrangement = Arrangement.spacedBy(3.dp),
         ) {
             Text(
@@ -751,7 +1078,7 @@ private fun PaymentInputSelector(
             )
             Text(
                 text = formatPaymentDisplayValue(value),
-                style = MaterialTheme.typography.headlineSmall,
+                style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 color = PaymentDialogTextPrimary,
                 maxLines = 1,
@@ -927,7 +1254,7 @@ private fun PaymentKeyButton(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(54.dp)
+                .height(46.dp)
                 .clickable(enabled = enabled, onClick = onClick),
             contentAlignment = Alignment.Center,
         ) {
@@ -976,27 +1303,28 @@ private fun PaymentUtilityButton(
 ) {
     Surface(
         modifier = modifier
-            .defaultMinSize(minHeight = 58.dp)
-            .clip(RoundedCornerShape(16.dp))
+            .fillMaxHeight()
+            .defaultMinSize(minHeight = 84.dp)
+            .clip(RoundedCornerShape(18.dp))
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(18.dp),
         color = if (selected) PaymentDialogPanelAltColor else PaymentDialogShellColor,
-        border = BorderStroke(1.dp, if (selected) PaymentDialogUtilityBlue.copy(alpha = 0.85f) else PaymentDialogBorderColor),
+        border = BorderStroke(1.dp, if (selected) PaymentDialogUtilityBlue.copy(alpha = 0.95f) else PaymentDialogBorderColor.copy(alpha = 0.88f)),
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             icon()
             Text(
                 text = label,
                 style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = FontWeight.Bold,
                 color = PaymentDialogTextPrimary,
-                maxLines = 2,
+                maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
         }
@@ -1040,9 +1368,73 @@ private fun PaymentModeButton(
 }
 
 @Composable
+private fun PaymentIntegrationPreviewButton(
+    label: String,
+    logoRes: Int?,
+    modifier: Modifier = Modifier,
+    containerColor: Color,
+    borderColor: Color,
+) {
+    Surface(
+        modifier = modifier
+            .defaultMinSize(minHeight = 56.dp)
+            .clip(RoundedCornerShape(18.dp)),
+        shape = RoundedCornerShape(18.dp),
+        color = containerColor.copy(alpha = 0.78f),
+        border = BorderStroke(1.dp, borderColor.copy(alpha = 0.55f)),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier.weight(1f),
+                contentAlignment = Alignment.Center,
+            ) {
+                when (label) {
+                    "Smartum" -> SmartumWordmark()
+                    "Edenred" -> EdenredWordmark()
+                    "ePassi" -> EPassiWordmark()
+                    else -> {
+                        if (logoRes != null) {
+                            Image(
+                                painter = painterResource(id = logoRes),
+                                contentDescription = label,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(34.dp),
+                                contentScale = ContentScale.Fit,
+                            )
+                        } else {
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = PaymentDialogUtilityBlue,
+                            )
+                        }
+                    }
+                }
+            }
+            Text(
+                text = "Tulossa",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = PaymentDialogTextMuted,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+
+@Composable
 private fun PaymentBrandButton(
     label: String,
-    logoRes: Int,
+    logoRes: Int?,
     selected: Boolean,
     modifier: Modifier = Modifier,
     containerColor: Color,
@@ -1066,14 +1458,154 @@ private fun PaymentBrandButton(
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Image(
-                painter = painterResource(id = logoRes),
-                contentDescription = label,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(26.dp),
-                contentScale = ContentScale.Fit,
+            when (label) {
+                "Smartum" -> SmartumWordmark()
+                "Edenred" -> EdenredWordmark()
+                "ePassi" -> EPassiWordmark()
+                else -> {
+                    if (logoRes != null) {
+                        Image(
+                            painter = painterResource(id = logoRes),
+                            contentDescription = label,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(42.dp),
+                            contentScale = ContentScale.Fit,
+                        )
+                    } else {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = PaymentDialogUtilityBlue,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SmartumWordmark() {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            text = "smartum",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = PaymentDialogTextPrimary,
+            maxLines = 1,
+        )
+        Text(
+            text = "pay",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = PaymentDialogCoinGold,
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun EdenredWordmark() {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(20.dp)
+                .background(Color(0xFFE8483F), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "e",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
             )
+        }
+        Text(
+            text = "edenred",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFFFF6856),
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun EPassiWordmark() {
+    Text(
+        text = "ePassi",
+        style = MaterialTheme.typography.headlineSmall,
+        fontWeight = FontWeight.Bold,
+        color = Color(0xFFFF7A2F),
+        maxLines = 1,
+    )
+}
+
+@Composable
+private fun WoltWordmark() {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(20.dp)
+                .background(Color(0xFF2FA9DF), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .background(Color.White, CircleShape),
+            )
+        }
+        Text(
+            text = "Wolt",
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFF52C7F7),
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun PaymentUtilityIconTile(
+    selected: Boolean,
+    accent: Color,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    Surface(
+        modifier = modifier.size(width = 58.dp, height = 42.dp),
+        shape = RoundedCornerShape(12.dp),
+        color = if (selected) accent.copy(alpha = 0.26f) else Color(0xFF152839),
+        border = BorderStroke(1.dp, if (selected) accent.copy(alpha = 0.95f) else accent.copy(alpha = 0.32f)),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(5.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .size(width = 24.dp, height = 12.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(accent.copy(alpha = if (selected) 0.22f else 0.14f)),
+            )
+            content()
         }
     }
 }
@@ -1082,20 +1614,22 @@ private fun PaymentBrandButton(
 private fun DiscountPercentIcon(
     selected: Boolean,
 ) {
-    Surface(
-        shape = CircleShape,
-        color = if (selected) PaymentDialogUtilityBlue.copy(alpha = 0.18f) else Color(0xFF102131),
-        border = BorderStroke(1.dp, if (selected) PaymentDialogUtilityBlue else PaymentDialogBorderColor),
+    PaymentUtilityIconTile(
+        selected = selected,
+        accent = PaymentDialogCardBlue,
     ) {
         Box(
-            modifier = Modifier.size(28.dp),
+            modifier = Modifier
+                .size(24.dp)
+                .clip(CircleShape)
+                .background(PaymentDialogCardBlue.copy(alpha = 0.24f)),
             contentAlignment = Alignment.Center,
         ) {
             Text(
                 text = "%",
-                color = PaymentDialogUtilityBlue,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold,
+                color = PaymentDialogCardBlue,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Black,
             )
         }
     }
@@ -1105,17 +1639,33 @@ private fun DiscountPercentIcon(
 private fun DiscountCoinsIcon(
     selected: Boolean,
 ) {
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    PaymentUtilityIconTile(
+        selected = selected,
+        accent = PaymentDialogCoinGold,
     ) {
-        repeat(2) { index ->
-            Box(
-                modifier = Modifier
-                    .size(if (index == 0) 14.dp else 12.dp)
-                    .clip(CircleShape)
-                    .background(if (selected) PaymentDialogCoinGold else PaymentDialogCoinGold.copy(alpha = 0.92f)),
-            )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            repeat(3) { index ->
+                Box(
+                    modifier = Modifier
+                        .size(if (index == 1) 18.dp else 14.dp)
+                        .clip(CircleShape)
+                        .background(PaymentDialogCoinGold.copy(alpha = if (selected) 1f else 0.90f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (index == 1) {
+                        Text(
+                            text = "€",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Black,
+                            color = Color(0xFF2C2108),
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -1124,30 +1674,36 @@ private fun DiscountCoinsIcon(
 private fun VoucherTicketIcon(
     selected: Boolean,
 ) {
-    Surface(
-        shape = RoundedCornerShape(7.dp),
-        color = if (selected) PaymentDialogVoucherRed.copy(alpha = 0.24f) else Color(0xFF152436),
-        border = BorderStroke(1.dp, if (selected) PaymentDialogVoucherRed else PaymentDialogBorderColor),
+    PaymentUtilityIconTile(
+        selected = selected,
+        accent = PaymentDialogVoucherRed,
     ) {
         Box(
             modifier = Modifier
-                .size(width = 30.dp, height = 20.dp)
-                .padding(horizontal = 4.dp, vertical = 3.dp),
+                .size(width = 34.dp, height = 22.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(PaymentDialogVoucherRed.copy(alpha = 0.92f)),
         ) {
             Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .height(12.dp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(PaymentDialogVoucherRed),
+                    .width(3.dp)
+                    .fillMaxHeight()
+                    .align(Alignment.Center)
+                    .background(Color.White.copy(alpha = 0.78f)),
             )
             Box(
                 modifier = Modifier
-                    .width(3.dp)
-                    .height(12.dp)
-                    .align(Alignment.Center)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(Color.White.copy(alpha = 0.85f)),
+                    .size(6.dp)
+                    .align(Alignment.CenterStart)
+                    .clip(CircleShape)
+                    .background(Color(0xFF152839)),
+            )
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .align(Alignment.CenterEnd)
+                    .clip(CircleShape)
+                    .background(Color(0xFF152839)),
             )
         }
     }
@@ -1157,64 +1713,120 @@ private fun VoucherTicketIcon(
 private fun SplitPaymentIcon(
     selected: Boolean,
 ) {
-    Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = if (selected) PaymentDialogUtilityBlue.copy(alpha = 0.18f) else Color(0xFF102131),
-        border = BorderStroke(1.dp, if (selected) PaymentDialogUtilityBlue else PaymentDialogBorderColor),
+    PaymentUtilityIconTile(
+        selected = selected,
+        accent = PaymentDialogUtilityBlue,
     ) {
         Box(
-            modifier = Modifier.size(width = 28.dp, height = 20.dp),
-            contentAlignment = Alignment.Center,
+            modifier = Modifier.size(width = 44.dp, height = 28.dp),
         ) {
-            Text(
-                text = "⇄",
-                color = PaymentDialogUtilityBlue,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-            )
+            Box(
+                modifier = Modifier
+                    .size(width = 26.dp, height = 17.dp)
+                    .align(Alignment.TopStart)
+                    .clip(RoundedCornerShape(5.dp))
+                    .background(PaymentDialogCardBlue.copy(alpha = 0.92f)),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .align(Alignment.TopCenter)
+                        .background(Color(0xFF102234).copy(alpha = 0.56f)),
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .size(width = 27.dp, height = 16.dp)
+                    .align(Alignment.BottomEnd)
+                    .clip(RoundedCornerShape(5.dp))
+                    .background(PaymentDialogCashGreen.copy(alpha = 0.94f)),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .align(Alignment.Center)
+                        .clip(CircleShape)
+                        .background(Color(0xFF10271F).copy(alpha = 0.72f)),
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .size(14.dp)
+                    .align(Alignment.Center)
+                    .clip(CircleShape)
+                    .background(PaymentDialogCoinGold),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "+",
+                    color = Color(0xFF2C2108),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Black,
+                    maxLines = 1,
+                )
+            }
         }
     }
 }
 
 @Composable
 private fun CashTenderIcon() {
-    Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = Color(0xFF0E2A20),
-        border = BorderStroke(1.dp, PaymentDialogCashGreen.copy(alpha = 0.75f)),
+    PaymentTenderIconTile(
+        accent = PaymentDialogCashGreen,
+        background = Color(0xFF10271F),
     ) {
         Box(
             modifier = Modifier
-                .size(width = 30.dp, height = 20.dp)
-                .padding(horizontal = 4.dp, vertical = 3.dp),
+                .size(width = 42.dp, height = 24.dp)
+                .clip(RoundedCornerShape(7.dp))
+                .background(PaymentDialogCashGreen.copy(alpha = 0.96f)),
         ) {
             Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .height(12.dp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(PaymentDialogCashGreen),
+                    .size(width = 30.dp, height = 15.dp)
+                    .align(Alignment.Center)
+                    .clip(RoundedCornerShape(5.dp))
+                    .background(Color(0xFFB8F5DF).copy(alpha = 0.42f)),
             )
             Box(
                 modifier = Modifier
-                    .size(5.dp)
+                    .size(10.dp)
                     .align(Alignment.Center)
                     .clip(CircleShape)
-                    .background(Color(0xFF0E2A20)),
+                    .background(Color(0xFF10271F).copy(alpha = 0.72f)),
             )
             Box(
                 modifier = Modifier
-                    .width(4.dp)
-                    .height(2.dp)
+                    .size(width = 11.dp, height = 4.dp)
                     .align(Alignment.CenterStart)
-                    .background(Color(0xFF0E2A20)),
+                    .padding(start = 3.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(Color(0xFF10271F).copy(alpha = 0.55f)),
             )
             Box(
                 modifier = Modifier
-                    .width(4.dp)
-                    .height(2.dp)
+                    .size(width = 11.dp, height = 4.dp)
                     .align(Alignment.CenterEnd)
-                    .background(Color(0xFF0E2A20)),
+                    .padding(end = 3.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(Color(0xFF10271F).copy(alpha = 0.55f)),
+            )
+        }
+        Box(
+            modifier = Modifier
+                .size(15.dp)
+                .align(Alignment.BottomEnd)
+                .clip(CircleShape)
+                .background(PaymentDialogCoinGold),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "€",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Black,
+                color = Color(0xFF2C2108),
+                maxLines = 1,
             )
         }
     }
@@ -1222,38 +1834,68 @@ private fun CashTenderIcon() {
 
 @Composable
 private fun CardTenderIcon() {
-    Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = Color(0xFF102131),
-        border = BorderStroke(1.dp, PaymentDialogCardBlue.copy(alpha = 0.75f)),
+    PaymentTenderIconTile(
+        accent = PaymentDialogCardBlue,
+        background = Color(0xFF102234),
     ) {
         Box(
             modifier = Modifier
-                .size(width = 28.dp, height = 18.dp)
-                .padding(horizontal = 4.dp, vertical = 3.dp),
+                .size(width = 44.dp, height = 27.dp)
+                .clip(RoundedCornerShape(7.dp))
+                .background(PaymentDialogCardBlue.copy(alpha = 0.97f)),
         ) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(12.dp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(PaymentDialogCardBlue),
+                    .height(6.dp)
+                    .align(Alignment.TopCenter)
+                    .background(Color(0xFF0B1A27).copy(alpha = 0.58f)),
             )
             Box(
                 modifier = Modifier
-                    .width(4.dp)
-                    .height(4.dp)
+                    .size(width = 12.dp, height = 8.dp)
                     .align(Alignment.CenterStart)
-                    .clip(RoundedCornerShape(1.dp))
-                    .background(Color(0xFF102131)),
+                    .padding(start = 5.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(Color(0xFFE9FBFF).copy(alpha = 0.72f)),
             )
             Box(
                 modifier = Modifier
-                    .width(8.dp)
-                    .height(2.dp)
+                    .size(width = 20.dp, height = 4.dp)
                     .align(Alignment.BottomEnd)
-                    .background(Color(0xFF102131)),
+                    .padding(end = 5.dp, bottom = 5.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(Color(0xFF0B1A27).copy(alpha = 0.50f)),
             )
+        }
+    }
+}
+
+@Composable
+private fun PaymentTenderIconTile(
+    accent: Color,
+    background: Color,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(13.dp),
+        color = background,
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.72f)),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(width = 60.dp, height = 42.dp)
+                .padding(6.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .size(width = 30.dp, height = 14.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(accent.copy(alpha = 0.14f)),
+            )
+            content()
         }
     }
 }
@@ -1268,7 +1910,7 @@ private fun PaymentDialogButton(
 ) {
     Button(
         onClick = onClick,
-        modifier = modifier.defaultMinSize(minHeight = 56.dp),
+        modifier = modifier.defaultMinSize(minHeight = 48.dp),
         enabled = enabled,
         shape = RoundedCornerShape(16.dp),
         colors = if (primary) {
@@ -1316,9 +1958,9 @@ private enum class PaymentInputTarget(
 ) {
     CASH_RECEIVED("Saatu käteinen", true, ::formatPaymentDisplayValue),
     VOUCHER_AMOUNT("Etusetelin summa", true, ::formatPaymentDisplayValue),
-    SPLIT_CASH("Käteisosuus", true, ::formatPaymentDisplayValue),
-    SPLIT_CARD("Korttiosuus", true, ::formatPaymentDisplayValue),
-    SPLIT_VOUCHER("Etuseteliosuus", true, ::formatPaymentDisplayValue),
+    SPLIT_CASH("Käteisellä", true, ::formatPaymentDisplayValue),
+    SPLIT_CARD("Kortilla", true, ::formatPaymentDisplayValue),
+    SPLIT_VOUCHER("Etusetelillä", true, ::formatPaymentDisplayValue),
     DISCOUNT_PERCENT("Alennus %", false, ::formatPercentDisplayValue),
     DISCOUNT_AMOUNT("Alennus €", true, ::formatPaymentDisplayValue),
     ;

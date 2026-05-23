@@ -351,13 +351,13 @@ private data class RailDestination(
 
 
 private fun railIconDrawableRes(kind: RailIconKind): Int = when (kind) {
-    RailIconKind.TABLES -> R.drawable.airos_rail_icon_tables_v1
-    RailIconKind.PRODUCTS -> R.drawable.airos_rail_icon_products_v1
-    RailIconKind.SALES -> R.drawable.airos_rail_icon_sales_v1
-    RailIconKind.RESERVATIONS -> R.drawable.airos_rail_icon_reservations_v1
-    RailIconKind.CAMERAS -> R.drawable.airos_rail_icon_camera_v1
-    RailIconKind.SETTINGS -> R.drawable.airos_rail_icon_settings_v1
-    RailIconKind.STAFF -> R.drawable.airos_rail_icon_staff_v1
+    RailIconKind.TABLES -> R.drawable.airos_rail_icon_tables_v2
+    RailIconKind.PRODUCTS -> R.drawable.airos_rail_icon_products_v2
+    RailIconKind.SALES -> R.drawable.airos_rail_icon_sales_v2
+    RailIconKind.RESERVATIONS -> R.drawable.airos_rail_icon_reservations_v2
+    RailIconKind.CAMERAS -> R.drawable.airos_rail_icon_cameras_v2
+    RailIconKind.SETTINGS -> R.drawable.airos_rail_icon_settings_v2
+    RailIconKind.STAFF -> R.drawable.airos_rail_icon_staff_v2
 }
 
 private val mainRailDestinations = listOf(

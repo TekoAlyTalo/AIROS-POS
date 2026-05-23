@@ -62,7 +62,7 @@ object LocalAuthSeed {
         ),
         StaffAuthRecord(
             staffId = "test-guest",
-            displayName = "Mr. Test Guest",
+            displayName = "Test Guest",
             role = StaffRole.ADMIN,
             pin = "9999",
             isManager = true,

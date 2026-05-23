@@ -1702,35 +1702,61 @@ private fun ShiftSchedulePulseCard(
                         .distinctBy { it.id }
                         .filter { it.overlaps(windowStart, windowEnd) }
                         .sortedWith(compareBy<PlannedStaffShift> { it.startsAt }.thenBy { it.staffName })
+
+                    // One pulse row per staff identity. Planned shift, active worktime and
+                    // last-seen/auth markers are merged by the same display identity so
+                    // the same person never appears as separate duplicate rows in the pulse.
+                    // Multiple planned segments for the same staff member stay as multiple
+                    // bars inside one row; we do not invent one continuous shift.
+                    val plannedRows = visibleShifts
+                        .groupBy { shift -> pulseStaffIdentityKey(shift.staffId, shift.staffName) }
+                        .map { (staffKey, shifts) ->
+                            val sortedShifts = shifts.sortedWith(
+                                compareBy<PlannedStaffShift> { it.startsAt }.thenBy { it.endsAt },
+                            )
+                            val primaryShift = selectPrimaryPulseShift(sortedShifts, now)
+                            PulsePlannedStaffRow(
+                                staffKey = staffKey,
+                                staffId = primaryShift.staffId,
+                                staffName = primaryShift.staffName,
+                                shifts = sortedShifts,
+                                primaryShift = primaryShift,
+                            )
+                        }
+                        .sortedWith(compareBy<PulsePlannedStaffRow> { it.primaryShift.startsAt }.thenBy { it.staffName })
+                    val plannedStaffKeys = plannedRows.map { it.staffKey }.toSet()
                     // Unscheduled active worktime: staff working without a planned shift must
                     // appear in Työvuoropulssi as a distinct worktime row so the active
                     // worktime truth is visible, but never as a planned-shift bar — and
-                    // never with an invented end time. Identified by staffId not matching
-                    // any planned shift for the selected day.
-                    val plannedStaffIds = visibleShifts
-                        .map { it.staffId }
-                        .filter { it.isNotBlank() }
-                        .toSet()
+                    // never with an invented end time. Identified by the same pulse staff
+                    // identity key used by planned rows, not only raw staffId, because seed
+                    // and auth data can temporarily carry different ids for the same display
+                    // person.
                     val unscheduledPresence = attendance.currentlyOnSite
-                        .filter { it.staffId.isNotBlank() && it.staffId !in plannedStaffIds }
-                        .distinctBy { it.staffId }
-                    val latestLastSeenByStaffId = lastSeenEvents
-                        .filter { event -> event.staffId.isNotBlank() && event.timestampMillis > 0L }
+                        .filter { entry -> pulseStaffIdentityKey(entry.staffId, entry.staffName) !in plannedStaffKeys }
+                        .distinctBy { entry -> pulseStaffIdentityKey(entry.staffId, entry.staffName) }
+                    val latestLastSeenByStaffKey = lastSeenEvents
+                        .filter { event ->
+                            event.timestampMillis > 0L &&
+                                pulseStaffIdentityKey(event.staffId, event.staffName).isNotBlank()
+                        }
                         .filter { event ->
                             val ts = Instant.ofEpochMilli(event.timestampMillis)
                                 .atZone(ZoneId.systemDefault())
                                 .toLocalDateTime()
                             !ts.isBefore(windowStart) && !ts.isAfter(windowEnd)
                         }
-                        .groupBy { it.staffId }
+                        .groupBy { event -> pulseStaffIdentityKey(event.staffId, event.staffName) }
                         .mapValues { (_, list) -> list.maxByOrNull { it.timestampMillis }!! }
-                    val displayedStaffIds = plannedStaffIds +
-                        unscheduledPresence.mapNotNull { it.staffId.takeIf { id -> id.isNotBlank() } }
-                    val visibleLastSeen = latestLastSeenByStaffId.values
-                        .filter { event -> event.staffId !in displayedStaffIds }
+                    val displayedStaffKeys = plannedStaffKeys +
+                        unscheduledPresence
+                            .map { entry -> pulseStaffIdentityKey(entry.staffId, entry.staffName) }
+                            .toSet()
+                    val visibleLastSeen = latestLastSeenByStaffKey.values
+                        .filter { event -> pulseStaffIdentityKey(event.staffId, event.staffName) !in displayedStaffKeys }
                         .sortedBy { it.timestampMillis }
                         .toList()
-                    if (visibleShifts.isEmpty() && unscheduledPresence.isEmpty() && visibleLastSeen.isEmpty()) {
+                    if (plannedRows.isEmpty() && unscheduledPresence.isEmpty() && visibleLastSeen.isEmpty()) {
                         ShiftEmptyText("Julkaistuilla päivillä ei ole suunniteltuja vuoroja.")
                     } else {
                         val chartWidth = pulseChartWidth(
@@ -1823,19 +1849,20 @@ private fun ShiftSchedulePulseCard(
                                         .verticalScroll(rememberScrollState()),
                                     verticalArrangement = Arrangement.spacedBy(5.dp),
                                 ) {
-                            visibleShifts.forEachIndexed { index, shift ->
+                            plannedRows.forEachIndexed { index, staffRow ->
                                 PulseTimelineShiftRow(
-                                    shift = shift,
+                                    shift = staffRow.primaryShift,
+                                    shiftSegments = staffRow.shifts,
                                     attendance = attendance,
                                     now = now,
                                     windowStart = windowStart,
                                     windowEnd = windowEnd,
                                     chartWidth = chartWidth,
                                     horizontalScrollState = horizontalScrollState,
-                                    lastSeenEvent = latestLastSeenByStaffId[shift.staffId],
+                                    lastSeenEvent = latestLastSeenByStaffKey[staffRow.staffKey],
                                     onStaffSelected = onStaffSelected,
                                 )
-                                val notLastShift = index != visibleShifts.lastIndex
+                                val notLastShift = index != plannedRows.lastIndex
                                 val unscheduledFollows = unscheduledPresence.isNotEmpty()
                                 val lastSeenFollows = visibleLastSeen.isNotEmpty()
                                 if (notLastShift || unscheduledFollows || lastSeenFollows) {
@@ -1855,7 +1882,7 @@ private fun ShiftSchedulePulseCard(
                                     windowEnd = windowEnd,
                                     chartWidth = chartWidth,
                                     horizontalScrollState = horizontalScrollState,
-                                    lastSeenEvent = latestLastSeenByStaffId[entry.staffId],
+                                    lastSeenEvent = latestLastSeenByStaffKey[pulseStaffIdentityKey(entry.staffId, entry.staffName)],
                                     onStaffSelected = onStaffSelected,
                                 )
                                 val moreLastSeenFollows = visibleLastSeen.isNotEmpty()
@@ -2695,6 +2722,37 @@ private fun PulseZoomButton(
     }
 }
 
+private data class PulsePlannedStaffRow(
+    val staffKey: String,
+    val staffId: String,
+    val staffName: String,
+    val shifts: List<PlannedStaffShift>,
+    val primaryShift: PlannedStaffShift,
+)
+
+private fun pulseStaffIdentityKey(staffId: String?, staffName: String?): String {
+    val normalizedName = staffName
+        .orEmpty()
+        .trim()
+        .lowercase(Locale.ROOT)
+        .replace(Regex("\\s+"), " ")
+    if (normalizedName.isNotBlank()) return normalizedName
+    return staffId.orEmpty().trim().lowercase(Locale.ROOT)
+}
+
+private fun selectPrimaryPulseShift(
+    shifts: List<PlannedStaffShift>,
+    now: LocalDateTime,
+): PlannedStaffShift {
+    return shifts.firstOrNull { shift ->
+        !now.isBefore(shift.startsAt) && now.isBefore(shift.endsAt)
+    } ?: shifts.firstOrNull { shift ->
+        shift.startsAt.isAfter(now)
+    } ?: shifts.maxByOrNull { shift ->
+        shift.endsAt
+    } ?: shifts.first()
+}
+
 @Composable
 private fun PulseTimelineHeader(
     windowStart: LocalDateTime,
@@ -2742,6 +2800,7 @@ private fun PulseTimelineHeader(
 @Composable
 private fun PulseTimelineShiftRow(
     shift: PlannedStaffShift,
+    shiftSegments: List<PlannedStaffShift> = listOf(shift),
     attendance: WorktimeAttendanceSnapshot,
     now: LocalDateTime,
     windowStart: LocalDateTime,
@@ -2752,21 +2811,34 @@ private fun PulseTimelineShiftRow(
     onStaffSelected: (String, String) -> Unit = { _, _ -> },
 ) {
     val pulseStatus = plannedPulseStatus(shift = shift, attendance = attendance, now = now)
-    val overlapsWindow = shift.overlaps(windowStart, windowEnd)
     val minimumBarWidthFraction = 0.035f
-    val startFraction = if (overlapsWindow) {
-        pulseFraction(if (shift.startsAt.isBefore(windowStart)) windowStart else shift.startsAt, windowStart, windowEnd)
-    } else if (shift.endsAt.isBefore(windowStart) || shift.endsAt == windowStart) {
-        0f
-    } else {
-        1f - minimumBarWidthFraction
+    fun segmentBounds(segment: PlannedStaffShift): Pair<Float, Float> {
+        val overlapsWindow = segment.overlaps(windowStart, windowEnd)
+        val startFraction = if (overlapsWindow) {
+            pulseFraction(
+                if (segment.startsAt.isBefore(windowStart)) windowStart else segment.startsAt,
+                windowStart,
+                windowEnd,
+            )
+        } else if (segment.endsAt.isBefore(windowStart) || segment.endsAt == windowStart) {
+            0f
+        } else {
+            1f - minimumBarWidthFraction
+        }
+        val endFraction = if (overlapsWindow) {
+            pulseFraction(
+                if (segment.endsAt.isAfter(windowEnd)) windowEnd else segment.endsAt,
+                windowStart,
+                windowEnd,
+            )
+        } else {
+            (startFraction + minimumBarWidthFraction).coerceAtMost(1f)
+        }
+        val barWidthFraction = (endFraction - startFraction).coerceIn(minimumBarWidthFraction, 1f)
+        return startFraction to barWidthFraction
     }
-    val endFraction = if (overlapsWindow) {
-        pulseFraction(if (shift.endsAt.isAfter(windowEnd)) windowEnd else shift.endsAt, windowStart, windowEnd)
-    } else {
-        (startFraction + minimumBarWidthFraction).coerceAtMost(1f)
-    }
-    val barWidthFraction = (endFraction - startFraction).coerceIn(minimumBarWidthFraction, 1f)
+    val renderSegments = shiftSegments.ifEmpty { listOf(shift) }
+        .distinctBy { segment -> "${segment.id}|${segment.startsAt}|${segment.endsAt}" }
     val lastSeenTime = lastSeenEvent?.timestampMillis?.let { timestamp ->
         Instant.ofEpochMilli(timestamp)
             .atZone(ZoneId.systemDefault())
@@ -2836,14 +2908,17 @@ private fun PulseTimelineShiftRow(
                         PulseLastSeenRhombusMarker(maxWidth = maxWidth, fraction = markerFraction)
                     }
                 }
-                Box(
-                    modifier = Modifier
-                        .offset(x = pulseTimelineX(maxWidth, startFraction))
-                        .width(pulseTimelineSpan(maxWidth, barWidthFraction))
-                        .height(22.dp)
-                        .clip(RoundedCornerShape(5.dp))
-                        .pulseBarModifier(pulseStatus),
-                )
+                renderSegments.forEach { segment ->
+                    val (segmentStartFraction, segmentWidthFraction) = segmentBounds(segment)
+                    Box(
+                        modifier = Modifier
+                            .offset(x = pulseTimelineX(maxWidth, segmentStartFraction))
+                            .width(pulseTimelineSpan(maxWidth, segmentWidthFraction))
+                            .height(22.dp)
+                            .clip(RoundedCornerShape(5.dp))
+                            .pulseBarModifier(pulseStatus),
+                    )
+                }
             }
         }
 
