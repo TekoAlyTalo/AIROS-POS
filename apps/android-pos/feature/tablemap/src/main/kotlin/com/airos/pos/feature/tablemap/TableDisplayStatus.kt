@@ -41,6 +41,17 @@ internal data class TableDisplayStatus(
 
     val hasAnyAttention: Boolean
         get() = hasCheckAttention || hasServiceAttention
+
+    val hasCleaningAttention: Boolean
+        get() = kind == TableDisplayStatusKind.DIRTY
+
+    val pulseAttentionLabel: String?
+        get() = when {
+            hasCheckAttention -> "Tarkista"
+            hasServiceAttention -> "Tarjoile"
+            hasCleaningAttention -> "Siivous"
+            else -> null
+        }
 }
 
 internal fun resolveTableDisplayStatus(

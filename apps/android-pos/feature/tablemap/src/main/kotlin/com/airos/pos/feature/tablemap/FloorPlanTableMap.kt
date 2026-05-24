@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
@@ -66,6 +67,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.imageResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -81,6 +83,7 @@ import com.airos.pos.core.model.FloorPlanSofaStyle
 import com.airos.pos.core.model.RestaurantTable
 import com.airos.pos.core.model.ServiceSpotType
 import com.airos.pos.core.model.StaffFloorPlanViewportPreference
+import com.airos.pos.core.model.TableOperationalFlag
 import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.math.floor
@@ -190,6 +193,8 @@ private const val FLOOR_PLAN_ASSET_TILE_OVERLAP_PX = 1f
 private const val FLOOR_PLAN_DEBUG_TAG = "FloorPlanDebug"
 private const val FLOOR_PLAN_MIN_ZOOM = 0.20f
 private const val FLOOR_PLAN_MAX_ZOOM = 8.0f
+private const val FLOOR_PLAN_PULSE_MIN_NODE_WIDTH_PX = 96f
+private const val FLOOR_PLAN_PULSE_MIN_NODE_HEIGHT_PX = 74f
 private val FloorPlanOpaqueWhiteMatteColorFilter = ColorFilter.colorMatrix(
     ColorMatrix(
         floatArrayOf(
@@ -243,7 +248,7 @@ internal fun TableMapViewModeToggle(
                 onClick = { onViewModeChange(mode) },
             ) {
                 Text(
-                    text = if (mode == TableMapViewMode.GRID) "Ruudukko" else "Pohjakartta",
+                    text = mode.displayLabel(),
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                     color = if (selected) TableMapVisualTokens.AccentText else TableMapVisualTokens.TextSecondary,
                     style = MaterialTheme.typography.labelLarge,
@@ -251,6 +256,14 @@ internal fun TableMapViewModeToggle(
                 )
             }
         }
+    }
+}
+
+private fun TableMapViewMode.displayLabel(): String {
+    return when (this) {
+        TableMapViewMode.FLOOR_PLAN -> "Pöytäkartta"
+        TableMapViewMode.PULSE -> "Pulssi"
+        TableMapViewMode.GRID -> "Ruudukko"
     }
 }
 
@@ -307,6 +320,7 @@ internal fun FloorPlanTableMap(
     openTotalLabelsByTableId: Map<String, String> = emptyMap(),
     openSaleTotalLabelsByTableId: Map<String, List<String>> = emptyMap(),
     openBillCountsByTableId: Map<String, Int> = emptyMap(),
+    renderMode: FloorPlanRenderMode = FloorPlanRenderMode.FLOOR_PLAN,
     externalDragPosition: Offset? = null,
     externalDragSourceTableId: String? = null,
     onExternalDragHoverTableId: (String?) -> Unit = {},
@@ -335,6 +349,7 @@ internal fun FloorPlanTableMap(
                 openTotalLabelsByTableId = openTotalLabelsByTableId,
                 openSaleTotalLabelsByTableId = openSaleTotalLabelsByTableId,
                 openBillCountsByTableId = openBillCountsByTableId,
+                renderMode = renderMode,
                 externalDragPosition = externalDragPosition,
                 externalDragSourceTableId = externalDragSourceTableId,
                 onExternalDragHoverTableId = onExternalDragHoverTableId,
@@ -361,6 +376,7 @@ internal fun FloorPlanTableMap(
                 openTotalLabelsByTableId = openTotalLabelsByTableId,
                 openSaleTotalLabelsByTableId = openSaleTotalLabelsByTableId,
                 openBillCountsByTableId = openBillCountsByTableId,
+                renderMode = renderMode,
                 externalDragPosition = externalDragPosition,
                 externalDragSourceTableId = externalDragSourceTableId,
                 onExternalDragHoverTableId = onExternalDragHoverTableId,
@@ -389,6 +405,7 @@ private fun SimpleFloorPlanTableMap(
     openTotalLabelsByTableId: Map<String, String>,
     openSaleTotalLabelsByTableId: Map<String, List<String>>,
     openBillCountsByTableId: Map<String, Int>,
+    renderMode: FloorPlanRenderMode,
     externalDragPosition: Offset? = null,
     externalDragSourceTableId: String? = null,
     onExternalDragHoverTableId: (String?) -> Unit = {},
@@ -505,30 +522,42 @@ private fun SimpleFloorPlanTableMap(
         LaunchedEffect(debugLogLine) {
             Log.i(FLOOR_PLAN_DEBUG_TAG, debugLogLine)
         }
-        val tableHitTargets = remember(layoutModel.tables) {
+        val tableHitTargets = remember(layoutModel.tables, renderMode, zoomScale) {
             layoutModel.tables.map { placement ->
+                val hitRect = if (renderMode == FloorPlanRenderMode.PULSE) {
+                    placement.rect.withCenteredMinimumSize(
+                        minWidthPx = FLOOR_PLAN_PULSE_MIN_NODE_WIDTH_PX / zoomScale.coerceAtLeast(0.1f),
+                        minHeightPx = FLOOR_PLAN_PULSE_MIN_NODE_HEIGHT_PX / zoomScale.coerceAtLeast(0.1f),
+                    )
+                } else {
+                    placement.rect
+                }
                 FloorPlanTableHitTarget(
                     tableId = placement.table.id,
-                    left = placement.rect.left,
-                    top = placement.rect.top,
-                    right = placement.rect.right,
-                    bottom = placement.rect.bottom,
+                    left = hitRect.left,
+                    top = hitRect.top,
+                    right = hitRect.right,
+                    bottom = hitRect.bottom,
                 )
             }
         }
-        val cameraObjectHitTargets = remember(layoutModel.objects) {
-            layoutModel.objects
-                .filter { placement -> placement.floorObject.isSelectableFloorPlanCameraObject() }
-                .map { placement ->
-                    val visualRect = placement.floorObject.visualScreenRectForObject(placement.rect)
-                    FloorPlanObjectHitTarget(
-                        floorObject = placement.floorObject,
-                        left = visualRect.left,
-                        top = visualRect.top,
-                        right = visualRect.right,
-                        bottom = visualRect.bottom,
-                    )
-                }
+        val cameraObjectHitTargets = remember(layoutModel.objects, renderMode) {
+            if (renderMode == FloorPlanRenderMode.PULSE) {
+                emptyList()
+            } else {
+                layoutModel.objects
+                    .filter { placement -> placement.floorObject.isSelectableFloorPlanCameraObject() }
+                    .map { placement ->
+                        val visualRect = placement.floorObject.visualScreenRectForObject(placement.rect)
+                        FloorPlanObjectHitTarget(
+                            floorObject = placement.floorObject,
+                            left = visualRect.left,
+                            top = visualRect.top,
+                            right = visualRect.right,
+                            bottom = visualRect.bottom,
+                        )
+                    }
+            }
         }
         val currentTableHitTargets by rememberUpdatedState(tableHitTargets)
         val currentCameraObjectHitTargets by rememberUpdatedState(cameraObjectHitTargets)
@@ -621,52 +650,88 @@ private fun SimpleFloorPlanTableMap(
                     }
                 },
         ) {
-            FloorPlanBackdrop(
-                panOffset = clampedOffset,
-                zoom = zoomScale,
-                contentWidthPx = contentWidthPx,
-                contentHeightPx = contentHeightPx,
-            )
-            FloorPlanAreasLayer(
-                placements = layoutModel.areas,
-                panOffset = clampedOffset,
-                zoom = zoomScale,
-            )
-            layoutModel.zoneLabels.forEach { labelPlacement ->
-                FloorPlanZoneLabel(
-                    labelPlacement = labelPlacement,
+            if (renderMode == FloorPlanRenderMode.PULSE) {
+                FloorPlanPulseBackdrop(
+                    panOffset = clampedOffset,
+                    zoom = zoomScale,
+                    contentWidthPx = contentWidthPx,
+                    contentHeightPx = contentHeightPx,
+                )
+                FloorPlanPulseAreasLayer(
+                    placements = layoutModel.areas,
                     panOffset = clampedOffset,
                     zoom = zoomScale,
                 )
-            }
-            FloorPlanWorldObjectsLayer(
-                placements = layoutModel.objects.filter { it.floorObject.shouldRenderInWorldObjectLayer() },
-                panOffset = clampedOffset,
-                zoom = zoomScale,
-            )
-            layoutModel.objects
-                .filterNot { it.floorObject.shouldRenderInWorldObjectLayer() }
-                .forEach { placement ->
-                    FloorPlanObjectNode(
-                        placement = placement,
+                layoutModel.zoneLabels
+                    .filter { it.label.isNotBlank() }
+                    .forEach { labelPlacement ->
+                        FloorPlanZoneLabel(
+                            labelPlacement = labelPlacement,
+                            panOffset = clampedOffset,
+                            zoom = zoomScale,
+                        )
+                    }
+                layoutModel.tables.forEach { placement ->
+                    FloorPlanPulseTableNode(
+                        table = placement.table,
+                        rect = placement.rect,
                         panOffset = clampedOffset,
                         zoom = zoomScale,
-                        selected = placement.floorObject.id == selectedCameraObjectId,
+                        selected = placement.table.id == selectedTableId,
+                        dropHovered = placement.table.id == externalHoverTableId,
+                        openTotalLabel = openTotalLabelsByTableId[placement.table.id],
+                        openSaleTotalLabels = openSaleTotalLabelsByTableId[placement.table.id].orEmpty(),
+                        openBillCount = openBillCountsByTableId[placement.table.id] ?: 0,
                     )
                 }
-            layoutModel.tables.forEach { placement ->
-                FloorPlanTableNode(
-                    table = placement.table,
-                    rect = placement.rect,
-                    rotationDeg = placement.effectiveRotationDeg,
+            } else {
+                FloorPlanBackdrop(
                     panOffset = clampedOffset,
                     zoom = zoomScale,
-                    selected = placement.table.id == selectedTableId,
-                    dropHovered = placement.table.id == externalHoverTableId,
-                    openTotalLabel = openTotalLabelsByTableId[placement.table.id],
-                    openSaleTotalLabels = openSaleTotalLabelsByTableId[placement.table.id].orEmpty(),
-                    openBillCount = openBillCountsByTableId[placement.table.id] ?: 0,
+                    contentWidthPx = contentWidthPx,
+                    contentHeightPx = contentHeightPx,
                 )
+                FloorPlanAreasLayer(
+                    placements = layoutModel.areas,
+                    panOffset = clampedOffset,
+                    zoom = zoomScale,
+                )
+                layoutModel.zoneLabels.forEach { labelPlacement ->
+                    FloorPlanZoneLabel(
+                        labelPlacement = labelPlacement,
+                        panOffset = clampedOffset,
+                        zoom = zoomScale,
+                    )
+                }
+                FloorPlanWorldObjectsLayer(
+                    placements = layoutModel.objects.filter { it.floorObject.shouldRenderInWorldObjectLayer() },
+                    panOffset = clampedOffset,
+                    zoom = zoomScale,
+                )
+                layoutModel.objects
+                    .filterNot { it.floorObject.shouldRenderInWorldObjectLayer() }
+                    .forEach { placement ->
+                        FloorPlanObjectNode(
+                            placement = placement,
+                            panOffset = clampedOffset,
+                            zoom = zoomScale,
+                            selected = placement.floorObject.id == selectedCameraObjectId,
+                        )
+                    }
+                layoutModel.tables.forEach { placement ->
+                    FloorPlanTableNode(
+                        table = placement.table,
+                        rect = placement.rect,
+                        rotationDeg = placement.effectiveRotationDeg,
+                        panOffset = clampedOffset,
+                        zoom = zoomScale,
+                        selected = placement.table.id == selectedTableId,
+                        dropHovered = placement.table.id == externalHoverTableId,
+                        openTotalLabel = openTotalLabelsByTableId[placement.table.id],
+                        openSaleTotalLabels = openSaleTotalLabelsByTableId[placement.table.id].orEmpty(),
+                        openBillCount = openBillCountsByTableId[placement.table.id] ?: 0,
+                    )
+                }
             }
 
             onRotate90?.let { onRotate ->
@@ -762,6 +827,96 @@ private fun DrawScope.drawFloorPlanOuterBackgroundGrid(
             strokeWidth = stroke,
         )
         y += gridStepPx
+    }
+}
+
+@Composable
+private fun FloorPlanPulseBackdrop(
+    panOffset: Offset,
+    zoom: Float,
+    contentWidthPx: Float,
+    contentHeightPx: Float,
+) {
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        drawRect(
+            brush = Brush.linearGradient(
+                colors = listOf(
+                    Color(0xFF071118),
+                    Color(0xFF0B1720),
+                    Color(0xFF101E27),
+                ),
+            ),
+        )
+
+        val safeZoom = zoom.takeIf { it.isFinite() && it > 0f } ?: 1f
+        val gridStepWorldPx = 180f
+        val gridStroke = max(0.35f, 0.45.dp.toPx())
+        val gridColor = TableMapVisualTokens.AccentText.copy(alpha = 0.075f)
+
+        var worldX = 0f
+        while (worldX <= contentWidthPx) {
+            val screenX = panOffset.x + worldX * safeZoom
+            if (screenX >= -gridStroke && screenX <= size.width + gridStroke) {
+                drawLine(
+                    color = gridColor,
+                    start = Offset(screenX, 0f),
+                    end = Offset(screenX, size.height),
+                    strokeWidth = gridStroke,
+                )
+            }
+            worldX += gridStepWorldPx
+        }
+
+        var worldY = 0f
+        while (worldY <= contentHeightPx) {
+            val screenY = panOffset.y + worldY * safeZoom
+            if (screenY >= -gridStroke && screenY <= size.height + gridStroke) {
+                drawLine(
+                    color = gridColor,
+                    start = Offset(0f, screenY),
+                    end = Offset(size.width, screenY),
+                    strokeWidth = gridStroke,
+                )
+            }
+            worldY += gridStepWorldPx
+        }
+
+        drawRoundRect(
+            color = TableMapVisualTokens.AccentText.copy(alpha = 0.10f),
+            topLeft = panOffset,
+            size = Size(contentWidthPx * safeZoom, contentHeightPx * safeZoom),
+            cornerRadius = CornerRadius(28.dp.toPx(), 28.dp.toPx()),
+            style = Stroke(width = max(1f, 1.dp.toPx())),
+        )
+    }
+}
+
+@Composable
+private fun FloorPlanPulseAreasLayer(
+    placements: List<FloorPlanAreaPlacement>,
+    panOffset: Offset,
+    zoom: Float,
+) {
+    val visiblePlacements = placements.filter { it.area.label.isNotBlank() }
+    if (visiblePlacements.isEmpty()) return
+
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        visiblePlacements.forEach { placement ->
+            val screen = placement.rect.toScreenRect(panOffset, zoom)
+            drawRoundRect(
+                color = TableMapVisualTokens.AccentText.copy(alpha = 0.035f),
+                topLeft = Offset(screen.left, screen.top),
+                size = Size(screen.width.coerceAtLeast(1f), screen.height.coerceAtLeast(1f)),
+                cornerRadius = CornerRadius(18.dp.toPx(), 18.dp.toPx()),
+            )
+            drawRoundRect(
+                color = TableMapVisualTokens.AccentText.copy(alpha = 0.16f),
+                topLeft = Offset(screen.left, screen.top),
+                size = Size(screen.width.coerceAtLeast(1f), screen.height.coerceAtLeast(1f)),
+                cornerRadius = CornerRadius(18.dp.toPx(), 18.dp.toPx()),
+                style = Stroke(width = max(0.8f, 1.dp.toPx())),
+            )
+        }
     }
 }
 
@@ -4101,6 +4256,163 @@ private fun floorPlanLabelStyle(screenWidthPx: Float): androidx.compose.ui.text.
 }
 
 @Composable
+private fun FloorPlanPulseTableNode(
+    table: RestaurantTable,
+    rect: FloorPlanRect,
+    panOffset: Offset,
+    zoom: Float,
+    selected: Boolean,
+    dropHovered: Boolean = false,
+    openTotalLabel: String?,
+    openSaleTotalLabels: List<String>,
+    openBillCount: Int,
+) {
+    val density = LocalDensity.current
+    val screen = rect.toScreenRect(panOffset, zoom)
+    val visualWidthPx = max(screen.width, FLOOR_PLAN_PULSE_MIN_NODE_WIDTH_PX)
+    val visualHeightPx = max(screen.height, FLOOR_PLAN_PULSE_MIN_NODE_HEIGHT_PX)
+    val visualLeftPx = screen.left - ((visualWidthPx - screen.width) / 2f)
+    val visualTopPx = screen.top - ((visualHeightPx - screen.height) / 2f)
+    val displayStatus = resolveTableDisplayStatus(
+        physicalStatus = table.status,
+        openBillCount = openBillCount,
+        attentionFlag = table.attentionFlag,
+    )
+    val accent = displayStatus.floorPlanAccent()
+    val signals = table.floorPlanPulseSignals(displayStatus)
+    val pulseTransition = rememberInfiniteTransition()
+    val pulse by pulseTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 900),
+            repeatMode = RepeatMode.Reverse,
+        ),
+    )
+    val activePulse = if (signals.isNotEmpty() || dropHovered) pulse else 0f
+    val borderColor = when {
+        dropHovered -> FloorPlanSelectionColor
+        signals.isNotEmpty() -> signals.first().color.copy(alpha = 0.72f + activePulse * 0.22f)
+        selected -> FloorPlanSelectionColor
+        else -> accent.copy(alpha = 0.58f)
+    }
+    val backgroundColor = when {
+        selected -> FloorPlanSelectionColor.copy(alpha = 0.20f)
+        signals.isNotEmpty() -> signals.first().color.copy(alpha = 0.14f + activePulse * 0.05f)
+        displayStatus.kind == TableDisplayStatusKind.AVAILABLE -> TableMapVisualTokens.PanelAltColor.copy(alpha = 0.86f)
+        else -> accent.copy(alpha = 0.13f)
+    }
+    val billSummary = floorPlanPulseBillSummary(
+        openTotalLabel = openTotalLabel,
+        openSaleTotalLabels = openSaleTotalLabels,
+        openBillCount = openBillCount,
+    )
+
+    Surface(
+        modifier = Modifier
+            .graphicsLayer {
+                translationX = visualLeftPx
+                translationY = visualTopPx
+            }
+            .requiredSize(visualWidthPx.toDp(density), visualHeightPx.toDp(density)),
+        shape = RoundedCornerShape(16.dp),
+        color = backgroundColor,
+        border = BorderStroke(
+            width = when {
+                dropHovered || signals.isNotEmpty() -> (2f + activePulse).dp
+                selected -> 2.dp
+                else -> 1.dp
+            },
+            color = borderColor,
+        ),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 9.dp, vertical = 7.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = table.label,
+                    modifier = Modifier.weight(1f),
+                    style = androidx.compose.ui.text.TextStyle(fontSize = 18.sp),
+                    color = TableMapVisualTokens.TextPrimary,
+                    fontWeight = FontWeight.Black,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (openBillCount > 0) {
+                    Text(
+                        text = openBillCount.toString(),
+                        style = androidx.compose.ui.text.TextStyle(fontSize = 13.sp),
+                        color = TableMapVisualTokens.AccentText,
+                        fontWeight = FontWeight.ExtraBold,
+                        textAlign = TextAlign.End,
+                        maxLines = 1,
+                    )
+                }
+            }
+            Text(
+                text = "${displayStatus.label.toFinnishFloorPlanStatusChipLabel()} · ${table.floorPlanPulseSeatsLabel()}",
+                style = androidx.compose.ui.text.TextStyle(fontSize = 12.sp),
+                color = accent,
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            billSummary?.let { summary ->
+                Text(
+                    text = summary,
+                    style = androidx.compose.ui.text.TextStyle(fontSize = 11.sp),
+                    color = TableMapVisualTokens.TextSecondary,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (signals.isNotEmpty()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    signals.take(2).forEach { signal ->
+                        FloorPlanPulseSignalChip(signal = signal)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FloorPlanPulseSignalChip(
+    signal: FloorPlanPulseSignal,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(999.dp),
+        color = signal.color.copy(alpha = 0.16f),
+        border = BorderStroke(1.dp, signal.color.copy(alpha = 0.48f)),
+    ) {
+        Text(
+            text = signal.label,
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+            style = androidx.compose.ui.text.TextStyle(fontSize = 10.sp),
+            color = signal.color,
+            fontWeight = FontWeight.ExtraBold,
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
 private fun FloorPlanTableNode(
     table: RestaurantTable,
     rect: FloorPlanRect,
@@ -4519,6 +4831,11 @@ private data class FloorPlanChipMetrics(
     val heightPx: Float,
 )
 
+private data class FloorPlanPulseSignal(
+    val label: String,
+    val color: Color,
+)
+
 private const val FLOOR_PLAN_STATUS_STABLE_WIDTH_LABEL = "Tarkista"
 
 
@@ -4550,6 +4867,57 @@ private fun RestaurantTable.floorPlanCustomerLabel(): String? {
 private fun RestaurantTable.floorPlanSeatsLabel(): String? {
     val count = seats.coerceAtLeast(0)
     return if (count > 1) "${count} paikkaa" else null
+}
+
+private fun RestaurantTable.floorPlanPulseSeatsLabel(): String {
+    val count = seats.coerceAtLeast(0)
+    return if (count == 1) "1 paikka" else "$count paikkaa"
+}
+
+private fun RestaurantTable.floorPlanPulseSignals(
+    displayStatus: TableDisplayStatus,
+): List<FloorPlanPulseSignal> {
+    return buildList {
+        displayStatus.pulseAttentionLabel?.let { label ->
+            add(FloorPlanPulseSignal(label = label, color = floorPlanPulseSignalColor(label)))
+        }
+        if (TableOperationalFlag.CHECK in operationalFlags) {
+            add(FloorPlanPulseSignal(label = "Tarkista", color = TableCheckAttentionColor))
+        }
+        if (TableOperationalFlag.NEEDS_CLEANING in operationalFlags) {
+            add(FloorPlanPulseSignal(label = "Siivous", color = FloorPlanDirtyColor))
+        }
+    }.distinctBy { it.label }
+}
+
+private fun floorPlanPulseSignalColor(label: String): Color {
+    return when (label.lowercase()) {
+        "tarkista" -> TableCheckAttentionColor
+        "tarjoile" -> TableServiceAttentionColor
+        "siivous" -> FloorPlanDirtyColor
+        else -> TableMapVisualTokens.AccentText
+    }
+}
+
+private fun floorPlanPulseBillSummary(
+    openTotalLabel: String?,
+    openSaleTotalLabels: List<String>,
+    openBillCount: Int,
+): String? {
+    val amountText = openSaleTotalLabels
+        .filter { it.isNotBlank() }
+        .takeIf { it.isNotEmpty() }
+        ?.let { labels ->
+            val visible = labels.take(2).joinToString(" + ")
+            if (labels.size > 2) "$visible +${labels.size - 2}" else visible
+        }
+        ?: openTotalLabel?.takeIf { it.isNotBlank() }
+    val countText = when {
+        openBillCount <= 0 -> null
+        openBillCount == 1 -> "1 lasku"
+        else -> "$openBillCount laskua"
+    }
+    return listOfNotNull(countText, amountText).joinToString(" · ").takeIf { it.isNotBlank() }
 }
 
 @Composable
@@ -5778,6 +6146,20 @@ private fun panRange(
         return centeredOffset to centeredOffset
     }
     return (viewportSizePx - contentSizePx) to 0f
+}
+
+private fun FloorPlanRect.withCenteredMinimumSize(
+    minWidthPx: Float,
+    minHeightPx: Float,
+): FloorPlanRect {
+    val extraWidth = (minWidthPx - width).coerceAtLeast(0f)
+    val extraHeight = (minHeightPx - height).coerceAtLeast(0f)
+    return FloorPlanRect(
+        left = left - extraWidth / 2f,
+        top = top - extraHeight / 2f,
+        right = right + extraWidth / 2f,
+        bottom = bottom + extraHeight / 2f,
+    )
 }
 
 private fun StaffFloorPlanViewportPreference.hasCompleteViewport(): Boolean {

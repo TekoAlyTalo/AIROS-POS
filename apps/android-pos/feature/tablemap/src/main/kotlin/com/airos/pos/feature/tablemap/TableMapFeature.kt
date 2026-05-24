@@ -122,6 +122,7 @@ import java.net.URLEncoder
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -148,6 +149,7 @@ private const val LINEUP_CAMERA_NAME = "Tuulikaappi / jono"
 private const val LINEUP_CAMERA_ROLE_LABEL = "Jonokamera"
 private const val GENERAL_PREVIEW_CAMERA_ID = "cam4"
 private const val GENERAL_PREVIEW_CAMERA_NAME = "Yleiskamera / Cam4"
+private val TableMapHeaderTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 private const val GENERAL_PREVIEW_CAMERA_ROLE_LABEL = "Yleiskamera"
 private const val TABLE_CAMERA_ROLE_LABEL = "P\u00f6yt\u00e4kamera"
 private const val DEFAULT_CAMERA_ROLE_LABEL = "Kamera"
@@ -689,6 +691,7 @@ class TableMapViewModel(
 private fun StaffTableMapViewPreference.toTableMapViewMode(): TableMapViewMode {
     return when (this) {
         StaffTableMapViewPreference.FLOOR_PLAN -> TableMapViewMode.FLOOR_PLAN
+        StaffTableMapViewPreference.PULSE -> TableMapViewMode.PULSE
         StaffTableMapViewPreference.GRID -> TableMapViewMode.GRID
     }
 }
@@ -696,6 +699,7 @@ private fun StaffTableMapViewPreference.toTableMapViewMode(): TableMapViewMode {
 private fun TableMapViewMode.toStaffPreference(): StaffTableMapViewPreference {
     return when (this) {
         TableMapViewMode.FLOOR_PLAN -> StaffTableMapViewPreference.FLOOR_PLAN
+        TableMapViewMode.PULSE -> StaffTableMapViewPreference.PULSE
         TableMapViewMode.GRID -> StaffTableMapViewPreference.GRID
     }
 }
@@ -704,6 +708,8 @@ private fun TableMapViewMode.toStaffPreference(): StaffTableMapViewPreference {
 fun TableMapScreen(
     state: TableMapUiState,
     currentStaffId: String?,
+    currentStaffDisplayName: String? = null,
+    now: LocalDateTime = LocalDateTime.now(),
     preferRichFloorPlanStyle: Boolean = false,
     placeSelectionMode: Boolean = false,
     reservationTickerMessages: List<String> = emptyList(),
@@ -1056,11 +1062,11 @@ LaunchedEffect(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.Top,
                 ) {
-                    Text(
-                        text = state.floorMap?.name ?: "Pöytäkartta",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.SemiBold,
-                        color = TableMapVisualTokens.TextPrimary,
+                    TableMapOperationalHeader(
+                        currentStaffId = currentStaffId,
+                        currentStaffDisplayName = currentStaffDisplayName,
+                        now = now,
+                        modifier = Modifier.weight(1f),
                     )
                     TableMapViewModeToggle(
                         viewMode = viewMode,
@@ -1165,6 +1171,11 @@ LaunchedEffect(
                                     }
                                 },
                                 style = floorPlanStyle,
+                                renderMode = if (viewMode == TableMapViewMode.PULSE) {
+                                    FloorPlanRenderMode.PULSE
+                                } else {
+                                    FloorPlanRenderMode.FLOOR_PLAN
+                                },
                                 viewpoint = floorPlanViewpoint,
                                 floorPlanViewport = state.floorPlanViewport,
                                 onFloorPlanViewportChange = onFloorPlanViewportChange,
@@ -2403,9 +2414,11 @@ private fun buildAreaFilterOptions(
     floorAreas: List<FloorMapArea>,
 ): List<String> {
     val areaNames = if (floorAreas.isNotEmpty()) {
-        floorAreas.map { it.label.trim().ifBlank { "Ei aluetta" } }
+        floorAreas
+            .filter { area -> area.label.isNotBlank() && tables.any { table -> table.centerPointInside(area) } }
+            .map { it.label.trim() }
     } else {
-        tables.map { it.areaName.trim().ifBlank { "Ei aluetta" } }
+        tables.mapNotNull { table -> table.areaName.trim().takeIf { it.isNotBlank() } }
     }
         .distinct()
         .sortedWith(String.CASE_INSENSITIVE_ORDER)
@@ -2458,6 +2471,53 @@ private fun visibleFloorAreasForSelection(
 ): List<FloorMapArea> {
     if (selectedAreaName == AREA_FILTER_ALL) return floorAreas
     return floorAreas.filter { it.label.trim().ifBlank { "Ei aluetta" }.equals(selectedAreaName, ignoreCase = true) }
+}
+
+@Composable
+private fun TableMapOperationalHeader(
+    currentStaffId: String?,
+    currentStaffDisplayName: String?,
+    now: LocalDateTime,
+    modifier: Modifier = Modifier,
+) {
+    val staffLabel = currentStaffDisplayName
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+        ?: currentStaffId?.trim()?.takeIf { it.isNotBlank() }
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Text(
+            text = staffLabel?.let { "Myyjä $it" } ?: "Myyjä ei tiedossa",
+            style = MaterialTheme.typography.labelLarge,
+            color = TableMapVisualTokens.TextSecondary,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = formatTableMapHeaderDateTime(now),
+            style = MaterialTheme.typography.headlineSmall,
+            color = TableMapVisualTokens.AccentText,
+            fontWeight = FontWeight.ExtraBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+private fun formatTableMapHeaderDateTime(now: LocalDateTime): String {
+    val day = when (now.dayOfWeek.value) {
+        1 -> "Ma"
+        2 -> "Ti"
+        3 -> "Ke"
+        4 -> "To"
+        5 -> "Pe"
+        6 -> "La"
+        else -> "Su"
+    }
+    return "$day ${now.dayOfMonth}.${now.monthValue}. ${now.format(TableMapHeaderTimeFormatter)}"
 }
 
 private fun RestaurantTable.centerPointInside(area: FloorMapArea): Boolean {

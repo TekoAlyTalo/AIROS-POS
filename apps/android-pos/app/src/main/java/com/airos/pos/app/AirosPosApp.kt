@@ -2110,6 +2110,7 @@ private fun SignedInApp(
                         ),
                     )
                     val state by viewModel.uiState.collectAsState()
+                    val tableMapNow = rememberCurrentMinute()
                     val selectedTableId = state.selectedTableId
                     val selectedTableLabel = state.floorMap?.tables?.firstOrNull { it.id == selectedTableId }?.label
                     fun finishPlaceSelection(tableId: String, tableLabel: String) {
@@ -2126,6 +2127,8 @@ private fun SignedInApp(
                     TableMapScreen(
                         state = state,
                         currentStaffId = currentStaffId,
+                        currentStaffDisplayName = currentStaffName,
+                        now = tableMapNow,
                         preferRichFloorPlanStyle = useRichFloorPlanStyle,
                         placeSelectionMode = menuPlacePicker || reservationPlacePicker,
                         reservationTickerMessages = reservationTickerMessages,

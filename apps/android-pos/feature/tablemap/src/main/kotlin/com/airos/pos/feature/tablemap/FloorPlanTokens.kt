@@ -5,11 +5,17 @@ import androidx.compose.ui.graphics.Color
 internal enum class TableMapViewMode {
     GRID,
     FLOOR_PLAN,
+    PULSE,
 }
 
 internal enum class FloorPlanVisualStyle {
     SIMPLE,
     RICH,
+}
+
+internal enum class FloorPlanRenderMode {
+    FLOOR_PLAN,
+    PULSE,
 }
 
 internal data class TableMapPalette(

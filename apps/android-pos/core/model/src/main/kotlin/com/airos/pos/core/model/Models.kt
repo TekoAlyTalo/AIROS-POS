@@ -61,6 +61,7 @@ val AuthSession.staffName: String
 
 enum class StaffTableMapViewPreference {
     FLOOR_PLAN,
+    PULSE,
     GRID,
 }
 
