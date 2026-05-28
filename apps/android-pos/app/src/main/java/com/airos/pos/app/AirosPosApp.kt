@@ -2274,6 +2274,7 @@ private fun SignedInApp(
                     TransactionsRoute(
                         openSaleRepository = appContainer.openSaleRepository,
                         salesLedgerOutboxDao = appContainer.database.salesLedgerOutboxDao(),
+                        backendBaseUrlProvider = appContainer.reportsBackendBaseUrlProvider,
                     )
                 }
 
@@ -4056,7 +4057,7 @@ private fun RailButton(
 ) {
     Surface(
         modifier = Modifier
-            .padding(vertical = 5.dp)
+            .padding(vertical = 2.dp)
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(20.dp),
         color = if (selected) AppShellButtonActiveColor else AppShellButtonMutedColor,
@@ -4068,7 +4069,7 @@ private fun RailButton(
         Column(
             modifier = Modifier
                 .width(RAIL_BUTTON_WIDTH)
-                .padding(vertical = 10.dp, horizontal = 8.dp),
+                .padding(vertical = 6.dp, horizontal = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {

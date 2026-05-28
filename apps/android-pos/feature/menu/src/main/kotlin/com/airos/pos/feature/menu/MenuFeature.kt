@@ -514,10 +514,11 @@ class MenuViewModel(
                     clearTicketAfterSuccessfulCheckout()
 
                     val messageParts = buildList {
+                        add("Maksu valmis.")
                         add(
                             when (printResult) {
                                 is PosResult.Success<*> -> "Kuitti tulostettu."
-                                is PosResult.Failure -> "Maksu valmis, mutta kuitin tulostus epäonnistui: ${printResult.message}"
+                                is PosResult.Failure -> "Kuitin tulostus epäonnistui: ${printResult.message}"
                                 null -> "Kuitin tulostus ohitettu."
                             },
                         )
@@ -537,7 +538,7 @@ class MenuViewModel(
                             receiptHandoffPayload = tableResult.receiptHandoff,
                             receiptHandoffWaiting = false,
                             receiptHandoffMessage = tableResult.receiptHandoff?.let {
-                                "Sähköinen kuitti valmis. Kosketa puhelimella."
+                                "Sähköinen kuitti valmis NFC-luovutukseen."
                             },
                         )
                     }
@@ -1340,22 +1341,12 @@ private fun NoActiveBillPanel(
                 color = MenuTextPrimary,
             )
             Text(
-                text = "Valitse pöytä tai aloita pikamyynti.",
+                text = "Aloita pikamyynti tai valitse pöytä ennen tuotteiden lisäämistä.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MenuTextSecondary,
             )
             Text(
                 text = "Avoimet laskut: $openSalesCount",
-                style = MaterialTheme.typography.bodySmall,
-                color = MenuTextMuted,
-            )
-            Text(
-                text = "Pikamyynti: vapaa",
-                style = MaterialTheme.typography.bodySmall,
-                color = MenuTextMuted,
-            )
-            Text(
-                text = "Keittiön valmistusaika: Ei vielä dataa",
                 style = MaterialTheme.typography.bodySmall,
                 color = MenuTextMuted,
             )
@@ -1366,11 +1357,6 @@ private fun NoActiveBillPanel(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                OutlinedReceiptActionButton(
-                    label = "Avaa laatikko",
-                    onClick = { isDrawerPinDialogOpen = true },
-                    modifier = Modifier.fillMaxWidth(),
-                )
                 Button(
                     onClick = onNewSale,
                     modifier = Modifier.fillMaxWidth(),
@@ -1384,6 +1370,11 @@ private fun NoActiveBillPanel(
                 OutlinedReceiptActionButton(
                     label = "Pöydät",
                     onClick = onNavigateToTableMap,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedReceiptActionButton(
+                    label = "Kassalipas",
+                    onClick = { isDrawerPinDialogOpen = true },
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
@@ -2039,21 +2030,18 @@ private fun RowScope.TicketPane(
                     }
                 }
                 paymentMessage?.let { message ->
-                    Text(
-                        text = message,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (paymentInProgress) MenuTextSecondary else MenuAccentTextColor,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable(onClick = onDismissPaymentMessage),
+                    TicketNoticeCard(
+                        title = if (message.startsWith("Maksu valmis")) "Maksu valmis" else "Huomio",
+                        message = message,
+                        emphasized = message.startsWith("Maksu valmis"),
+                        onClick = onDismissPaymentMessage,
                     )
                 }
                 receiptHandoffMessage?.let { message ->
-                    Text(
-                        text = message,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (receiptHandoffWaiting) MenuTextSecondary else MenuAccentTextColor,
-                        modifier = Modifier.fillMaxWidth(),
+                    TicketNoticeCard(
+                        title = if (receiptHandoffWaiting) "Odotetaan NFC-kosketusta" else "Sähköinen kuitti",
+                        message = message,
+                        emphasized = !receiptHandoffWaiting,
                     )
                 }
                 if (receiptHandoffAvailable) {
@@ -2062,7 +2050,7 @@ private fun RowScope.TicketPane(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         OutlinedReceiptActionButton(
-                            label = if (receiptHandoffWaiting) "Peru kuitin NFC" else "Kosketa puhelimella",
+                            label = if (receiptHandoffWaiting) "Peru NFC" else "Lähetä NFC-kuitti",
                             onClick = if (receiptHandoffWaiting) onCancelReceiptHandoff else onStartReceiptHandoff,
                             modifier = Modifier.weight(1f),
                             enabled = !paymentInProgress,
@@ -2096,20 +2084,15 @@ private fun RowScope.TicketPane(
                         .padding(top = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Button(
+                    OutlinedReceiptActionButton(
+                        label = if (manualDrawerInProgress) "Avaan..." else "Kassalipas",
                         onClick = { isDrawerPinDialogOpen = true },
-                        modifier = Modifier.weight(0.95f),
+                        modifier = Modifier.weight(0.82f),
                         enabled = !paymentInProgress && !manualDrawerInProgress,
-                    ) {
-                        Text(
-                            text = if (manualDrawerInProgress) "Avaan..." else "Avaa laatikko",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                    }
+                    )
                     Button(
                         onClick = onOpenPaymentDialog,
-                        modifier = Modifier.weight(1.35f),
+                        modifier = Modifier.weight(1.55f),
                         enabled = ticketLines.isNotEmpty() && !paymentInProgress,
                     ) {
                         Text(
@@ -2204,6 +2187,51 @@ private fun RowScope.TicketPane(
                     },
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun TicketNoticeCard(
+    title: String,
+    message: String,
+    emphasized: Boolean,
+    onClick: (() -> Unit)? = null,
+) {
+    val backgroundColor = if (emphasized) {
+        MenuPanelAccentColor.copy(alpha = 0.45f)
+    } else {
+        MenuPanelAltColor.copy(alpha = 0.86f)
+    }
+    val borderColor = if (emphasized) {
+        MenuAccentTextColor.copy(alpha = 0.58f)
+    } else {
+        MenuBorderColor
+    }
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
+        shape = RoundedCornerShape(18.dp),
+        color = backgroundColor,
+        border = BorderStroke(1.dp, borderColor),
+        contentColor = MenuTextPrimary,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = if (emphasized) MenuAccentTextColor else MenuTextSecondary,
+            )
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MenuTextSecondary,
+            )
         }
     }
 }
@@ -2379,7 +2407,7 @@ private fun CashDrawerPinDialog(
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 Text(
-                    text = "Avaa kassalaatikko",
+                    text = "Kassalipas",
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                     color = MenuTextPrimary,
@@ -2480,7 +2508,7 @@ private fun CashDrawerPinDialog(
                         enabled = canSubmit,
                         shape = RoundedCornerShape(16.dp),
                     ) {
-                        Text(if (inProgress) "Avaan..." else "Avaa laatikko")
+                        Text(if (inProgress) "Avaan..." else "Kassalipas")
                     }
                 }
             }

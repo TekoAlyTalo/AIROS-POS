@@ -109,7 +109,7 @@ enum class MenuPaymentMode(
     CASH("Käteinen"),
     CARD("Kortti"),
     VOUCHER("Etuseteli"),
-    SPLIT_PAYMENT("Yhdistelmä"),
+    SPLIT_PAYMENT("Käteinen + kortti"),
 }
 
 data class MenuPaymentDialogResult(
@@ -290,13 +290,13 @@ fun MenuPaymentDialog(
                                 MenuPaymentMode.CASH -> "Valittu maksutapa"
                                 MenuPaymentMode.CARD -> "Valittu maksutapa"
                                 MenuPaymentMode.VOUCHER -> "Valittu maksutapa"
-                                MenuPaymentMode.SPLIT_PAYMENT -> "Yhdistelmämaksu"
+                                MenuPaymentMode.SPLIT_PAYMENT -> "Käteinen + kortti"
                             },
                             message = when (mode) {
                                 MenuPaymentMode.CASH -> "Käteinen käyttää vastaanotettua summaa ja laskee vaihtorahan automaattisesti."
                                 MenuPaymentMode.CARD -> "Kortti veloittaa jäljellä olevan summan. Viimeistele, kun maksupääte on valmis."
-                                MenuPaymentMode.VOUCHER -> "${voucherProvider.label} kirjataan valituksi maksutavaksi. Syötä summa oikealla."
-                                MenuPaymentMode.SPLIT_PAYMENT -> "Syötä asiakkaan kertoma käteis- tai korttiosuus. Toinen maksutapa lasketaan automaattisesti."
+                                MenuPaymentMode.VOUCHER -> "Etuseteli kirjataan maksulle. Syötä summa ja tunniste oikealla."
+                                MenuPaymentMode.SPLIT_PAYMENT -> "Syötä käteisen tai kortin osuus. Toinen maksutapa lasketaan automaattisesti."
                             },
                         )
 
@@ -404,75 +404,6 @@ fun MenuPaymentDialog(
                                 splitVoucherInput = ""
                             },
                         )
-
-                        Text(
-                            text = "Tulevat integraatiot",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = PaymentDialogTextSecondary,
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        ) {
-                            PaymentIntegrationPreviewButton(
-                                label = "Etuseteli",
-                                logoRes = null,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(58.dp),
-                                containerColor = PaymentDialogBrandDarkAlt,
-                                borderColor = Color(0xFFE17478),
-                            )
-                            PaymentIntegrationPreviewButton(
-                                label = VoucherProviderUi.SMARTUM.label,
-                                logoRes = VoucherProviderUi.SMARTUM.logoRes,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(58.dp),
-                                containerColor = VoucherProviderUi.SMARTUM.containerColor,
-                                borderColor = VoucherProviderUi.SMARTUM.borderColor,
-                            )
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        ) {
-                            PaymentIntegrationPreviewButton(
-                                label = VoucherProviderUi.EDENRED.label,
-                                logoRes = VoucherProviderUi.EDENRED.logoRes,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(58.dp),
-                                containerColor = VoucherProviderUi.EDENRED.containerColor,
-                                borderColor = VoucherProviderUi.EDENRED.borderColor,
-                            )
-                            PaymentIntegrationPreviewButton(
-                                label = VoucherProviderUi.EPASSI.label,
-                                logoRes = VoucherProviderUi.EPASSI.logoRes,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(58.dp),
-                                containerColor = VoucherProviderUi.EPASSI.containerColor,
-                                borderColor = VoucherProviderUi.EPASSI.borderColor,
-                            )
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        ) {
-                            PaymentIntegrationPreviewButton(
-                                label = VoucherProviderUi.WOLT.label,
-                                logoRes = VoucherProviderUi.WOLT.logoRes,
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(58.dp),
-                                containerColor = VoucherProviderUi.WOLT.containerColor,
-                                borderColor = VoucherProviderUi.WOLT.borderColor,
-                            )
-                            Spacer(modifier = Modifier.weight(1f))
-                        }
-
                     }
 
                     Column(
@@ -558,7 +489,7 @@ fun MenuPaymentDialog(
                                                 value = voucherBarcodeInput,
                                                 onValueChange = { voucherBarcodeInput = it },
                                                 label = { Text("${voucherProvider.label}-viivakoodi / koodi") },
-                                                supportingText = { Text("Manuaalinen syöttö nyt. Skanneri voi täyttää tämän myöhemmin.") },
+                                                supportingText = { Text("Syötä etusetelin tunniste, viivakoodi tai koodi.") },
                                                 modifier = Modifier.fillMaxWidth(),
                                                 singleLine = true,
                                             )
@@ -643,10 +574,10 @@ fun MenuPaymentDialog(
                             MenuPaymentMode.SPLIT_PAYMENT -> {
                                 when {
                                     splitOverCents > 0 -> "Ylittää ${CentsFormatter.format(splitOverCents)}"
-                                    splitCanFinalize -> "Viimeistele yhdistelmämaksu"
+                                    splitCanFinalize -> "Viimeistele käteinen + kortti"
                                     splitManualCents <= 0 -> "Syötä käteinen tai kortti"
                                     splitAutoCents <= 0 -> "Valitse tavallinen maksutapa"
-                                    else -> "Viimeistele yhdistelmämaksu"
+                                    else -> "Viimeistele käteinen + kortti"
                                 }
                             }
                         },
@@ -733,7 +664,7 @@ private fun PaymentSummaryCard(
                 }
 
                 MenuPaymentMode.SPLIT_PAYMENT -> {
-                    PaymentSummaryRow(label = "Valittu maksu", value = "Yhdistelmä", emphasized = true)
+                    PaymentSummaryRow(label = "Valittu maksu", value = "Käteinen + kortti", emphasized = true)
                     PaymentSummaryRow(label = "Käteinen", value = CentsFormatter.format(splitCashCents))
                     PaymentSummaryRow(label = "Kortti", value = CentsFormatter.format(splitCardCents))
                     PaymentSummaryRow(label = "Maksettu yhteensä", value = CentsFormatter.format(splitPaidCents))
@@ -758,7 +689,7 @@ private fun PaymentAmountFocusCard(
         MenuPaymentMode.CASH -> "Maksetaan käteisellä"
         MenuPaymentMode.CARD -> "Maksetaan kortilla"
         MenuPaymentMode.VOUCHER -> "$voucherProviderLabel-maksu"
-        MenuPaymentMode.SPLIT_PAYMENT -> "Yhdistelmämaksu"
+        MenuPaymentMode.SPLIT_PAYMENT -> "Käteinen + kortti"
     }
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -805,7 +736,7 @@ private fun CardFullPaymentGuardCard() {
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                text = "Käteisosan kirjaus tehdään Yhdistelmä-toiminnolla.",
+                text = "Käteisosan kirjaus tehdään Käteinen + kortti -toiminnolla.",
                 style = MaterialTheme.typography.bodySmall,
                 color = PaymentDialogTextMuted,
             )
@@ -931,13 +862,13 @@ private fun SplitPaymentNoScrollPanel(
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Yhdistelmämaksu",
+                        text = "Käteinen + kortti",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = PaymentDialogTextPrimary,
                     )
                     Text(
-                        text = "Syötä toinen osuus. AIROS laskee loput.",
+                        text = "Syötä toinen osuus. Loppu kirjataan toiselle.",
                         style = MaterialTheme.typography.bodySmall,
                         color = PaymentDialogTextMuted,
                         maxLines = 1,

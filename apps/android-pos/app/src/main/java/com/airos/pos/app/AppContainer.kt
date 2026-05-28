@@ -82,6 +82,7 @@ interface AppContainer {
     val customerDisplayService: CustomerDisplayService
     val worktimeAttendanceClient: WorktimeAttendanceClient
     val worktimeAttendanceRepository: WorktimeAttendanceRepository
+    val reportsBackendBaseUrlProvider: () -> String
 }
 
 class DefaultAppContainer(
@@ -188,6 +189,7 @@ class DefaultAppContainer(
         restaurantKeyProvider = { currentRestaurantKey() },
         terminalIdProvider = { currentTerminalId() },
     )
+    override val reportsBackendBaseUrlProvider: () -> String = { currentLedgerBackendBaseUrl().orEmpty() }
 
     init {
         runBlocking {

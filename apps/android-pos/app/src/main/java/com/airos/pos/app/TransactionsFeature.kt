@@ -1,6 +1,7 @@
 package com.airos.pos.app
 
 import android.text.format.DateFormat
+import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -68,7 +69,17 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.BufferedReader
+import java.io.InputStream
+import java.io.InputStreamReader
+import java.net.HttpURLConnection
+import java.net.URL
+import java.nio.charset.StandardCharsets
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -178,6 +189,7 @@ private data class TransactionsUiState(
     val currentEvents: List<TransactionRecord> = emptyList(),
     val pastEvents: List<TransactionRecord> = emptyList(),
     val selectedEventId: String? = null,
+    val backendKpiState: BackendKpiState = BackendKpiState.Loading,
 )
 
 private data class HourlyBucket(val hour: Int, val amountCents: Int)
@@ -189,9 +201,33 @@ private data class PaymentMethodBucket(
     val totalCents: Int,
 )
 
+private data class BackendDayKpi(
+    val grossTotalCents: Int,
+    val receiptCount: Int,
+    val paymentsBreakdown: List<TransactionPaymentSnapshot>,
+)
+
+private data class BackendTransactionRow(
+    val finalizedAtMs: Long,
+    val totalCents: Int,
+)
+
+private sealed class BackendKpiState {
+    object Loading : BackendKpiState()
+    data class Available(
+        val grossTotalCents: Int,
+        val receiptCount: Int,
+        val lastHourTotalCents: Int,
+        val paymentsBreakdown: List<TransactionPaymentSnapshot>,
+        val hourlyBuckets: List<HourlyBucket>,
+    ) : BackendKpiState()
+    object Unavailable : BackendKpiState()
+}
+
 private class TransactionsRepository(
     private val openSaleRepository: OpenSaleRepository,
     private val salesLedgerOutboxDao: SalesLedgerOutboxDao,
+    private val backendBaseUrlProvider: () -> String,
 ) {
     fun observeCurrentTransactions(): Flow<List<TransactionRecord>> {
         return combine(
@@ -327,6 +363,119 @@ private class TransactionsRepository(
         }
         return timeline.sortedBy { it.occurredAtEpochMillis }
     }
+
+    suspend fun fetchDayReport(startMs: Long, endMs: Long): BackendDayKpi? = withContext(Dispatchers.IO) {
+        val baseUrl = normalizedBaseUrl() ?: return@withContext null
+        val urlString = "$baseUrl/api/pos/reports/day?start=$startMs&end=$endMs"
+        var connection: HttpURLConnection? = null
+        try {
+            connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 4_000
+                readTimeout = 6_000
+                doInput = true
+                useCaches = false
+                setRequestProperty("Accept", "application/json")
+            }
+            val statusCode = connection.responseCode
+            val body = readBackendStream(if (statusCode in 200..299) connection.inputStream else connection.errorStream)
+            if (statusCode !in 200..299) {
+                Log.d("AIROS_REPORTS", "day report fetch failed status=$statusCode")
+                return@withContext null
+            }
+            parseDayReport(body)
+        } catch (t: Throwable) {
+            Log.d("AIROS_REPORTS", "day report fetch failed: ${t.javaClass.simpleName}: ${t.message.orEmpty()}")
+            null
+        } finally {
+            connection?.disconnect()
+        }
+    }
+
+    suspend fun fetchTodayTransactions(startMs: Long, endMs: Long): List<BackendTransactionRow>? = withContext(Dispatchers.IO) {
+        val baseUrl = normalizedBaseUrl() ?: return@withContext null
+        val urlString = "$baseUrl/api/pos/reports/transactions/search?start=$startMs&end=$endMs"
+        var connection: HttpURLConnection? = null
+        try {
+            connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 4_000
+                readTimeout = 6_000
+                doInput = true
+                useCaches = false
+                setRequestProperty("Accept", "application/json")
+            }
+            val statusCode = connection.responseCode
+            val body = readBackendStream(if (statusCode in 200..299) connection.inputStream else connection.errorStream)
+            if (statusCode !in 200..299) {
+                Log.d("AIROS_REPORTS", "transaction search failed status=$statusCode")
+                return@withContext null
+            }
+            parseTransactionRows(body)
+        } catch (t: Throwable) {
+            Log.d("AIROS_REPORTS", "transaction search failed: ${t.javaClass.simpleName}: ${t.message.orEmpty()}")
+            null
+        } finally {
+            connection?.disconnect()
+        }
+    }
+
+    private fun parseDayReport(body: String): BackendDayKpi? {
+        if (body.isBlank()) return null
+        return runCatching {
+            val root = JSONObject(body)
+            val paymentsArray = root.optJSONArray("payments_summary")
+            val paymentList = mutableListOf<TransactionPaymentSnapshot>()
+            if (paymentsArray != null) {
+                for (i in 0 until paymentsArray.length()) {
+                    val pm = paymentsArray.optJSONObject(i) ?: continue
+                    val method = pm.optString("payment_method").takeIf { it.isNotBlank() } ?: continue
+                    paymentList += TransactionPaymentSnapshot(
+                        methodCode = method,
+                        amountCents = pm.optInt("amount_total_cents"),
+                    )
+                }
+            }
+            BackendDayKpi(
+                grossTotalCents = root.optInt("gross_sales_total_cents"),
+                receiptCount = root.optInt("total_sales_count"),
+                paymentsBreakdown = paymentList,
+            )
+        }.getOrNull()
+    }
+
+    private fun parseTransactionRows(body: String): List<BackendTransactionRow>? {
+        if (body.isBlank()) return null
+        return runCatching {
+            val root = JSONObject(body)
+            val results = root.optJSONArray("results") ?: return@runCatching emptyList()
+            (0 until results.length()).mapNotNull { i ->
+                val obj = results.optJSONObject(i) ?: return@mapNotNull null
+                val ms = obj.optLong("finalized_at_epoch_ms", -1L)
+                val cents = obj.optInt("total_cents", 0)
+                if (ms > 0) BackendTransactionRow(finalizedAtMs = ms, totalCents = cents) else null
+            }
+        }.getOrNull()
+    }
+
+    private fun normalizedBaseUrl(): String? {
+        val url = backendBaseUrlProvider().trim().trimEnd('/')
+        return url.ifBlank { null }
+    }
+
+    private fun readBackendStream(stream: InputStream?): String {
+        if (stream == null) return ""
+        return stream.use { input ->
+            BufferedReader(InputStreamReader(input, StandardCharsets.UTF_8)).use { reader ->
+                buildString {
+                    while (true) {
+                        val line = reader.readLine() ?: break
+                        append(line)
+                    }
+                }
+            }
+        }
+    }
 }
 
 private class TransactionsViewModel private constructor(
@@ -346,6 +495,36 @@ private class TransactionsViewModel private constructor(
                 mutableState.update { current -> current.copy(pastEvents = items) }
             }
         }
+        viewModelScope.launch {
+            val startMs = startOfTodayEpochMillis()
+            val endMs = System.currentTimeMillis()
+            coroutineScope {
+                val dayKpiDeferred = async { repository.fetchDayReport(startMs, endMs) }
+                val txnRowsDeferred = async { repository.fetchTodayTransactions(startMs, endMs) }
+                val dayKpi = dayKpiDeferred.await()
+                val txnRows = txnRowsDeferred.await()
+                val hourAgo = System.currentTimeMillis() - 3_600_000L
+                val newKpiState = if (dayKpi != null) {
+                    val lastHourCents = txnRows
+                        ?.filter { it.finalizedAtMs >= hourAgo }
+                        ?.sumOf { it.totalCents }
+                        ?: 0
+                    val hourlyBuckets = txnRows
+                        ?.let { computeHourlyBucketsFromRows(it) }
+                        ?: emptyList()
+                    BackendKpiState.Available(
+                        grossTotalCents = dayKpi.grossTotalCents,
+                        receiptCount = dayKpi.receiptCount,
+                        lastHourTotalCents = lastHourCents,
+                        paymentsBreakdown = dayKpi.paymentsBreakdown,
+                        hourlyBuckets = hourlyBuckets,
+                    )
+                } else {
+                    BackendKpiState.Unavailable
+                }
+                mutableState.update { it.copy(backendKpiState = newKpiState) }
+            }
+        }
     }
 
     fun selectEvent(stableId: String) {
@@ -356,12 +535,14 @@ private class TransactionsViewModel private constructor(
         fun factory(
             openSaleRepository: OpenSaleRepository,
             salesLedgerOutboxDao: SalesLedgerOutboxDao,
+            backendBaseUrlProvider: () -> String,
         ): ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 TransactionsViewModel(
                     repository = TransactionsRepository(
                         openSaleRepository = openSaleRepository,
                         salesLedgerOutboxDao = salesLedgerOutboxDao,
+                        backendBaseUrlProvider = backendBaseUrlProvider,
                     ),
                 )
             }
@@ -375,23 +556,32 @@ private fun TransactionsScreen(
     onSelectEvent: (String) -> Unit,
 ) {
     val strings = rememberCashierStrings()
-    val todayStart = remember { startOfTodayEpochMillis() }
 
-    val todayPast = remember(state.pastEvents, todayStart) {
-        state.pastEvents.filter { it.occurredAtEpochMillis >= todayStart }
-    }
-    val todayTotal = remember(todayPast) { todayPast.sumOf { it.amountCents } }
-    val lastHourTotal = remember(state.pastEvents) {
-        val hourAgo = System.currentTimeMillis() - 3_600_000L
-        state.pastEvents.filter { it.occurredAtEpochMillis >= hourAgo }.sumOf { it.amountCents }
-    }
-    val receiptCount = remember(todayPast) { todayPast.size }
     val openBillsCount = remember(state.currentEvents) { state.currentEvents.size }
-
-    val hourlyBuckets = remember(todayPast) { computeHourlyBuckets(todayPast) }
-    val paymentBuckets = remember(todayPast) { computePaymentBuckets(todayPast, strings) }
     val recentSales = remember(state.pastEvents) { state.pastEvents.take(20) }
     val openBills = state.currentEvents
+
+    val kpiState = state.backendKpiState
+    val hourlyBuckets = remember(kpiState) {
+        if (kpiState is BackendKpiState.Available) kpiState.hourlyBuckets else emptyList()
+    }
+    val paymentBuckets = remember(kpiState, strings) {
+        if (kpiState is BackendKpiState.Available) {
+            val total = kpiState.grossTotalCents
+            kpiState.paymentsBreakdown
+                .sortedByDescending { it.amountCents }
+                .map { pm ->
+                    PaymentMethodBucket(
+                        methodCode = pm.methodCode,
+                        label = pm.methodCode.toPaymentLabel(strings),
+                        amountCents = pm.amountCents,
+                        totalCents = total,
+                    )
+                }
+        } else {
+            emptyList()
+        }
+    }
 
     val selectedEvent = remember(state.selectedEventId, openBills, recentSales) {
         (openBills + recentSales).firstOrNull { it.stableId == state.selectedEventId }
@@ -421,17 +611,29 @@ private fun TransactionsScreen(
                     ) {
                         SalesKpiCard(
                             label = strings[CashierStringKey.SalesDashboardToday],
-                            value = CentsFormatter.format(todayTotal),
+                            value = when (kpiState) {
+                                BackendKpiState.Loading -> "..."
+                                BackendKpiState.Unavailable -> "—"
+                                is BackendKpiState.Available -> CentsFormatter.format(kpiState.grossTotalCents)
+                            },
                             modifier = Modifier.weight(1f),
                         )
                         SalesKpiCard(
                             label = strings[CashierStringKey.SalesDashboardLastHour],
-                            value = CentsFormatter.format(lastHourTotal),
+                            value = when (kpiState) {
+                                BackendKpiState.Loading -> "..."
+                                BackendKpiState.Unavailable -> "—"
+                                is BackendKpiState.Available -> CentsFormatter.format(kpiState.lastHourTotalCents)
+                            },
                             modifier = Modifier.weight(1f),
                         )
                         SalesKpiCard(
                             label = strings[CashierStringKey.SalesDashboardReceiptCount],
-                            value = receiptCount.toString(),
+                            value = when (kpiState) {
+                                BackendKpiState.Loading -> "..."
+                                BackendKpiState.Unavailable -> "—"
+                                is BackendKpiState.Available -> kpiState.receiptCount.toString()
+                            },
                             modifier = Modifier.weight(1f),
                         )
                         SalesKpiCard(
@@ -468,7 +670,7 @@ private fun TransactionsScreen(
                 item { DashboardSectionHeader(strings[CashierStringKey.SalesDashboardByCategory]) }
                 item {
                     CategoryBreakdownSection(
-                        totalCents = todayTotal,
+                        totalCents = if (kpiState is BackendKpiState.Available) kpiState.grossTotalCents else 0,
                         categoryLabel = strings[CashierStringKey.SalesDashboardCategoryOther],
                         noDataText = strings[CashierStringKey.SalesDashboardNoCategoryData],
                     )
@@ -532,11 +734,13 @@ private fun TransactionsScreen(
 internal fun TransactionsRoute(
     openSaleRepository: OpenSaleRepository,
     salesLedgerOutboxDao: SalesLedgerOutboxDao,
+    backendBaseUrlProvider: () -> String = { "" },
 ) {
     val viewModel: TransactionsViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
         factory = TransactionsViewModel.factory(
             openSaleRepository = openSaleRepository,
             salesLedgerOutboxDao = salesLedgerOutboxDao,
+            backendBaseUrlProvider = backendBaseUrlProvider,
         ),
     )
     val state by viewModel.uiState.collectAsState()
@@ -1225,6 +1429,15 @@ private fun computeHourlyBuckets(events: List<TransactionRecord>): List<HourlyBu
     events.forEach { event ->
         val cal = Calendar.getInstance().apply { timeInMillis = event.occurredAtEpochMillis }
         byHour[cal.get(Calendar.HOUR_OF_DAY)] += event.amountCents
+    }
+    return (0 until 24).map { h -> HourlyBucket(hour = h, amountCents = byHour[h]) }
+}
+
+private fun computeHourlyBucketsFromRows(rows: List<BackendTransactionRow>): List<HourlyBucket> {
+    val byHour = Array(24) { 0 }
+    rows.forEach { row ->
+        val cal = Calendar.getInstance().apply { timeInMillis = row.finalizedAtMs }
+        byHour[cal.get(Calendar.HOUR_OF_DAY)] += row.totalCents
     }
     return (0 until 24).map { h -> HourlyBucket(hour = h, amountCents = byHour[h]) }
 }
