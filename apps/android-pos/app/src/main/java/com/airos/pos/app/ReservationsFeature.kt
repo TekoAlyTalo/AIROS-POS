@@ -108,6 +108,7 @@ import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import java.time.format.TextStyle
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -115,6 +116,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.PI
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -227,6 +229,9 @@ private data class ReservationsUiState(
     val dateInput: String = LocalDate.now().format(DateInputFormatter),
     val reservations: List<BackendReservation> = emptyList(),
     val pulseReservations: List<BackendReservation> = emptyList(),
+    val derivedById: Map<Int, ReservationDerived> = emptyMap(),
+    val pulseRows: List<ReservationPulseRow> = emptyList(),
+    val pulseRowsReady: Boolean = false,
     val tables: List<ReservationTableOption> = emptyList(),
     val form: ReservationFormState = ReservationFormState(),
     val searchQuery: String = "",
@@ -282,10 +287,17 @@ private class ReservationsViewModel(
             when (val result = reservationsRepository.listReservations()) {
                 is PosResult.Success -> {
                     allReservations = result.value
+                    val date = uiState.value.selectedDate
+                    val snapshot = withContext(Dispatchers.Default) {
+                        buildReservationsSnapshot(result.value, date)
+                    }
                     mutableState.update { state ->
                         state.copy(
-                            reservations = reservationsForDay(state.selectedDate),
-                            pulseReservations = reservationsForPulseWindow(state.selectedDate),
+                            derivedById = snapshot.derivedById,
+                            reservations = snapshot.reservations,
+                            pulseReservations = snapshot.pulseReservations,
+                            pulseRows = snapshot.pulseRows,
+                            pulseRowsReady = true,
                             isLoading = false,
                             error = null,
                         )
@@ -317,12 +329,17 @@ private class ReservationsViewModel(
     }
 
     private fun selectDate(date: LocalDate) {
-        mutableState.update {
-            it.copy(
+        mutableState.update { state ->
+            val derived = state.derivedById
+            val day = reservationsForDay(date, derived)
+            val pulse = reservationsForPulseWindow(date, derived)
+            state.copy(
                 selectedDate = date,
                 dateInput = date.format(DateInputFormatter),
-                reservations = reservationsForDay(date),
-                pulseReservations = reservationsForPulseWindow(date),
+                reservations = day,
+                pulseReservations = pulse,
+                pulseRows = buildLocalReservationPulseRowsFromDerived(date, pulse, derived),
+                pulseRowsReady = true,
                 message = null,
                 error = null,
             )
@@ -395,12 +412,17 @@ private class ReservationsViewModel(
     fun openSlotWorkbench(selection: ReservationPulseSlotSelection) {
         val start = selection.start.withSecond(0).withNano(0)
         val duration = 120L
-        mutableState.update {
-            it.copy(
+        mutableState.update { state ->
+            val derived = state.derivedById
+            val day = reservationsForDay(selection.date, derived)
+            val pulse = reservationsForPulseWindow(selection.date, derived)
+            state.copy(
                 selectedDate = selection.date,
                 dateInput = selection.date.format(DateInputFormatter),
-                reservations = reservationsForDay(selection.date),
-                pulseReservations = reservationsForPulseWindow(selection.date),
+                reservations = day,
+                pulseReservations = pulse,
+                pulseRows = buildLocalReservationPulseRowsFromDerived(selection.date, pulse, derived),
+                pulseRowsReady = true,
                 form = ReservationFormState(
                     startTime = start.format(TimeFormatter),
                     durationMinutes = duration.toString(),
@@ -563,10 +585,15 @@ private class ReservationsViewModel(
         val selection = reservationPulseSelectionForReservation(reservation)
         mutableState.update { state ->
             val nextDate = targetDate ?: state.selectedDate
+            val derived = state.derivedById
+            val day = reservationsForDay(nextDate, derived)
+            val pulse = reservationsForPulseWindow(nextDate, derived)
             state.copy(
                 selectedDate = nextDate,
-                reservations = reservationsForDay(nextDate),
-                pulseReservations = reservationsForPulseWindow(nextDate),
+                reservations = day,
+                pulseReservations = pulse,
+                pulseRows = buildLocalReservationPulseRowsFromDerived(nextDate, pulse, derived),
+                pulseRowsReady = true,
                 form = reservationFormState(reservation, state),
                 wizardOpen = false,
                 wizardStep = ReservationWizardStep.DATE_TIME,
@@ -772,10 +799,17 @@ private class ReservationsViewModel(
         when (val refreshed = reservationsRepository.listReservations()) {
             is PosResult.Success -> {
                 allReservations = refreshed.value
+                val date = uiState.value.selectedDate
+                val snapshot = withContext(Dispatchers.Default) {
+                    buildReservationsSnapshot(refreshed.value, date)
+                }
                 mutableState.update { state ->
                     state.copy(
-                        reservations = reservationsForDay(state.selectedDate),
-                        pulseReservations = reservationsForPulseWindow(state.selectedDate),
+                        derivedById = snapshot.derivedById,
+                        reservations = snapshot.reservations,
+                        pulseReservations = snapshot.pulseReservations,
+                        pulseRows = snapshot.pulseRows,
+                        pulseRowsReady = true,
                         form = ReservationFormState(),
                         wizardOpen = false,
                         wizardStep = ReservationWizardStep.DATE_TIME,
@@ -806,23 +840,18 @@ private class ReservationsViewModel(
         }
     }
 
-    private fun reservationsForDay(date: LocalDate): List<BackendReservation> {
-        return allReservations
-            .filter { parseReservationDateTime(it.startTime)?.toLocalDate() == date }
-            .sortedBy { parseReservationDateTime(it.startTime) ?: LocalDateTime.MIN }
+    private fun reservationsForDay(
+        date: LocalDate,
+        derivedById: Map<Int, ReservationDerived>,
+    ): List<BackendReservation> {
+        return reservationsForDayUsing(allReservations, date, derivedById)
     }
 
-    private fun reservationsForPulseWindow(date: LocalDate): List<BackendReservation> {
-        val windowStartDate = reservationPulseWindowStart(date)
-        val windowStart = windowStartDate.atStartOfDay()
-        val windowEnd = windowStart.plusDays((RESERVATION_PULSE_PAST_DAYS + RESERVATION_PULSE_FUTURE_DAYS + 1).toLong())
-        return allReservations
-            .filter { reservation ->
-                val start = parseReservationDateTime(reservation.startTime)
-                val end = parseReservationDateTime(reservation.endTime)
-                start != null && end != null && start.isBefore(windowEnd) && end.isAfter(windowStart)
-            }
-            .sortedBy { parseReservationDateTime(it.startTime) ?: LocalDateTime.MIN }
+    private fun reservationsForPulseWindow(
+        date: LocalDate,
+        derivedById: Map<Int, ReservationDerived>,
+    ): List<BackendReservation> {
+        return reservationsForPulseWindowUsing(allReservations, date, derivedById)
     }
 
     companion object {
@@ -972,8 +1001,12 @@ private fun ReservationsScreen(
         state.queueFilter,
         state.sortMode,
         state.timeWindowFilter,
+        state.derivedById,
     ) {
         filteredReservations(state)
+    }
+    val inboxSections = remember(visibleReservations, state.derivedById) {
+        buildReservationWorkQueue(visibleReservations, state.derivedById)
     }
 
     if (showDatePicker) {
@@ -1091,7 +1124,6 @@ private fun ReservationsScreen(
                     onSlotClick = onOpenSlotWorkbench,
                 )
 
-                val inboxSections = remember(visibleReservations) { buildReservationWorkQueue(visibleReservations) }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -1148,6 +1180,7 @@ private fun ReservationsScreen(
                         ReservationInbox(
                             state = state,
                             reservations = visibleReservations,
+                            sections = inboxSections,
                             onEdit = onEdit,
                         )
                     }
@@ -1296,12 +1329,7 @@ private fun ReservationPulsePanel(
             now = LocalDateTime.now()
         }
     }
-    val rows = remember(state.selectedDate, state.pulseReservations) {
-        buildLocalReservationPulseRows(
-            selectedDate = state.selectedDate,
-            reservations = state.pulseReservations,
-        )
-    }
+    val rows = state.pulseRows
     val selectedIndex = rows.indexOfFirst { it.date == state.selectedDate }
         .takeIf { it >= 0 }
         ?: RESERVATION_PULSE_PAST_DAYS
@@ -2293,43 +2321,99 @@ private fun ReservationChip(
 private fun ReservationInbox(
     state: ReservationsUiState,
     reservations: List<BackendReservation>,
+    sections: ReservationWorkQueueSections,
     onEdit: (BackendReservation) -> Unit,
 ) {
     var pastExpanded by remember(state.selectedDate, state.searchQuery, state.queueFilter) {
         mutableStateOf(false)
     }
-    val sections = remember(reservations) { buildReservationWorkQueue(reservations) }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState()),
+    val activeReservations = remember(sections) {
+        sections.attention + sections.unassigned + sections.upcoming
+    }
+    val now = remember(reservations, state.derivedById) { LocalDateTime.now() }
+    val attentionIds = remember(sections) {
+        sections.attention.mapTo(HashSet(sections.attention.size)) { it.id }
+    }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(bottom = 16.dp),
     ) {
         if (!state.isLoading && reservations.isEmpty()) {
-            EmptyReservationList()
+            item(key = "empty-top") { EmptyReservationList() }
         }
-        val activeReservations = sections.attention + sections.unassigned + sections.upcoming
-        activeReservations.forEach { reservation ->
+        items(activeReservations, key = { it.id }) { reservation ->
+            val derived = state.derivedById[reservation.id]
             ReservationCompactRow(
                 reservation = reservation,
                 tableLabel = reservationTableLabel(reservation, state.tables),
                 onClick = { onEdit(reservation) },
                 enabled = !state.isSaving,
+                precomputedNoteParts = derived?.noteParts,
+                precomputedUnassigned = reservationIsUnassigned(reservation),
+                precomputedUrgent = reservation.id in attentionIds ||
+                    reservationNeedsAttention(reservation, state.derivedById, now),
             )
         }
-        PastReservationsSection(
-            reservations = sections.past,
-            state = state,
-            expanded = pastExpanded,
-            enabled = !state.isSaving,
-            onToggle = { pastExpanded = !pastExpanded },
-            onSelect = onEdit,
-        )
-        if (!state.isLoading && reservations.isNotEmpty() && sections.activeCount == 0 && sections.past.isEmpty()) {
-            EmptyReservationList()
+        if (sections.past.isNotEmpty()) {
+            item(key = "past-header") {
+                PastReservationsHeader(
+                    count = sections.past.size,
+                    expanded = pastExpanded,
+                    onToggle = { pastExpanded = !pastExpanded },
+                )
+            }
+            if (pastExpanded) {
+                items(sections.past, key = { it.id }) { reservation ->
+                    val derived = state.derivedById[reservation.id]
+                    ReservationCompactRow(
+                        reservation = reservation,
+                        tableLabel = reservationTableLabel(reservation, state.tables),
+                        onClick = { onEdit(reservation) },
+                        enabled = !state.isSaving,
+                        compactMuted = true,
+                        precomputedNoteParts = derived?.noteParts,
+                        precomputedUnassigned = reservationIsUnassigned(reservation),
+                        precomputedUrgent = false,
+                    )
+                }
+            }
         }
-        Spacer(modifier = Modifier.height(16.dp))
+        if (!state.isLoading && reservations.isNotEmpty() && sections.activeCount == 0 && sections.past.isEmpty()) {
+            item(key = "empty-bottom") { EmptyReservationList() }
+        }
+    }
+}
+
+@Composable
+private fun PastReservationsHeader(
+    count: Int,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle),
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Menneet ($count)",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = if (expanded) "Piilota" else "Näytä",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
     }
 }
 
@@ -2396,53 +2480,6 @@ private fun ReservationWorkQueueSection(
             onClick = { onSelect(reservation) },
             enabled = enabled,
         )
-    }
-}
-
-@Composable
-private fun PastReservationsSection(
-    reservations: List<BackendReservation>,
-    state: ReservationsUiState,
-    expanded: Boolean,
-    enabled: Boolean,
-    onToggle: () -> Unit,
-    onSelect: (BackendReservation) -> Unit,
-) {
-    if (reservations.isEmpty()) return
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onToggle),
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = "Menneet (${reservations.size})",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                text = if (expanded) "Piilota" else "Näytä",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary,
-            )
-        }
-    }
-    if (expanded) {
-        reservations.forEach { reservation ->
-            ReservationCompactRow(
-                reservation = reservation,
-                tableLabel = reservationTableLabel(reservation, state.tables),
-                onClick = { onSelect(reservation) },
-                enabled = enabled,
-                compactMuted = true,
-            )
-        }
     }
 }
 
@@ -2552,11 +2589,16 @@ private fun ReservationCompactRow(
     onClick: () -> Unit,
     enabled: Boolean,
     compactMuted: Boolean = false,
+    precomputedNoteParts: ReservationNoteParts? = null,
+    precomputedUnassigned: Boolean? = null,
+    precomputedUrgent: Boolean? = null,
 ) {
-    val noteParts = remember(reservation.notes) { splitReservationNotes(reservation.notes.orEmpty()) }
+    val noteParts = precomputedNoteParts
+        ?: remember(reservation.notes) { splitReservationNotes(reservation.notes.orEmpty()) }
     val status = noteParts.status
-    val unassigned = reservationIsUnassigned(reservation)
-    val urgent = reservationNeedsAttention(reservation, LocalDateTime.now())
+    val unassigned = precomputedUnassigned ?: reservationIsUnassigned(reservation)
+    val urgent = precomputedUrgent
+        ?: reservationNeedsAttention(reservation, LocalDateTime.now())
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -3925,30 +3967,135 @@ private data class ReservationPulseSlotSelection(
     val end: LocalTime,
 )
 
-private fun buildLocalReservationPulseRows(
+private data class ReservationDerived(
+    val start: LocalDateTime?,
+    val end: LocalDateTime?,
+    val noteParts: ReservationNoteParts,
+) {
+    val status: ReservationStatus get() = noteParts.status
+}
+
+private data class ReservationsSnapshot(
+    val derivedById: Map<Int, ReservationDerived>,
+    val reservations: List<BackendReservation>,
+    val pulseReservations: List<BackendReservation>,
+    val pulseRows: List<ReservationPulseRow>,
+)
+
+private fun buildDerivedById(
+    reservations: List<BackendReservation>,
+): Map<Int, ReservationDerived> {
+    return reservations.associate { reservation ->
+        reservation.id to ReservationDerived(
+            start = parseReservationDateTime(reservation.startTime),
+            end = parseReservationDateTime(reservation.endTime),
+            noteParts = splitReservationNotes(reservation.notes.orEmpty()),
+        )
+    }
+}
+
+private fun reservationsForDayUsing(
+    reservations: List<BackendReservation>,
+    date: LocalDate,
+    derivedById: Map<Int, ReservationDerived>,
+): List<BackendReservation> {
+    return reservations
+        .filter { reservationStart(derivedById, it)?.toLocalDate() == date }
+        .sortedBy { reservationStart(derivedById, it) ?: LocalDateTime.MIN }
+}
+
+private fun reservationsForPulseWindowUsing(
+    reservations: List<BackendReservation>,
+    date: LocalDate,
+    derivedById: Map<Int, ReservationDerived>,
+): List<BackendReservation> {
+    val windowStartDate = reservationPulseWindowStart(date)
+    val windowStart = windowStartDate.atStartOfDay()
+    val windowEnd = windowStart.plusDays((RESERVATION_PULSE_PAST_DAYS + RESERVATION_PULSE_FUTURE_DAYS + 1).toLong())
+    return reservations
+        .filter { reservation ->
+            val start = reservationStart(derivedById, reservation)
+            val end = reservationEnd(derivedById, reservation)
+            start != null && end != null && start.isBefore(windowEnd) && end.isAfter(windowStart)
+        }
+        .sortedBy { reservationStart(derivedById, it) ?: LocalDateTime.MIN }
+}
+
+private fun buildReservationsSnapshot(
+    reservations: List<BackendReservation>,
+    date: LocalDate,
+): ReservationsSnapshot {
+    val derived = buildDerivedById(reservations)
+    val day = reservationsForDayUsing(reservations, date, derived)
+    val pulse = reservationsForPulseWindowUsing(reservations, date, derived)
+    val rows = buildLocalReservationPulseRowsFromDerived(date, pulse, derived)
+    return ReservationsSnapshot(
+        derivedById = derived,
+        reservations = day,
+        pulseReservations = pulse,
+        pulseRows = rows,
+    )
+}
+
+private fun reservationStart(
+    derivedById: Map<Int, ReservationDerived>,
+    reservation: BackendReservation,
+): LocalDateTime? {
+    val cached = derivedById[reservation.id]
+    return cached?.start ?: parseReservationDateTime(reservation.startTime)
+}
+
+private fun reservationEnd(
+    derivedById: Map<Int, ReservationDerived>,
+    reservation: BackendReservation,
+): LocalDateTime? {
+    val cached = derivedById[reservation.id]
+    return cached?.end ?: parseReservationDateTime(reservation.endTime)
+}
+
+private fun reservationNoteParts(
+    derivedById: Map<Int, ReservationDerived>,
+    reservation: BackendReservation,
+): ReservationNoteParts {
+    val cached = derivedById[reservation.id]
+    return cached?.noteParts ?: splitReservationNotes(reservation.notes.orEmpty())
+}
+
+private fun buildLocalReservationPulseRowsFromDerived(
     selectedDate: LocalDate,
     reservations: List<BackendReservation>,
+    derivedById: Map<Int, ReservationDerived>,
 ): List<ReservationPulseRow> {
     val activeReservations = reservations.filter { reservation ->
-        val status = splitReservationNotes(reservation.notes.orEmpty()).status
+        val status = derivedById[reservation.id]?.status ?: ReservationStatus.BOOKED
         status != ReservationStatus.CANCELLED && status != ReservationStatus.NOSHOW
     }
+    val slotEndTimes = ReservationPulseSlotStarts.map { it.plusMinutes(RESERVATION_PULSE_SLOT_MINUTES) }
     return reservationPulseWindowDates(selectedDate).map { date ->
-        val slotReservationsByStart = ReservationPulseSlotStarts.associateWith { mutableListOf<BackendReservation>() }
+        val slotCount = ReservationPulseSlotStarts.size
+        val counts = IntArray(slotCount)
+        val guests = IntArray(slotCount)
         activeReservations.forEach { reservation ->
-            pulseCoveredSlotStarts(reservation, date).forEach { slotStart ->
-                slotReservationsByStart.getValue(slotStart).add(reservation)
+            val start = derivedById[reservation.id]?.start ?: return@forEach
+            val end = derivedById[reservation.id]?.end ?: return@forEach
+            val persons = reservation.persons.coerceAtLeast(1)
+            for (idx in 0 until slotCount) {
+                val slotStartLdt = LocalDateTime.of(date, ReservationPulseSlotStarts[idx])
+                val slotEndLdt = LocalDateTime.of(date, slotEndTimes[idx])
+                if (start.isBefore(slotEndLdt) && end.isAfter(slotStartLdt)) {
+                    counts[idx] += 1
+                    guests[idx] += persons
+                }
             }
         }
         ReservationPulseRow(
             date = date,
-            slots = ReservationPulseSlotStarts.map { slotStart ->
-                val slotReservations = slotReservationsByStart.getValue(slotStart)
+            slots = ReservationPulseSlotStarts.mapIndexed { idx, slotStart ->
                 ReservationPulseSlot(
                     start = slotStart,
-                    end = slotStart.plusMinutes(RESERVATION_PULSE_SLOT_MINUTES),
-                    reservationCount = slotReservations.size,
-                    guestLoad = slotReservations.sumOf { it.persons.coerceAtLeast(1) },
+                    end = slotEndTimes[idx],
+                    reservationCount = counts[idx],
+                    guestLoad = guests[idx],
                 )
             },
         )
@@ -4031,15 +4178,19 @@ private fun reservationsForPulseSelection(
         .sortedBy { parseReservationDateTime(it.startTime) ?: LocalDateTime.MAX }
 }
 
-private fun buildReservationWorkQueue(reservations: List<BackendReservation>): ReservationWorkQueueSections {
+private fun buildReservationWorkQueue(
+    reservations: List<BackendReservation>,
+    derivedById: Map<Int, ReservationDerived>,
+): ReservationWorkQueueSections {
     val now = LocalDateTime.now()
-    val sorted = reservations.sortedBy { parseReservationDateTime(it.startTime) ?: LocalDateTime.MAX }
-    val past = sorted.filter { reservationIsPast(it, now) }
-    val active = sorted.filterNot { reservation -> past.any { it.id == reservation.id } }
-    val attention = active.filter { reservationNeedsAttention(it, now) }
-    val attentionIds = attention.map { it.id }.toSet()
+    val sorted = reservations.sortedBy { reservationStart(derivedById, it) ?: LocalDateTime.MAX }
+    val past = sorted.filter { reservationIsPast(it, derivedById, now) }
+    val pastIds = past.mapTo(HashSet(past.size)) { it.id }
+    val active = sorted.filter { it.id !in pastIds }
+    val attention = active.filter { reservationNeedsAttention(it, derivedById, now) }
+    val attentionIds = attention.mapTo(HashSet(attention.size)) { it.id }
     val unassigned = active.filter { it.id !in attentionIds && reservationIsUnassigned(it) }
-    val unassignedIds = unassigned.map { it.id }.toSet()
+    val unassignedIds = unassigned.mapTo(HashSet(unassigned.size)) { it.id }
     val upcoming = active.filter { it.id !in attentionIds && it.id !in unassignedIds }
     return ReservationWorkQueueSections(
         attention = attention,
@@ -4053,62 +4204,71 @@ private fun filteredReservations(state: ReservationsUiState): List<BackendReserv
     val tableLabels = state.tables
         .mapNotNull { option -> option.backendTableId?.let { it to option.label } }
         .toMap()
+    val derivedById = state.derivedById
     val query = state.searchQuery.trim().lowercase()
     val now = LocalDateTime.now()
     val filtered = state.reservations.filter { reservation ->
-        val tableLabel = reservation.tableId?.let { tableLabels[it] } ?: tableLabelForReservation(reservation)
-        val parts = splitReservationNotes(reservation.notes.orEmpty())
-        val startTime = formatReservationTime(reservation.startTime)
-        val endTime = formatReservationTime(reservation.endTime)
-        val matchesQuery = query.isBlank() || listOf(
-            reservation.customerName,
-            reservation.customerPhone.orEmpty(),
-            parts.email,
-            parts.allergies,
-            parts.notes,
-            parts.status.label,
-            parts.status.tag,
-            tableLabel,
-            startTime,
-            endTime,
-            reservation.persons.toString(),
-        ).any { it.lowercase().contains(query) }
+        val parts = reservationNoteParts(derivedById, reservation)
+        val matchesQuery = if (query.isBlank()) {
+            true
+        } else {
+            val tableLabel = reservation.tableId?.let { tableLabels[it] } ?: tableLabelForReservation(reservation)
+            val startTime = reservationStart(derivedById, reservation)?.toLocalTime()?.format(TimeFormatter)
+                ?: reservation.startTime
+            val endTime = reservationEnd(derivedById, reservation)?.toLocalTime()?.format(TimeFormatter)
+                ?: reservation.endTime
+            listOf(
+                reservation.customerName,
+                reservation.customerPhone.orEmpty(),
+                parts.email,
+                parts.allergies,
+                parts.notes,
+                parts.status.label,
+                parts.status.tag,
+                tableLabel,
+                startTime,
+                endTime,
+                reservation.persons.toString(),
+            ).any { it.lowercase().contains(query) }
+        }
         val matchesTable = state.tableFilterId == null || reservation.tableId == state.tableFilterId
         val matchesUnassigned = !state.unassignedOnly || reservationIsUnassigned(reservation)
         val matchesQueue = when (state.queueFilter) {
             ReservationQueueFilter.ALL -> true
-            ReservationQueueFilter.UPCOMING -> !reservationIsPast(reservation, now) && !reservationNeedsAttention(reservation, now)
-            ReservationQueueFilter.ATTENTION -> reservationNeedsAttention(reservation, now)
+            ReservationQueueFilter.UPCOMING -> !reservationIsPast(reservation, derivedById, now) &&
+                !reservationNeedsAttention(reservation, derivedById, now)
+            ReservationQueueFilter.ATTENTION -> reservationNeedsAttention(reservation, derivedById, now)
             ReservationQueueFilter.UNASSIGNED -> reservationIsUnassigned(reservation)
         }
         matchesQuery && matchesTable && matchesUnassigned && matchesQueue
     }
-    return sortReservations(filtered, state.sortMode, tableLabels)
+    return sortReservations(filtered, state.sortMode, tableLabels, derivedById)
 }
 
 private fun sortReservations(
     reservations: List<BackendReservation>,
     mode: ReservationSortMode,
     tableLabels: Map<Int, String>,
+    derivedById: Map<Int, ReservationDerived>,
 ): List<BackendReservation> {
     return when (mode) {
-        ReservationSortMode.TIME -> reservations.sortedBy { parseReservationDateTime(it.startTime) ?: LocalDateTime.MAX }
+        ReservationSortMode.TIME -> reservations.sortedBy { reservationStart(derivedById, it) ?: LocalDateTime.MAX }
         ReservationSortMode.DAY -> reservations.sortedWith(
-            compareBy<BackendReservation> { parseReservationDateTime(it.startTime)?.toLocalDate() ?: LocalDate.MAX }
-                .thenBy { parseReservationDateTime(it.startTime)?.toLocalTime() ?: LocalTime.MAX },
+            compareBy<BackendReservation> { reservationStart(derivedById, it)?.toLocalDate() ?: LocalDate.MAX }
+                .thenBy { reservationStart(derivedById, it)?.toLocalTime() ?: LocalTime.MAX },
         )
         ReservationSortMode.TABLE -> reservations.sortedWith(
             compareBy<BackendReservation> {
                 it.tableId?.let { tableId -> tableLabels[tableId] } ?: tableLabelForReservation(it)
-            }.thenBy { parseReservationDateTime(it.startTime) ?: LocalDateTime.MAX },
+            }.thenBy { reservationStart(derivedById, it) ?: LocalDateTime.MAX },
         )
         ReservationSortMode.NAME -> reservations.sortedWith(
             compareBy<BackendReservation> { it.customerName.lowercase() }
-                .thenBy { parseReservationDateTime(it.startTime) ?: LocalDateTime.MAX },
+                .thenBy { reservationStart(derivedById, it) ?: LocalDateTime.MAX },
         )
         ReservationSortMode.STATUS -> reservations.sortedWith(
-            compareBy<BackendReservation> { splitReservationNotes(it.notes.orEmpty()).status.ordinal }
-                .thenBy { parseReservationDateTime(it.startTime) ?: LocalDateTime.MAX },
+            compareBy<BackendReservation> { reservationNoteParts(derivedById, it).status.ordinal }
+                .thenBy { reservationStart(derivedById, it) ?: LocalDateTime.MAX },
         )
     }
 }
@@ -4174,6 +4334,16 @@ private fun reservationIsPast(
     return reservationIsTerminal(status) || (end != null && end.isBefore(now))
 }
 
+private fun reservationIsPast(
+    reservation: BackendReservation,
+    derivedById: Map<Int, ReservationDerived>,
+    now: LocalDateTime,
+): Boolean {
+    val status = reservationNoteParts(derivedById, reservation).status
+    val end = reservationEnd(derivedById, reservation)
+    return reservationIsTerminal(status) || (end != null && end.isBefore(now))
+}
+
 private fun reservationNeedsAttention(
     reservation: BackendReservation,
     now: LocalDateTime,
@@ -4182,6 +4352,20 @@ private fun reservationNeedsAttention(
     val status = splitReservationNotes(reservation.notes.orEmpty()).status
     if (reservationIsTerminal(status)) return false
     val start = parseReservationDateTime(reservation.startTime) ?: return false
+    val startsSoon = !start.isBefore(now) && !start.isAfter(now.plusMinutes(60))
+    val startedButNotSeated = start.isBefore(now) && status != ReservationStatus.SEATED
+    return startedButNotSeated || (reservationIsUnassigned(reservation) && startsSoon)
+}
+
+private fun reservationNeedsAttention(
+    reservation: BackendReservation,
+    derivedById: Map<Int, ReservationDerived>,
+    now: LocalDateTime,
+): Boolean {
+    if (reservationIsPast(reservation, derivedById, now)) return false
+    val status = reservationNoteParts(derivedById, reservation).status
+    if (reservationIsTerminal(status)) return false
+    val start = reservationStart(derivedById, reservation) ?: return false
     val startsSoon = !start.isBefore(now) && !start.isAfter(now.plusMinutes(60))
     val startedButNotSeated = start.isBefore(now) && status != ReservationStatus.SEATED
     return startedButNotSeated || (reservationIsUnassigned(reservation) && startsSoon)
