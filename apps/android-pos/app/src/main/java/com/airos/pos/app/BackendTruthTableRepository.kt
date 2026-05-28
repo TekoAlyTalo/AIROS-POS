@@ -27,12 +27,19 @@ import java.net.HttpURLConnection
 import java.net.URLEncoder
 import java.net.URL
 import java.nio.charset.StandardCharsets
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -63,37 +70,71 @@ class BackendTruthTableRepository(
     )
     private val lastPublishedOpenBillContextKeys = linkedMapOf<String, String>()
     private val warnedLegacyLocalOpenSales = linkedSetOf<String>()
+    private val tableActionLock = Any()
+    private val inFlightTableActions = linkedMapOf<String, CompletableDeferred<Boolean>>()
+    private val floorMapSinkLock = Any()
+    private var lastFloorMapSinkValue: FloorMap? = null
+    private val floorMapBuildCacheLock = Any()
+    private var lastFloorMapBuildKey: BackendFloorMapBuildKey? = null
+    private var lastFloorMapBuildResult: FloorMap? = null
+    private var skippedFloorMapRebuildCount = 0
 
-    override fun observeFloorMap(): Flow<FloorMap> {
-        return combine(
-            delegate.observeFloorMap(),
-            client.observeBackendTableTruth(),
-            client.observeInUseFloorPlan(),
-            openSaleRepository.observeOpenSales(),
-        ) { floorMap, backendTruthByServiceSpotId, inUseFloorPlan, openSales ->
-            val authoritativeFloorMap = buildAuthoritativeBackendFloorMap(
-                currentFloorMap = floorMap,
-                backendTruthByServiceSpotId = backendTruthByServiceSpotId,
-                floorPlan = inUseFloorPlan,
+    // Repository-owned scope that hosts the single shared polling/rebuild chain.
+    // Lifetime tracks the repository (constructed once in AppContainer) so the
+    // hot flow survives across screen navigations and screen rotations while
+    // collectors come and go. SupervisorJob isolates downstream failures from
+    // the producer; Dispatchers.Default keeps rebuild work off the main thread.
+    private val sharedFloorMapScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    // Hot, shared, replay=1 flow. ALL observeFloorMap()/observeTable() collectors
+    // (TableMapViewModel, AirosPosApp, CamerasRoute, ReservationsViewModel, ...)
+    // attach to this single upstream so there is exactly ONE polling chain, ONE
+    // rebuild per backend change, and ONE sink publish per canonical map change.
+    private val sharedAuthoritativeFloorMap: Flow<FloorMap> = combine(
+        delegate.observeFloorMap(),
+        client.observeBackendTableTruth(),
+        client.observeInUseFloorPlan(),
+        openSaleRepository.observeOpenSales().distinctUntilChanged(),
+    ) { floorMap, backendTruthByServiceSpotId, inUseFloorPlan, openSales ->
+        BackendAuthoritativeFloorMapInputs(
+            currentFloorMap = floorMap,
+            backendTruthByServiceSpotId = backendTruthByServiceSpotId,
+            floorPlan = inUseFloorPlan,
+            openSales = openSales,
+        )
+    }
+        .map { inputs ->
+            val authoritative = buildAuthoritativeBackendFloorMapStable(
+                currentFloorMap = inputs.currentFloorMap,
+                backendTruthByServiceSpotId = inputs.backendTruthByServiceSpotId,
+                floorPlan = inputs.floorPlan,
             )
             publishOpenBillContexts(
-                floorMap = authoritativeFloorMap,
-                openSales = openSales,
+                floorMap = authoritative,
+                openSales = inputs.openSales,
             )
-            if (authoritativeFloorMap.isAuthoritativeFloorPlan) {
-                floorMapSink?.replaceBackendAuthoritativeFloorMap(authoritativeFloorMap)
-            } else {
-                Log.i(
-                    "AIROS",
-                    "[BackendTruthTableRepository] authoritative in-use floor plan unavailable; surfacing explicit error state",
-                )
-            }
-            authoritativeFloorMap
+            publishAuthoritativeFloorMapToSinkIfChanged(authoritative)
+            authoritative
         }
-    }
+        .distinctUntilChanged()
+        .flowOn(Dispatchers.Default)
+        .shareIn(
+            scope = sharedFloorMapScope,
+            // WhileSubscribed with a small grace window: when the last collector
+            // disappears (e.g. screen swap) we keep the polling chain alive for
+            // a few seconds so the very common "leave and come back" path does
+            // not restart polling. replay=1 lets new collectors see the most
+            // recent FloorMap immediately without waiting for the next poll.
+            started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000L),
+            replay = 1,
+        )
+
+    override fun observeFloorMap(): Flow<FloorMap> = sharedAuthoritativeFloorMap
 
     override fun observeTable(tableId: String): Flow<RestaurantTable?> {
-        return observeFloorMap().map { floorMap -> floorMap.tables.firstOrNull { it.id == tableId } }
+        return sharedAuthoritativeFloorMap
+            .map { floorMap -> floorMap.tables.firstOrNull { it.id == tableId } }
+            .distinctUntilChanged()
     }
 
     override suspend fun openTable(tableId: String, guestCount: Int, openedByStaffId: String): PosResult<RestaurantTable> {
@@ -121,11 +162,21 @@ class BackendTruthTableRepository(
             )
             return false
         }
-        return client.postAcknowledgeCheck(
+        return runCoalescedTableAction(
+            actionKey = "CHECK|$serviceSpotId",
+            logLabel = "CHECK acknowledgement",
             serviceSpotId = serviceSpotId,
-            actorStaffId = actorStaffId,
-            actorDisplayName = actorDisplayName,
-        )
+        ) {
+            client.postAcknowledgeCheck(
+                serviceSpotId = serviceSpotId,
+                actorStaffId = actorStaffId,
+                actorDisplayName = actorDisplayName,
+            ).also { acknowledged ->
+                if (acknowledged) {
+                    client.refreshTableOverviewNow(reason = "after-check-acknowledgement")
+                }
+            }
+        }
     }
 
     suspend fun markCleanedTable(
@@ -141,11 +192,143 @@ class BackendTruthTableRepository(
             )
             return false
         }
-        return client.postMarkCleaned(
+        return runCoalescedTableAction(
+            actionKey = "NEEDS_CLEANING|$serviceSpotId",
+            logLabel = "cleaning acknowledgement",
             serviceSpotId = serviceSpotId,
-            actorStaffId = actorStaffId,
-            actorDisplayName = actorDisplayName,
+        ) {
+            client.postMarkCleaned(
+                serviceSpotId = serviceSpotId,
+                actorStaffId = actorStaffId,
+                actorDisplayName = actorDisplayName,
+            ).also { acknowledged ->
+                if (acknowledged) {
+                    client.refreshTableOverviewNow(reason = "after-cleaning-acknowledgement")
+                }
+            }
+        }
+    }
+
+    private suspend fun runCoalescedTableAction(
+        actionKey: String,
+        logLabel: String,
+        serviceSpotId: String,
+        block: suspend () -> Boolean,
+    ): Boolean {
+        val deferred: CompletableDeferred<Boolean>
+        val ownsAction: Boolean
+        synchronized(tableActionLock) {
+            val existing = inFlightTableActions[actionKey]
+            if (existing != null) {
+                Log.i(
+                    "AIROS",
+                    "[BackendTruthTableRepository] $logLabel coalesced serviceSpotId=$serviceSpotId",
+                )
+                deferred = existing
+                ownsAction = false
+            } else {
+                deferred = CompletableDeferred()
+                inFlightTableActions[actionKey] = deferred
+                ownsAction = true
+            }
+        }
+        if (!ownsAction) {
+            return deferred.await()
+        }
+
+        try {
+            Log.i(
+                "AIROS",
+                "[BackendTruthTableRepository] $logLabel start serviceSpotId=$serviceSpotId",
+            )
+            val result = block()
+            Log.i(
+                "AIROS",
+                "[BackendTruthTableRepository] $logLabel ${if (result) "success" else "failure"} serviceSpotId=$serviceSpotId",
+            )
+            deferred.complete(result)
+            return result
+        } catch (t: Throwable) {
+            Log.w(
+                "AIROS",
+                "[BackendTruthTableRepository] $logLabel failure serviceSpotId=$serviceSpotId ${t.javaClass.simpleName}: ${t.message.orEmpty()}",
+            )
+            deferred.complete(false)
+            return false
+        } finally {
+            synchronized(tableActionLock) {
+                if (inFlightTableActions[actionKey] === deferred) {
+                    inFlightTableActions.remove(actionKey)
+                }
+            }
+        }
+    }
+
+    private fun buildAuthoritativeBackendFloorMapStable(
+        currentFloorMap: FloorMap,
+        backendTruthByServiceSpotId: Map<String, BackendTableTruth>,
+        floorPlan: BackendFloorPlanSnapshot?,
+    ): FloorMap {
+        val key = BackendFloorMapBuildKey(
+            currentFloorMap = currentFloorMap,
+            backendTruthByServiceSpotId = backendTruthByServiceSpotId,
+            floorPlan = floorPlan,
         )
+        synchronized(floorMapBuildCacheLock) {
+            val cached = lastFloorMapBuildResult
+            if (key == lastFloorMapBuildKey && cached != null) {
+                skippedFloorMapRebuildCount += 1
+                if (skippedFloorMapRebuildCount == 1 || skippedFloorMapRebuildCount % 30 == 0) {
+                    Log.i(
+                        "AIROS",
+                        "[BackendTruthTableRepository] floor map rebuild skipped unchanged count=$skippedFloorMapRebuildCount",
+                    )
+                }
+                return cached
+            }
+        }
+
+        val built = buildAuthoritativeBackendFloorMap(
+            currentFloorMap = currentFloorMap,
+            backendTruthByServiceSpotId = backendTruthByServiceSpotId,
+            floorPlan = floorPlan,
+        )
+        synchronized(floorMapBuildCacheLock) {
+            lastFloorMapBuildKey = key
+            lastFloorMapBuildResult = built
+            skippedFloorMapRebuildCount = 0
+        }
+        return built
+    }
+
+    private fun publishAuthoritativeFloorMapToSinkIfChanged(floorMap: FloorMap) {
+        if (!floorMap.isAuthoritativeFloorPlan) {
+            Log.i(
+                "AIROS",
+                "[BackendTruthTableRepository] authoritative in-use floor plan unavailable; surfacing explicit error state",
+            )
+            return
+        }
+        val shouldPublish = synchronized(floorMapSinkLock) {
+            if (lastFloorMapSinkValue == floorMap) {
+                false
+            } else {
+                lastFloorMapSinkValue = floorMap
+                true
+            }
+        }
+        if (shouldPublish) {
+            Log.i(
+                "AIROS",
+                "[BackendTruthTableRepository] floor map sink publish performed tables=${floorMap.tables.size}",
+            )
+            floorMapSink?.replaceBackendAuthoritativeFloorMap(floorMap)
+        } else {
+            Log.i(
+                "AIROS",
+                "[BackendTruthTableRepository] floor map sink publish skipped unchanged tables=${floorMap.tables.size}",
+            )
+        }
     }
 
     private suspend fun publishOpenBillContexts(
@@ -239,14 +422,28 @@ private class BackendTableTruthClient(
     private var latestBackendTableTruthByServiceSpotId: Map<String, BackendTableTruth> = emptyMap()
     private var latestInUseFloorPlanSnapshot: BackendFloorPlanSnapshot? = null
 
+    // Coalesces concurrent /tables/overview fetches: the poll loop and an
+    // acknowledgement-triggered refresh that fire at the same instant share
+    // the same in-flight HTTP request instead of racing one another.
+    private val overviewRefreshLock = Any()
+    private var inFlightOverviewFetch: CompletableDeferred<Map<String, BackendTableTruth>?>? = null
+
     fun observeBackendTableTruth(): Flow<Map<String, BackendTableTruth>> = flow {
         var latest = readLatestBackendTableTruth()
         emit(latest)
         while (true) {
-            val next = fetchTableOverviewTruth()
-            if (next != null) {
-                latest = storeLatestBackendTableTruth(next)
+            val retainedBeforeFetch = readLatestBackendTableTruth()
+            if (retainedBeforeFetch != latest) {
+                latest = retainedBeforeFetch
                 emit(latest)
+            }
+            val next = fetchTableOverviewTruthCoalesced(reason = "poll", forceLog = false)
+            if (next != null) {
+                if (next != latest) {
+                    latest = storeLatestBackendTableTruth(next)
+                    log("table overview refresh changed serviceSpots=${latest.size}")
+                    emit(latest)
+                }
             } else {
                 val retained = readLatestBackendTableTruth()
                 if (retained != latest) {
@@ -256,7 +453,7 @@ private class BackendTableTruthClient(
             }
             delay(pollIntervalMillis)
         }
-    }
+    }.distinctUntilChanged()
 
     fun observeInUseFloorPlan(): Flow<BackendFloorPlanSnapshot?> = flow {
         // Eager first fetch so the initial combine() emission already carries the
@@ -269,8 +466,10 @@ private class BackendTableTruthClient(
             delay(pollIntervalMillis * 2)
             val next = fetchInUseFloorPlan()
             if (next != null) {
-                latest = storeLatestInUseFloorPlan(next)
-                emit(latest)
+                if (next != latest) {
+                    latest = storeLatestInUseFloorPlan(next)
+                    emit(latest)
+                }
             } else {
                 val retained = readLatestInUseFloorPlan()
                 if (retained != null && retained != latest) {
@@ -279,7 +478,7 @@ private class BackendTableTruthClient(
                 }
             }
         }
-    }
+    }.distinctUntilChanged()
 
     private fun readLatestBackendTableTruth(): Map<String, BackendTableTruth> =
         synchronized(latestSnapshotLock) { latestBackendTableTruthByServiceSpotId }
@@ -299,6 +498,54 @@ private class BackendTableTruthClient(
     ): BackendFloorPlanSnapshot = synchronized(latestSnapshotLock) {
         latestInUseFloorPlanSnapshot = floorPlan
         floorPlan
+    }
+
+    suspend fun refreshTableOverviewNow(reason: String): Boolean {
+        val next = fetchTableOverviewTruthCoalesced(reason = reason, forceLog = true) ?: return false
+        storeLatestBackendTableTruth(next)
+        return true
+    }
+
+    /**
+     * Single-flight wrapper around [fetchTableOverviewTruth]. If a fetch is
+     * already in flight, the second caller awaits the existing deferred instead
+     * of issuing a second HTTP request. This prevents the SocketTimeoutException
+     * storms that appeared when the poll loop and an acknowledgement-triggered
+     * refresh both hit /tables/overview during a slow-backend window.
+     */
+    private suspend fun fetchTableOverviewTruthCoalesced(
+        reason: String,
+        forceLog: Boolean,
+    ): Map<String, BackendTableTruth>? {
+        val deferred: CompletableDeferred<Map<String, BackendTableTruth>?>
+        val ownsFetch: Boolean
+        synchronized(overviewRefreshLock) {
+            val existing = inFlightOverviewFetch
+            if (existing != null) {
+                deferred = existing
+                ownsFetch = false
+            } else {
+                deferred = CompletableDeferred()
+                inFlightOverviewFetch = deferred
+                ownsFetch = true
+            }
+        }
+        if (!ownsFetch) {
+            log("table overview refresh coalesced reason=$reason")
+            return deferred.await()
+        }
+        try {
+            val result = fetchTableOverviewTruth(reason = reason, forceLog = forceLog)
+            deferred.complete(result)
+            return result
+        } catch (t: Throwable) {
+            deferred.complete(null)
+            throw t
+        } finally {
+            synchronized(overviewRefreshLock) {
+                if (inFlightOverviewFetch === deferred) inFlightOverviewFetch = null
+            }
+        }
     }
 
     suspend fun postOpenBillContext(
@@ -453,11 +700,17 @@ private class BackendTableTruthClient(
         }
     }
 
-    private suspend fun fetchTableOverviewTruth(): Map<String, BackendTableTruth>? = withContext(Dispatchers.IO) {
+    private suspend fun fetchTableOverviewTruth(
+        reason: String = "poll",
+        forceLog: Boolean = false,
+    ): Map<String, BackendTableTruth>? = withContext(Dispatchers.IO) {
         val baseUrl = normalizedBaseUrl() ?: return@withContext null
         val urlString = "$baseUrl/tables/overview"
         var connection: HttpURLConnection? = null
         try {
+            if (forceLog) {
+                log("table overview refresh start reason=$reason")
+            }
             connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 connectTimeout = connectTimeoutMs
@@ -469,12 +722,16 @@ private class BackendTableTruthClient(
             val statusCode = connection.responseCode
             val body = readStream(if (statusCode in 200..299) connection.inputStream else connection.errorStream)
             if (statusCode !in 200..299) {
-                log("table overview fetch failed status=$statusCode")
+                log("table overview refresh failed reason=$reason status=$statusCode")
                 return@withContext null
             }
-            parseTableOverview(body)
+            val parsed = parseTableOverview(body)
+            if (forceLog) {
+                log("table overview refresh end reason=$reason serviceSpots=${parsed.size}")
+            }
+            parsed
         } catch (t: Throwable) {
-            log("table overview fetch failed: ${t.javaClass.simpleName}: ${t.message.orEmpty()}")
+            log("table overview refresh failed reason=$reason ${t.javaClass.simpleName}: ${t.message.orEmpty()}")
             null
         } finally {
             connection?.disconnect()
@@ -798,6 +1055,21 @@ private data class BackendFloorPlanTableObject(
     val statusChipAnchor: FloorPlanMarkerAnchor?,
     val seatMarkerAnchor: FloorPlanMarkerAnchor?,
 )
+
+private data class BackendFloorMapBuildKey(
+    val currentFloorMap: FloorMap,
+    val backendTruthByServiceSpotId: Map<String, BackendTableTruth>,
+    val floorPlan: BackendFloorPlanSnapshot?,
+)
+
+/** Holder carrying all four upstream inputs through the single shared flow. */
+private data class BackendAuthoritativeFloorMapInputs(
+    val currentFloorMap: FloorMap,
+    val backendTruthByServiceSpotId: Map<String, BackendTableTruth>,
+    val floorPlan: BackendFloorPlanSnapshot?,
+    val openSales: List<PersistedOpenSale>,
+)
+
 private data class BackendTableTruth(
     val tableId: Int,
     val tableName: String,
@@ -966,7 +1238,7 @@ private fun buildAuthoritativeBackendFloorMap(
 
     Log.i(
         "AIROS",
-        "[BackendTruthTableRepository] floor map built tables=${floorPlanTables.size} " +
+        "[BackendTruthTableRepository] floor map rebuild performed tables=${floorPlanTables.size} " +
             "withFloorPlanCamera=${cameraByServiceSpotId.size} " +
             "withOverviewCamera=${backendTruthByServiceSpotId.values.count { !it.cameraId.isNullOrBlank() }} " +
             "withResolvedCamera=${floorPlanTables.count { !it.cameraId.isNullOrBlank() }} " +

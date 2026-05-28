@@ -189,6 +189,8 @@ enum class TableAcknowledgeActionKind {
     NEEDS_CLEANING,
 }
 
+private const val TABLE_ACKNOWLEDGE_TAP_COOLDOWN_MS = 2_500L
+
 data class TableTransferState(
     val sourceSpotId: String,
     val sourceSpotLabel: String,
@@ -1679,6 +1681,20 @@ private fun TableDetailsContent(
     )
     val statusTick = rememberStatusTickPresentation(displayStatus)
     val acknowledgeActionKind = displayStatus.acknowledgeActionFor(table)
+    var pendingAcknowledgeActionKind by rememberSaveable(table.id) {
+        mutableStateOf<TableAcknowledgeActionKind?>(null)
+    }
+    LaunchedEffect(table.id, acknowledgeActionKind, pendingAcknowledgeActionKind) {
+        val pending = pendingAcknowledgeActionKind ?: return@LaunchedEffect
+        if (acknowledgeActionKind != pending) {
+            pendingAcknowledgeActionKind = null
+            return@LaunchedEffect
+        }
+        delay(TABLE_ACKNOWLEDGE_TAP_COOLDOWN_MS)
+        if (pendingAcknowledgeActionKind == pending) {
+            pendingAcknowledgeActionKind = null
+        }
+    }
     val tablePreviewCameraId = table.cameraId?.takeIf(String::isNotBlank)
     val hasTablePreviewCamera = tablePreviewCameraId != null
     val mergedHint = mergedHintFor(table)
@@ -1807,13 +1823,22 @@ private fun TableDetailsContent(
 
             if (acknowledgeActionKind != null) {
                 OutlinedButton(
-                    onClick = { onAcknowledgeTableAction?.invoke(acknowledgeActionKind) },
-                    enabled = onAcknowledgeTableAction != null,
+                    onClick = {
+                        pendingAcknowledgeActionKind = acknowledgeActionKind
+                        onAcknowledgeTableAction?.invoke(acknowledgeActionKind)
+                    },
+                    enabled = onAcknowledgeTableAction != null && pendingAcknowledgeActionKind == null,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(42.dp),
                 ) {
-                    Text(acknowledgeActionKind.buttonLabel())
+                    Text(
+                        if (pendingAcknowledgeActionKind == acknowledgeActionKind) {
+                            "Kuitataan..."
+                        } else {
+                            acknowledgeActionKind.buttonLabel()
+                        },
+                    )
                 }
             }
         }
