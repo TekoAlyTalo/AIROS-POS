@@ -121,7 +121,7 @@ class DefaultAppContainer(
     override val nfcIdentityRepository: NfcIdentityRepository = roomNfcIdentityRepository
     override val nfcStaffResolver: NfcStaffResolver = RepositoryNfcStaffResolver(roomNfcIdentityRepository)
     override val openSaleRepository: OpenSaleRepository = RoomOpenSaleRepository(database.openSaleDao())
-    override val shiftRepository: ShiftRepository = FakeShiftRepository(store, syncQueueRepository)
+    override val shiftRepository: ShiftRepository = RoomShiftRepository(database)
     override val cashLedgerRepository: CashLedgerRepository = RoomCashLedgerRepository(database)
     override val shiftScheduleRepository: ShiftScheduleRepository = BackendShiftScheduleRepository(
         backendBaseUrlProvider = { currentLedgerBackendBaseUrl().orEmpty() },

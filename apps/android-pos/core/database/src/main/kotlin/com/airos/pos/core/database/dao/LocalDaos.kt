@@ -71,8 +71,14 @@ interface TicketDao {
 
 @Dao
 interface ShiftDao {
-    @Query("SELECT * FROM shifts WHERE status = 'OPEN' LIMIT 1")
+    @Query("SELECT * FROM shifts WHERE status = 'OPEN' ORDER BY openedAtEpochMillis DESC LIMIT 1")
     fun observeOpenShift(): Flow<ShiftLocalEntity?>
+
+    @Query("SELECT * FROM shifts WHERE status = 'OPEN' ORDER BY openedAtEpochMillis DESC LIMIT 1")
+    suspend fun getOpenShiftOnce(): ShiftLocalEntity?
+
+    @Query("SELECT * FROM shifts WHERE id = :id LIMIT 1")
+    suspend fun getById(id: String): ShiftLocalEntity?
 
     @Upsert
     suspend fun upsert(item: ShiftLocalEntity)

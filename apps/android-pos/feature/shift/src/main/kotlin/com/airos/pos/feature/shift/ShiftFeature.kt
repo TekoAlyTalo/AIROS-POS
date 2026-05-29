@@ -830,6 +830,8 @@ private fun CashShiftCard(
     val isRestaurantOpen = currentShift?.status == ShiftStatus.OPEN
     val ledger = state.cashLedgerState
     val isCashLedgerOpen = ledger.drawer.status == CashDrawerStatus.OPEN
+    val restaurantCashLedgerMismatch = isRestaurantOpen != isCashLedgerOpen
+    val openingBlockedByOpenCashLedger = !isRestaurantOpen && isCashLedgerOpen
     val feedbackContext = LocalContext.current
     LaunchedEffect(state.message) {
         state.message?.takeIf { it.isNotBlank() }?.let { message ->
@@ -898,15 +900,22 @@ private fun CashShiftCard(
                         onClick = {
                             if (isRestaurantOpen) {
                                 onCashWorkspaceModeChanged(CashWorkspaceMode.CLOSE)
-                            } else {
+                            } else if (!openingBlockedByOpenCashLedger) {
                                 currentStaffId?.let(onOpenShift)
                             }
                         },
-                        enabled = !state.busy && currentStaffId != null,
+                        enabled = !state.busy && currentStaffId != null && !openingBlockedByOpenCashLedger,
                         color = if (isRestaurantOpen) ShiftGold else ShiftSuccess,
                         modifier = Modifier.weight(1f),
                     )
                 }
+            }
+
+            if (restaurantCashLedgerMismatch) {
+                ShiftStatusBanner(
+                    text = "Ravintolan tila ja kassakirjan tila eivät täsmää.",
+                    tint = ShiftWarning,
+                )
             }
 
             Surface(
@@ -937,12 +946,6 @@ private fun CashShiftCard(
                     ShiftKeyValueRow("Pohjakassa", restaurantOpeningFloatText(currentShift))
                     ShiftKeyValueRow("Laskettu kassa", latestCashCountText(ledger))
                     ShiftKeyValueRow("Rahaa pitäisi olla nyt", cashExpectedText(ledger), highlight = true)
-                    if (isRestaurantOpen != isCashLedgerOpen) {
-                        ShiftStatusBanner(
-                            text = "Ravintolan tila ja kassakirjan tila eivät täsmää.",
-                            tint = ShiftWarning,
-                        )
-                    }
                     if (ledger.expectedState == CashExpectedState.MISSING_TRUTH) {
                         ShiftStatusBanner(
                             text = ledger.warningMessage ?: "Kassassa pitäisi olla ei ole laskettavissa. Laske kassa.",
@@ -1237,17 +1240,6 @@ private fun WorktimeSummaryCard(
         modifier = modifier,
         statusLabel = statusLabel,
         statusColor = statusColor,
-        headerMiddleContent = {
-            WorktimeHeaderMetric(
-                label = "Alkoi",
-                value = if (isClockedIn) startedAt ?: "Ei saatavilla" else "Ei käynnissä",
-            )
-            WorktimeHeaderMetric(
-                label = "Kesto",
-                value = if (isClockedIn) durationText ?: "Ei saatavilla" else "--",
-                valueColor = if (isClockedIn) ShiftGold else ShiftTextSecondary,
-            )
-        },
     ) {
         if (isClockedIn) {
             ActiveWorktimeStatusPanel(
