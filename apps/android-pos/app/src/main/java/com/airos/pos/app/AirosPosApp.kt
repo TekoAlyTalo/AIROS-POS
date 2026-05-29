@@ -1546,11 +1546,10 @@ private fun SignedInApp(
                     }
 
                     val polledMyEntry = attendance.currentlyOnSite.find { it.staffId == currentStaffId }
-                    val activeSessionEntry = currentAttendance.activeSession?.toAttendanceEntry(
+                    val myEntry = currentAttendance.activeSession?.toAttendanceEntry(
                         fallbackStaffName = currentStaffName,
                         fallbackDurationMinutes = polledMyEntry?.durationMinutes ?: 0.0,
-                    )
-                    val myEntry = activeSessionEntry ?: polledMyEntry
+                    ) ?: polledMyEntry
                     val isClockedIn = currentAttendance.activeSession != null || polledMyEntry != null
                     val attendanceSyncBlockedMessage = if (currentAttendance.syncMetadata.syncState == "contract_blocked") {
                         "Attendance sync error — a clock event was rejected by the server and will not be retried. Contact support."
@@ -1570,22 +1569,22 @@ private fun SignedInApp(
                     // Active seller/authentication is separate from attendance truth: changing
                     // the active POS user must never remove anyone from the on-site/worktime
                     // list. If the current user's local active session has just been confirmed
-                    // from /api/worktime/active, it replaces the same staffId snapshot row so
-                    // Työaika and Työvuoropulssi do not split on stale/poorer poll data. We do
-                    // not subtract backend rows based on the current active seller's local state.
+                    // from backend but the global attendance poll has not caught up yet, we may
+                    // add that confirmed session for display. We do not subtract backend rows
+                    // based on the current active seller's local state.
                     val effectiveAttendance = run {
-                        val rawOnSite = activeSessionEntry
-                            ?.takeIf { it.staffId.isNotBlank() }
-                            ?.let { activeEntry ->
-                                val snapshotRows = attendance.currentlyOnSite
-                                if (snapshotRows.any { it.staffId == activeEntry.staffId }) {
-                                    snapshotRows.map { row ->
-                                        if (row.staffId == activeEntry.staffId) activeEntry else row
-                                    }
-                                } else {
-                                    listOf(activeEntry) + snapshotRows
-                                }
-                            } ?: attendance.currentlyOnSite
+                        val rawOnSite = if (
+                            currentAttendance.activeSession != null &&
+                            attendance.currentlyOnSite.none { it.staffId == currentStaffId }
+                        ) {
+                            val localEntry = currentAttendance.activeSession!!.toAttendanceEntry(
+                                fallbackStaffName = currentStaffName,
+                                fallbackDurationMinutes = 0.0,
+                            )
+                            listOf(localEntry) + attendance.currentlyOnSite
+                        } else {
+                            attendance.currentlyOnSite
+                        }
                         val dedupedOnSite = rawOnSite.distinctBy { it.staffId }
                         val onSiteIds = dedupedOnSite.mapTo(mutableSetOf()) { it.staffId }
                         val dedupedClockedInToday = attendance.clockedInToday
