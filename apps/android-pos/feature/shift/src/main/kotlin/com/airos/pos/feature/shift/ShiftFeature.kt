@@ -1823,16 +1823,23 @@ private fun ShiftSchedulePulseCard(
                         }
                         .sortedWith(compareBy<PulsePlannedStaffRow> { it.primaryShift.startsAt }.thenBy { it.staffName })
                     val plannedStaffKeys = plannedRows.map { it.staffKey }.toSet()
-                    // Unscheduled active worktime: staff working without a planned shift must
-                    // appear in Työvuoropulssi as a distinct worktime row so the active
-                    // worktime truth is visible, but never as a planned-shift bar — and
-                    // never with an invented end time. Identified by the same pulse staff
-                    // identity key used by planned rows, not only raw staffId, because seed
-                    // and auth data can temporarily carry different ids for the same display
-                    // person.
+                    val plannedStaffIds = plannedRows
+                        .mapNotNull { row -> row.staffId.takeIf { it.isNotBlank() } }
+                        .toSet()
+                    val activeWorktimeByStaffId = attendance.currentlyOnSite
+                        .filter { entry -> entry.staffId.isNotBlank() && entry.isRenderableActiveWorktime() }
+                        .associateBy { entry -> entry.staffId }
+                    // Unscheduled active worktime remains a separate factual row only when
+                    // there is no planned row with the same staffId. Do not hide a live
+                    // worktime entry by display-name matching; inconsistent ids must stay
+                    // visible instead of being masked as a planned-row match.
                     val unscheduledPresence = attendance.currentlyOnSite
-                        .filter { entry -> pulseStaffIdentityKey(entry.staffId, entry.staffName) !in plannedStaffKeys }
-                        .distinctBy { entry -> pulseStaffIdentityKey(entry.staffId, entry.staffName) }
+                        .filter { entry -> entry.isRenderableActiveWorktime() }
+                        .filter { entry -> entry.staffId.isBlank() || entry.staffId !in plannedStaffIds }
+                        .distinctBy { entry ->
+                            entry.staffId.takeIf { it.isNotBlank() }
+                                ?: pulseStaffIdentityKey(entry.staffId, entry.staffName)
+                        }
                     val latestLastSeenByStaffKey = lastSeenEvents
                         .filter { event ->
                             event.timestampMillis > 0L &&
@@ -1952,6 +1959,7 @@ private fun ShiftSchedulePulseCard(
                                     shift = staffRow.primaryShift,
                                     shiftSegments = staffRow.shifts,
                                     attendance = attendance,
+                                    activeWorktimeEntry = activeWorktimeByStaffId[staffRow.staffId],
                                     now = now,
                                     windowStart = windowStart,
                                     windowEnd = windowEnd,
@@ -2900,6 +2908,7 @@ private fun PulseTimelineShiftRow(
     shift: PlannedStaffShift,
     shiftSegments: List<PlannedStaffShift> = listOf(shift),
     attendance: WorktimeAttendanceSnapshot,
+    activeWorktimeEntry: AttendanceEntry? = null,
     now: LocalDateTime,
     windowStart: LocalDateTime,
     windowEnd: LocalDateTime,
@@ -2909,6 +2918,17 @@ private fun PulseTimelineShiftRow(
     onStaffSelected: (String, String) -> Unit = { _, _ -> },
 ) {
     val pulseStatus = plannedPulseStatus(shift = shift, attendance = attendance, now = now)
+    val renderableActiveWorktimeEntry = activeWorktimeEntry?.takeIf { it.isRenderableActiveWorktime() }
+    val activeWorktimeRange = activeWorktimeVisibleRange(
+        entry = renderableActiveWorktimeEntry,
+        now = now,
+        windowStart = windowStart,
+        windowEnd = windowEnd,
+    )
+    val activeStartedAtText = renderableActiveWorktimeEntry
+        ?.startedAt
+        ?.let(::parseAttendanceStart)
+        ?.let(::formatPulseWindowTime)
     val minimumBarWidthFraction = 0.035f
     fun segmentBounds(segment: PlannedStaffShift): Pair<Float, Float> {
         val overlapsWindow = segment.overlaps(windowStart, windowEnd)
@@ -2973,6 +2993,17 @@ private fun PulseTimelineShiftRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                renderableActiveWorktimeEntry?.let {
+                    Text(
+                        text = activeStartedAtText
+                            ?.let { startedAt -> "Työaika käynnissä · alkaen $startedAt" }
+                            ?: "Työaika käynnissä",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ShiftCyan,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
 
@@ -3017,6 +3048,30 @@ private fun PulseTimelineShiftRow(
                             .pulseBarModifier(pulseStatus),
                     )
                 }
+                activeWorktimeRange?.let { (visibleStart, visibleEnd) ->
+                    val startFraction = pulseFraction(visibleStart, windowStart, windowEnd)
+                    val endFraction = pulseFraction(visibleEnd, windowStart, windowEnd)
+                    val barWidthFraction = activeWorktimeBarWidthFraction(startFraction, endFraction)
+                    if (barWidthFraction <= 0f) return@let
+                    Box(
+                        modifier = Modifier
+                            .offset(x = pulseTimelineX(maxWidth, startFraction), y = 9.dp)
+                            .width(pulseTimelineSpan(maxWidth, barWidthFraction))
+                            .height(10.dp)
+                            .clip(RoundedCornerShape(5.dp))
+                            .background(
+                                Brush.horizontalGradient(
+                                    colors = listOf(
+                                        ShiftCyan.copy(alpha = 0.76f),
+                                        ShiftCyan.copy(alpha = 0.98f),
+                                    ),
+                                ),
+                                RoundedCornerShape(5.dp),
+                            )
+                            .border(BorderStroke(1.dp, ShiftCyan.copy(alpha = 0.90f)), RoundedCornerShape(5.dp))
+                            .zIndex(2f),
+                    )
+                }
             }
         }
 
@@ -3038,26 +3093,12 @@ private fun PulseTimelinePresenceRow(
     lastSeenEvent: LastSeenAuthEvent? = null,
     onStaffSelected: (String, String) -> Unit = { _, _ -> },
 ) {
-    val parsedStart = parseAttendanceStart(entry.startedAt)
-    val durationDerivedStart = if (entry.durationMinutes > 0.0) {
-        now.minusMinutes(entry.durationMinutes.toLong())
-    } else {
-        null
-    }
-    val rawStart = parsedStart ?: durationDerivedStart
-    val visibleActiveRange = rawStart
-        ?.takeUnless { it.isAfter(now) }
-        ?.let { actualStart ->
-            val clampedStart = if (actualStart.isBefore(windowStart)) windowStart else actualStart
-            val clampedEnd = when {
-                now.isBefore(windowStart) -> null
-                now.isAfter(windowEnd) -> windowEnd
-                else -> now
-            }
-            clampedEnd
-                ?.takeIf { it.isAfter(clampedStart) }
-                ?.let { clampedStart to it }
-        }
+    val visibleActiveRange = activeWorktimeVisibleRange(
+        entry = entry,
+        now = now,
+        windowStart = windowStart,
+        windowEnd = windowEnd,
+    )
     val tint = ShiftCyan
     val lastSeenTime = lastSeenEvent?.timestampMillis?.let { timestamp ->
         Instant.ofEpochMilli(timestamp)
@@ -3155,10 +3196,7 @@ private fun PulseTimelinePresenceRow(
                 visibleActiveRange?.let { (visibleStart, visibleEnd) ->
                     val startFraction = pulseFraction(visibleStart, windowStart, windowEnd)
                     val endFraction = pulseFraction(visibleEnd, windowStart, windowEnd)
-                    val maxWidthFraction = (1f - startFraction).coerceAtLeast(0f)
-                    val barWidthFraction = (endFraction - startFraction)
-                        .coerceAtLeast(0.065f)
-                        .coerceAtMost(maxWidthFraction)
+                    val barWidthFraction = activeWorktimeBarWidthFraction(startFraction, endFraction)
                     if (barWidthFraction <= 0f) return@let
                     Box(
                         modifier = Modifier
@@ -3820,6 +3858,49 @@ private fun pulseFraction(value: LocalDateTime, windowStart: LocalDateTime, wind
     return (offsetMillis.toFloat() / totalMillis.toFloat()).coerceIn(0f, 1f)
 }
 
+private fun AttendanceEntry.isRenderableActiveWorktime(): Boolean {
+    return status.trim().lowercase(Locale.ROOT) in setOf(
+        "active",
+        "present",
+        "clocked_in",
+        "paikalla",
+        "on_break",
+        "break",
+        "tauolla",
+    )
+}
+
+private fun activeWorktimeVisibleRange(
+    entry: AttendanceEntry?,
+    now: LocalDateTime,
+    windowStart: LocalDateTime,
+    windowEnd: LocalDateTime,
+): Pair<LocalDateTime, LocalDateTime>? {
+    if (entry == null || !entry.isRenderableActiveWorktime()) return null
+    val actualStart = parseAttendanceStart(entry.startedAt)
+        ?: entry.durationMinutes
+            .takeIf { it > 0.0 }
+            ?.let { now.minusMinutes(it.toLong()) }
+        ?: return null
+    if (actualStart.isAfter(now)) return null
+    val clampedStart = if (actualStart.isBefore(windowStart)) windowStart else actualStart
+    val clampedEnd = when {
+        now.isBefore(windowStart) -> null
+        now.isAfter(windowEnd) -> windowEnd
+        else -> now
+    }
+    return clampedEnd
+        ?.takeIf { it.isAfter(clampedStart) }
+        ?.let { clampedStart to it }
+}
+
+private fun activeWorktimeBarWidthFraction(startFraction: Float, endFraction: Float): Float {
+    val maxWidthFraction = (1f - startFraction).coerceAtLeast(0f)
+    return (endFraction - startFraction)
+        .coerceAtLeast(0.065f)
+        .coerceAtMost(maxWidthFraction)
+}
+
 private fun formatDuration(minutes: Double): String {
     val safeMinutes = minutes.coerceAtLeast(0.0)
     val hours = (safeMinutes / 60).toInt()
@@ -3878,10 +3959,11 @@ private fun plannedPulseStatus(
     }
 
     val isClockedIn = shift.staffId.isNotBlank() &&
-        attendance.currentlyOnSite.any { entry -> entry.staffId == shift.staffId }
+        attendance.currentlyOnSite.any { entry -> entry.staffId == shift.staffId && entry.isRenderableActiveWorktime() }
     val hasAmbiguousStaffIdentity = shift.staffId.isBlank() ||
         attendance.currentlyOnSite.any { entry ->
-            entry.staffId.isNotBlank() &&
+            entry.isRenderableActiveWorktime() &&
+                entry.staffId.isNotBlank() &&
                 entry.staffId != shift.staffId &&
                 entry.staffName.equals(shift.staffName, ignoreCase = true)
         }
