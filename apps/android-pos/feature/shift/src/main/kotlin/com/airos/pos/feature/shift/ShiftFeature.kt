@@ -3045,11 +3045,19 @@ private fun PulseTimelinePresenceRow(
         null
     }
     val rawStart = parsedStart ?: durationDerivedStart
-    val effectiveStart = rawStart?.let {
-        if (it.isBefore(windowStart)) windowStart else it
-    }
-    val effectiveEnd = if (now.isAfter(windowEnd)) windowEnd else now
-    val hasTruthBackedRange = effectiveStart != null && effectiveEnd.isAfter(effectiveStart)
+    val visibleActiveRange = rawStart
+        ?.takeUnless { it.isAfter(now) }
+        ?.let { actualStart ->
+            val clampedStart = if (actualStart.isBefore(windowStart)) windowStart else actualStart
+            val clampedEnd = when {
+                now.isBefore(windowStart) -> null
+                now.isAfter(windowEnd) -> windowEnd
+                else -> now
+            }
+            clampedEnd
+                ?.takeIf { it.isAfter(clampedStart) }
+                ?.let { clampedStart to it }
+        }
     val tint = ShiftCyan
     val lastSeenTime = lastSeenEvent?.timestampMillis?.let { timestamp ->
         Instant.ofEpochMilli(timestamp)
@@ -3144,19 +3152,39 @@ private fun PulseTimelinePresenceRow(
                         PulseLastSeenRhombusMarker(maxWidth = maxWidth, fraction = markerFraction)
                     }
                 }
-                if (hasTruthBackedRange) {
-                    val startFraction = pulseFraction(effectiveStart!!, windowStart, windowEnd)
-                    val endFraction = pulseFraction(effectiveEnd, windowStart, windowEnd)
-                    val barWidthFraction = (endFraction - startFraction).coerceIn(0.015f, 1f)
+                visibleActiveRange?.let { (visibleStart, visibleEnd) ->
+                    val startFraction = pulseFraction(visibleStart, windowStart, windowEnd)
+                    val endFraction = pulseFraction(visibleEnd, windowStart, windowEnd)
+                    val maxWidthFraction = (1f - startFraction).coerceAtLeast(0f)
+                    val barWidthFraction = (endFraction - startFraction)
+                        .coerceAtLeast(0.065f)
+                        .coerceAtMost(maxWidthFraction)
+                    if (barWidthFraction <= 0f) return@let
                     Box(
                         modifier = Modifier
                             .offset(x = pulseTimelineX(maxWidth, startFraction))
                             .width(pulseTimelineSpan(maxWidth, barWidthFraction))
-                            .height(22.dp)
-                            .clip(RoundedCornerShape(5.dp))
-                            .background(tint.copy(alpha = 0.55f), RoundedCornerShape(5.dp))
-                            .border(BorderStroke(1.dp, tint.copy(alpha = 0.70f)), RoundedCornerShape(5.dp)),
-                    )
+                            .height(26.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(
+                                Brush.horizontalGradient(
+                                    colors = listOf(
+                                        tint.copy(alpha = 0.62f),
+                                        tint.copy(alpha = 0.90f),
+                                    ),
+                                ),
+                                RoundedCornerShape(6.dp),
+                            )
+                            .border(BorderStroke(1.dp, tint.copy(alpha = 0.88f)), RoundedCornerShape(6.dp)),
+                        contentAlignment = Alignment.CenterEnd,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .width(4.dp)
+                                .background(tint.copy(alpha = 0.95f)),
+                        )
+                    }
                 }
             }
         }
