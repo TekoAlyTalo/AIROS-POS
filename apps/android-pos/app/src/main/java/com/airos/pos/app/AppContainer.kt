@@ -291,7 +291,7 @@ class DefaultAppContainer(
         )
     }
 
-    override val paymentRepository: PaymentRepository = FakePaymentRepository(
+    override val paymentRepository: PaymentRepository = LocalPaymentRepository(
         store = store,
         syncQueueRepository = syncQueueRepository,
         ledgerHttpClient = ledgerHttpClient,
