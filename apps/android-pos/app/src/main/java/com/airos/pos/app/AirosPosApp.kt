@@ -1549,8 +1549,8 @@ private fun SignedInApp(
                     val myEntry = currentAttendance.activeSession?.toAttendanceEntry(
                         fallbackStaffName = currentStaffName,
                         fallbackDurationMinutes = polledMyEntry?.durationMinutes ?: 0.0,
-                    )
-                    val isClockedIn = currentAttendance.activeSession != null
+                    ) ?: polledMyEntry
+                    val isClockedIn = currentAttendance.activeSession != null || polledMyEntry != null
                     val attendanceSyncBlockedMessage = if (currentAttendance.syncMetadata.syncState == "contract_blocked") {
                         "Attendance sync error — a clock event was rejected by the server and will not be retried. Contact support."
                     } else {

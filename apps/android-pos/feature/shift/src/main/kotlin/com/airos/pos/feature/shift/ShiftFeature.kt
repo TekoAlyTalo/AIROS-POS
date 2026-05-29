@@ -113,6 +113,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -1206,6 +1207,14 @@ private fun WorktimeSummaryCard(
     onScheduleDateSelected: (LocalDate) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val activeWorktimeDate = myAttendanceEntry
+        ?.startedAt
+        ?.let(::parseAttendanceStart)
+        ?.toLocalDate()
+        ?: LocalDate.now()
+    val isWorkingWithoutPlannedShift = isClockedIn &&
+        hasPublishedOwnScheduleTruthOnDate(ownSchedule, activeWorktimeDate) &&
+        !hasOwnPlannedShiftOnDate(ownSchedule, currentStaffId, activeWorktimeDate)
     val startedAt = myAttendanceEntry
         ?.startedAt
         ?.let(::formatJournalTime)
@@ -1240,6 +1249,14 @@ private fun WorktimeSummaryCard(
             )
         },
     ) {
+        if (isClockedIn) {
+            ActiveWorktimeStatusPanel(
+                startedAt = startedAt,
+                durationText = durationText,
+                isWorkingWithoutPlannedShift = isWorkingWithoutPlannedShift,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
         OwnShiftsCompactPanel(
             schedule = ownSchedule,
             currentStaffId = currentStaffId,
@@ -1251,6 +1268,66 @@ private fun WorktimeSummaryCard(
                 .fillMaxWidth()
                 .weight(1f),
         )
+    }
+}
+
+@Composable
+private fun ActiveWorktimeStatusPanel(
+    startedAt: String?,
+    durationText: String?,
+    isWorkingWithoutPlannedShift: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(ShiftCyanSoft.copy(alpha = 0.24f))
+            .border(BorderStroke(1.dp, ShiftCyan.copy(alpha = 0.34f)), RoundedCornerShape(16.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(10.dp)
+                    .clip(CircleShape)
+                    .background(ShiftSuccess),
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Työaika käynnissä",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = ShiftTextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = listOfNotNull(
+                        startedAt?.let { "Aloitettu $it" },
+                        durationText?.let { "Kesto $it" },
+                    ).joinToString(" · ").ifBlank { "Työaika vahvistettu backendistä" },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ShiftTextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        if (isWorkingWithoutPlannedShift) {
+            Text(
+                text = "Työajalla ilman suunniteltua vuoroa",
+                style = MaterialTheme.typography.labelMedium,
+                color = ShiftCyan,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
@@ -1408,6 +1485,27 @@ private fun ownShiftCalendarWeeks(
             )
         }
     }
+}
+
+private fun hasPublishedOwnScheduleTruthOnDate(
+    schedule: ShiftScheduleSnapshot?,
+    date: LocalDate,
+): Boolean {
+    return schedule
+        ?.days
+        ?.firstOrNull { it.date == date }
+        ?.hasPublishedScheduleTruth() == true
+}
+
+private fun hasOwnPlannedShiftOnDate(
+    schedule: ShiftScheduleSnapshot?,
+    currentStaffId: String?,
+    date: LocalDate,
+): Boolean {
+    val staffId = currentStaffId?.takeIf { it.isNotBlank() } ?: return false
+    val day = schedule?.days?.firstOrNull { it.date == date } ?: return false
+    if (!day.hasPublishedScheduleTruth()) return false
+    return day.plannedShifts.any { shift -> shift.staffId == staffId }
 }
 
 @Composable
@@ -3004,6 +3102,15 @@ private fun PulseTimelinePresenceRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                Text(
+                    text = parseAttendanceStart(entry.startedAt)
+                        ?.let { "Työajalla ilman vuoroa · alkaen ${formatPulseWindowTime(it)}" }
+                        ?: "Työajalla ilman vuoroa",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = tint,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
 
@@ -3150,12 +3257,19 @@ private fun parseAttendanceStart(raw: String?): LocalDateTime? {
                 .toLocalDateTime()
         }.getOrNull()
     }
-    runCatching { java.time.OffsetDateTime.parse(value).toLocalDateTime() }
-        .getOrNull()
-        ?.let { return it }
+    runCatching {
+        java.time.OffsetDateTime.parse(value)
+            .atZoneSameInstant(ZoneId.systemDefault())
+            .toLocalDateTime()
+    }.getOrNull()?.let { return it }
     runCatching { LocalDateTime.parse(value) }
         .getOrNull()
-        ?.let { return it }
+        ?.let {
+            return it
+                .atOffset(ZoneOffset.UTC)
+                .atZoneSameInstant(ZoneId.systemDefault())
+                .toLocalDateTime()
+        }
     return runCatching {
         Instant.parse(value).atZone(ZoneId.systemDefault()).toLocalDateTime()
     }.getOrNull()
@@ -3592,6 +3706,8 @@ private fun formatJournalTime(raw: String?): String {
     }.getOrNull()?.let { return it }
     runCatching {
         LocalDateTime.parse(value)
+            .atOffset(ZoneOffset.UTC)
+            .atZoneSameInstant(ZoneId.systemDefault())
             .format(ShiftJournalTimeFormatter)
     }.getOrNull()?.let { return it }
     val timeMatch = Regex("\\b\\d{1,2}:\\d{2}\\b").find(value)
@@ -3705,7 +3821,7 @@ private fun pulseStatusForAttendance(entry: AttendanceEntry): PulseStatusVisual 
     return when (normalized) {
         "active", "present", "clocked_in", "paikalla" -> PulseStatusVisual(
             PulseStatusKind.PRESENT,
-            "Suunnittelematon työaika",
+            "Työajalla ilman vuoroa",
             ShiftCyan,
             "!",
         )
