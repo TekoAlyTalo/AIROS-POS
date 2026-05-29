@@ -1210,14 +1210,6 @@ private fun WorktimeSummaryCard(
     onScheduleDateSelected: (LocalDate) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val activeWorktimeDate = myAttendanceEntry
-        ?.startedAt
-        ?.let(::parseAttendanceStart)
-        ?.toLocalDate()
-        ?: LocalDate.now()
-    val isWorkingWithoutPlannedShift = isClockedIn &&
-        hasPublishedOwnScheduleTruthOnDate(ownSchedule, activeWorktimeDate) &&
-        !hasOwnPlannedShiftOnDate(ownSchedule, currentStaffId, activeWorktimeDate)
     val startedAt = myAttendanceEntry
         ?.startedAt
         ?.let(::formatJournalTime)
@@ -1240,15 +1232,18 @@ private fun WorktimeSummaryCard(
         modifier = modifier,
         statusLabel = statusLabel,
         statusColor = statusColor,
-    ) {
-        if (isClockedIn) {
-            ActiveWorktimeStatusPanel(
-                startedAt = startedAt,
-                durationText = durationText,
-                isWorkingWithoutPlannedShift = isWorkingWithoutPlannedShift,
-                modifier = Modifier.fillMaxWidth(),
+        headerMiddleContent = {
+            WorktimeHeaderMetric(
+                label = "Alkoi",
+                value = if (isClockedIn) startedAt ?: "Ei saatavilla" else "Ei käynnissä",
             )
-        }
+            WorktimeHeaderMetric(
+                label = "Kesto",
+                value = if (isClockedIn) durationText ?: "Ei saatavilla" else "--",
+                valueColor = if (isClockedIn) ShiftGold else ShiftTextSecondary,
+            )
+        },
+    ) {
         OwnShiftsCompactPanel(
             schedule = ownSchedule,
             currentStaffId = currentStaffId,
@@ -1260,66 +1255,6 @@ private fun WorktimeSummaryCard(
                 .fillMaxWidth()
                 .weight(1f),
         )
-    }
-}
-
-@Composable
-private fun ActiveWorktimeStatusPanel(
-    startedAt: String?,
-    durationText: String?,
-    isWorkingWithoutPlannedShift: Boolean,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier = modifier
-            .clip(RoundedCornerShape(16.dp))
-            .background(ShiftCyanSoft.copy(alpha = 0.24f))
-            .border(BorderStroke(1.dp, ShiftCyan.copy(alpha = 0.34f)), RoundedCornerShape(16.dp))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(10.dp)
-                    .clip(CircleShape)
-                    .background(ShiftSuccess),
-            )
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Työaika käynnissä",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = ShiftTextPrimary,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = listOfNotNull(
-                        startedAt?.let { "Aloitettu $it" },
-                        durationText?.let { "Kesto $it" },
-                    ).joinToString(" · ").ifBlank { "Työaika vahvistettu backendistä" },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = ShiftTextSecondary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-        if (isWorkingWithoutPlannedShift) {
-            Text(
-                text = "Työajalla ilman suunniteltua vuoroa",
-                style = MaterialTheme.typography.labelMedium,
-                color = ShiftCyan,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
     }
 }
 
