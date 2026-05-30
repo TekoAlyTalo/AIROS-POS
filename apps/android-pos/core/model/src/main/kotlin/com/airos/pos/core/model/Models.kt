@@ -614,11 +614,14 @@ data class AttendanceEntry(
     val status: String,
     val startedAt: String,
     val durationMinutes: Double,
+    val endedAt: String? = null,
+    val requiresReview: Boolean = false,
 )
 
 data class WorktimeAttendanceSnapshot(
     val currentlyOnSite: List<AttendanceEntry> = emptyList(),
     val clockedInToday: List<AttendanceEntry> = emptyList(),
+    val requiresReview: List<AttendanceEntry> = emptyList(),
 )
 
 enum class ShiftSchedulePublicationStatus {

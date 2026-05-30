@@ -120,6 +120,7 @@ class WorktimeAttendanceClient(
         return WorktimeAttendanceSnapshot(
             currentlyOnSite = parseEntries(root, "currently_on_site"),
             clockedInToday = parseEntries(root, "clocked_in_today"),
+            requiresReview = parseEntries(root, "requires_review"),
         )
     }
 
@@ -133,6 +134,8 @@ class WorktimeAttendanceClient(
                 status = item.optString("status", ""),
                 startedAt = item.optString("started_at", ""),
                 durationMinutes = item.optDouble("duration_minutes", 0.0),
+                endedAt = item.optNullableString("ended_at"),
+                requiresReview = item.optBoolean("requires_review", false),
             )
         }
     }
