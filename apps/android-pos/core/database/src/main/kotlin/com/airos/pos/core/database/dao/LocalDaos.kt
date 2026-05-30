@@ -11,6 +11,8 @@ import com.airos.pos.core.database.entity.AttendanceEventLocalEntity
 import com.airos.pos.core.database.entity.AttendanceSyncMetadataLocalEntity
 import com.airos.pos.core.database.entity.CashDrawerLocalEntity
 import com.airos.pos.core.database.entity.CashEventLocalEntity
+import com.airos.pos.core.database.entity.LocalFinalizedSaleEntity
+import com.airos.pos.core.database.entity.LocalFinalizedSalePaymentEntity
 import com.airos.pos.core.database.entity.MenuItemLocalEntity
 import com.airos.pos.core.database.entity.OpenSaleEntity
 import com.airos.pos.core.database.entity.OpenSaleLineEntity
@@ -194,6 +196,55 @@ interface SalesLedgerOutboxDao {
         """
     )
     suspend fun markBlocked(sourcePosEventId: String, lastError: String, updatedAtEpochMillis: Long)
+}
+
+@Dao
+interface LocalFinalizedSalesReportDao {
+    @Query(
+        """
+        SELECT * FROM local_finalized_sales
+        WHERE finalizedAtEpochMillis >= :startEpochMillisInclusive
+          AND finalizedAtEpochMillis < :endEpochMillisExclusive
+          AND status = 'COMPLETED'
+        ORDER BY finalizedAtEpochMillis ASC, id ASC
+        """
+    )
+    fun observeSalesInRange(
+        startEpochMillisInclusive: Long,
+        endEpochMillisExclusive: Long,
+    ): Flow<List<LocalFinalizedSaleEntity>>
+
+    @Query(
+        """
+        SELECT p.* FROM local_finalized_sale_payments p
+        INNER JOIN local_finalized_sales s ON s.id = p.finalizedSaleId
+        WHERE s.finalizedAtEpochMillis >= :startEpochMillisInclusive
+          AND s.finalizedAtEpochMillis < :endEpochMillisExclusive
+          AND s.status = 'COMPLETED'
+        ORDER BY p.createdAtEpochMillis ASC, p.id ASC
+        """
+    )
+    fun observePaymentsInRange(
+        startEpochMillisInclusive: Long,
+        endEpochMillisExclusive: Long,
+    ): Flow<List<LocalFinalizedSalePaymentEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertSale(entity: LocalFinalizedSaleEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertPayments(items: List<LocalFinalizedSalePaymentEntity>): List<Long>
+
+    @Transaction
+    suspend fun insertSaleWithPayments(
+        sale: LocalFinalizedSaleEntity,
+        payments: List<LocalFinalizedSalePaymentEntity>,
+    ): Boolean {
+        val inserted = insertSale(sale)
+        if (inserted == -1L) return false
+        insertPayments(payments)
+        return true
+    }
 }
 
 @Dao

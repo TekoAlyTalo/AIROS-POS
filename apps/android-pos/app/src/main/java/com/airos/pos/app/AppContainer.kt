@@ -34,6 +34,7 @@ import com.airos.pos.domain.NfcIdentitySyncClient
 import com.airos.pos.domain.DefaultNfcIdentitySyncClient
 import com.airos.pos.domain.OpenSaleRepository
 import com.airos.pos.domain.PaymentRepository
+import com.airos.pos.domain.SalesDayReportRepository
 import com.airos.pos.domain.SettingsRepository
 import com.airos.pos.domain.StaffUiPreferencesRepository
 import com.airos.pos.domain.ShiftRepository
@@ -65,6 +66,7 @@ interface AppContainer {
     val ticketRepository: TicketRepository
     val kitchenRepository: KitchenRepository
     val paymentRepository: PaymentRepository
+    val salesDayReportRepository: SalesDayReportRepository
     val settingsRepository: SettingsRepository
     val staffUiPreferencesRepository: StaffUiPreferencesRepository
     val reservationsRepository: BackendReservationsRepository
@@ -291,6 +293,10 @@ class DefaultAppContainer(
         )
     }
 
+    override val salesDayReportRepository: SalesDayReportRepository by lazy {
+        RoomSalesDayReportRepository(database.localFinalizedSalesReportDao())
+    }
+
     override val paymentRepository: PaymentRepository = LocalPaymentRepository(
         store = store,
         syncQueueRepository = syncQueueRepository,
@@ -306,6 +312,7 @@ class DefaultAppContainer(
         restaurantReceiptSettingsClient = restaurantReceiptSettingsClient,
         saleSyncOutboxRepository = salesLedgerOutboxRepository,
         cashLedgerRepository = cashLedgerRepository,
+        salesDayReportRepository = salesDayReportRepository,
     )
 
     init {

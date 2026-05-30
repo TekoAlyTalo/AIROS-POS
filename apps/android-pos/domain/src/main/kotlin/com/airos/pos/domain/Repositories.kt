@@ -8,6 +8,8 @@ import com.airos.pos.core.model.CashDaySummary
 import com.airos.pos.core.model.CashEvent
 import com.airos.pos.core.model.CashLedgerState
 import com.airos.pos.core.model.FloorMap
+import com.airos.pos.core.model.LocalFinalizedSaleRecord
+import com.airos.pos.core.model.LocalSalesDayReport
 import com.airos.pos.core.model.KitchenOrder
 import com.airos.pos.core.model.ManagerOverrideGrant
 import com.airos.pos.core.model.ManagerOverrideReason
@@ -206,6 +208,15 @@ interface PaymentRepository {
     suspend fun collectPayment(ticketId: String, method: PaymentMethod, amountCents: Int): PosResult<PaymentSummary>
     suspend fun finalizeTablePayment(request: TablePaymentRequest): PosResult<TablePaymentResult>
     suspend fun refund(request: RefundRequest): PosResult<Unit>
+}
+
+interface SalesDayReportRepository {
+    fun observeSalesReport(
+        startEpochMillisInclusive: Long,
+        endEpochMillisExclusive: Long,
+    ): Flow<LocalSalesDayReport>
+
+    suspend fun recordFinalizedSale(record: LocalFinalizedSaleRecord): PosResult<Unit>
 }
 
 interface SettingsRepository {

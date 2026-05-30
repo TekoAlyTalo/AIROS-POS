@@ -10,6 +10,7 @@ import com.airos.pos.core.database.dao.AttendanceDao
 import com.airos.pos.core.database.dao.BackendMenuCacheDao
 import com.airos.pos.core.database.dao.CachedFloorMapDao
 import com.airos.pos.core.database.dao.CashLedgerDao
+import com.airos.pos.core.database.dao.LocalFinalizedSalesReportDao
 import com.airos.pos.core.database.dao.MenuItemDao
 import com.airos.pos.core.database.dao.NfcIdentityDao
 import com.airos.pos.core.database.dao.OpenSaleDao
@@ -26,6 +27,8 @@ import com.airos.pos.core.database.entity.AttendanceEventLocalEntity
 import com.airos.pos.core.database.entity.AttendanceSyncMetadataLocalEntity
 import com.airos.pos.core.database.entity.CashDrawerLocalEntity
 import com.airos.pos.core.database.entity.CashEventLocalEntity
+import com.airos.pos.core.database.entity.LocalFinalizedSaleEntity
+import com.airos.pos.core.database.entity.LocalFinalizedSalePaymentEntity
 import com.airos.pos.core.database.entity.MenuCacheMetadataEntity
 import com.airos.pos.core.database.entity.MenuItemLocalEntity
 import com.airos.pos.core.database.entity.NfcIdentityEnrollmentEntity
@@ -66,8 +69,10 @@ import com.airos.pos.core.database.entity.TicketLocalEntity
         CachedFloorMapTableEntity::class,
         CashDrawerLocalEntity::class,
         CashEventLocalEntity::class,
+        LocalFinalizedSaleEntity::class,
+        LocalFinalizedSalePaymentEntity::class,
     ],
-    version = 15,
+    version = 16,
     exportSchema = false,
 )
 abstract class AirosPosDatabase : RoomDatabase() {
@@ -84,6 +89,7 @@ abstract class AirosPosDatabase : RoomDatabase() {
     abstract fun salesLedgerOutboxDao(): SalesLedgerOutboxDao
     abstract fun cachedFloorMapDao(): CachedFloorMapDao
     abstract fun cashLedgerDao(): CashLedgerDao
+    abstract fun localFinalizedSalesReportDao(): LocalFinalizedSalesReportDao
 
     companion object {
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -582,6 +588,91 @@ abstract class AirosPosDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `local_finalized_sales` (
+                        `id` TEXT NOT NULL,
+                        `sourcePosEventId` TEXT NOT NULL,
+                        `ticketId` TEXT,
+                        `openSaleId` TEXT,
+                        `receiptNumber` TEXT,
+                        `tableId` TEXT,
+                        `tableLabel` TEXT,
+                        `finalizedAtEpochMillis` INTEGER NOT NULL,
+                        `totalCents` INTEGER NOT NULL,
+                        `sellerStaffId` TEXT,
+                        `sellerDisplayName` TEXT,
+                        `terminalId` TEXT,
+                        `restaurantId` TEXT,
+                        `status` TEXT NOT NULL,
+                        `createdAtEpochMillis` INTEGER NOT NULL,
+                        PRIMARY KEY(`id`)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS `index_local_finalized_sales_sourcePosEventId`
+                    ON `local_finalized_sales` (`sourcePosEventId`)
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `index_local_finalized_sales_finalizedAtEpochMillis`
+                    ON `local_finalized_sales` (`finalizedAtEpochMillis`)
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `index_local_finalized_sales_sellerStaffId_finalizedAtEpochMillis`
+                    ON `local_finalized_sales` (`sellerStaffId`, `finalizedAtEpochMillis`)
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `index_local_finalized_sales_terminalId_finalizedAtEpochMillis`
+                    ON `local_finalized_sales` (`terminalId`, `finalizedAtEpochMillis`)
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `local_finalized_sale_payments` (
+                        `id` TEXT NOT NULL,
+                        `finalizedSaleId` TEXT NOT NULL,
+                        `method` TEXT NOT NULL,
+                        `amountCents` INTEGER NOT NULL,
+                        `cashTenderedCents` INTEGER,
+                        `cashChangeCents` INTEGER,
+                        `cashRetainedCents` INTEGER,
+                        `createdAtEpochMillis` INTEGER NOT NULL,
+                        PRIMARY KEY(`id`),
+                        FOREIGN KEY(`finalizedSaleId`) REFERENCES `local_finalized_sales`(`id`) ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `index_local_finalized_sale_payments_finalizedSaleId`
+                    ON `local_finalized_sale_payments` (`finalizedSaleId`)
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `index_local_finalized_sale_payments_method`
+                    ON `local_finalized_sale_payments` (`method`)
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `index_local_finalized_sale_payments_createdAtEpochMillis`
+                    ON `local_finalized_sale_payments` (`createdAtEpochMillis`)
+                    """.trimIndent(),
+                )
+            }
+        }
+
         private val MIGRATION_9_10 = object : Migration(9, 10) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
@@ -634,6 +725,7 @@ abstract class AirosPosDatabase : RoomDatabase() {
                 MIGRATION_12_13,
                 MIGRATION_13_14,
                 MIGRATION_14_15,
+                MIGRATION_15_16,
             ).build()
         }
     }

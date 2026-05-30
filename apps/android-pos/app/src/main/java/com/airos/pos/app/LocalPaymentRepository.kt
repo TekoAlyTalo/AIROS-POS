@@ -3,6 +3,8 @@
 import android.util.Log
 import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.model.CashDrawer
+import com.airos.pos.core.model.LocalFinalizedSalePaymentRecord
+import com.airos.pos.core.model.LocalFinalizedSaleRecord
 import com.airos.pos.core.model.PaymentMethod
 import com.airos.pos.core.model.PaymentSummary
 import com.airos.pos.core.model.ReceiptDocument
@@ -22,6 +24,7 @@ import com.airos.pos.domain.AirosPosLedgerHttpClient
 import com.airos.pos.domain.AirosPosLedgerMapper
 import com.airos.pos.domain.CashLedgerRepository
 import com.airos.pos.domain.PaymentRepository
+import com.airos.pos.domain.SalesDayReportRepository
 import com.airos.pos.domain.SyncQueueRepository
 import com.airos.pos.domain.toJsonString
 import java.util.UUID
@@ -57,6 +60,7 @@ class LocalPaymentRepository(
     private val restaurantReceiptSettingsClient: RestaurantReceiptSettingsClient? = null,
     private val saleSyncOutboxRepository: SalesLedgerOutboxRepository? = null,
     private val cashLedgerRepository: CashLedgerRepository? = null,
+    private val salesDayReportRepository: SalesDayReportRepository? = null,
 ) : PaymentRepository {
     private companion object {
         const val TAG = "AIROS_LEDGER"
@@ -322,6 +326,43 @@ class LocalPaymentRepository(
             }
         }
 
+        // Net drawer cash from this sale = what the customer put IN (cash tendered)
+        // minus what came OUT (change returned). PaymentEntry.amountCents remains
+        // the sale-settled amount used by reporting breakdowns.
+        val retainedCashCents = computeRetainedCashCents(
+            cashTenderedCents = request.cashTenderedCents,
+            changeCents = changeCents,
+        )
+        val localFinalizedSaleRecord = LocalFinalizedSaleRecord(
+            id = "local-finalized-sale-$sourcePosEventId",
+            sourcePosEventId = sourcePosEventId,
+            ticketId = ticketId,
+            receiptNumber = receiptNumber,
+            tableId = resolvedTableId,
+            tableLabel = resolvedTableLabel,
+            finalizedAtEpochMillis = settingsAppliedReceiptDocument.printedAtEpochMillis ?: store.now(),
+            totalCents = totalDueCents,
+            sellerStaffId = cashierStaffId,
+            sellerDisplayName = cashierName,
+            terminalId = terminalIdProvider?.invoke(),
+            restaurantId = restaurantIdProvider?.invoke(),
+            payments = paymentRecords.map { payment ->
+                val isCash = payment.method == PaymentMethod.CASH
+                LocalFinalizedSalePaymentRecord(
+                    method = payment.method,
+                    amountCents = payment.amountCents,
+                    cashTenderedCents = if (isCash) request.cashTenderedCents else null,
+                    cashChangeCents = if (isCash && request.cashTenderedCents != null) changeCents else null,
+                    cashRetainedCents = if (isCash && request.cashTenderedCents != null) retainedCashCents else null,
+                )
+            },
+        )
+        when (val reportResult = salesDayReportRepository?.recordFinalizedSale(localFinalizedSaleRecord)) {
+            is PosResult.Failure -> return PosResult.Failure(reportResult.message)
+            is PosResult.Success -> Log.i(TAG, "finalizeTablePayment: local sales report row recorded receipt=$receiptNumber sourcePosEventId=$sourcePosEventId")
+            null -> Log.w(TAG, "finalizeTablePayment: local sales report repository missing; report row not recorded receipt=$receiptNumber")
+        }
+
         val finalizedTicketOpenedByStaffId = store.tickets.value[ticketId]
             ?.openedByStaffId
             ?.trim()
@@ -369,17 +410,6 @@ class LocalPaymentRepository(
             payloadJson = """{"tableId":"${resolvedTableId ?: ""}","totalDueCents":$totalDueCents,"totalPaidCents":$totalPaidCents,"discountCents":$discountCents}""",
         )
 
-        // Net drawer cash from this sale = what the customer put IN (cash tendered)
-        // minus what came OUT (change returned). The previous formula summed the
-        // cash-applied PaymentEntry amounts (which already equal the cash portion
-        // of the sale, i.e. tendered - change) and then subtracted changeCents a
-        // second time, which double-deducted change. For a 9,00 EUR sale paid with
-        // 10,00 EUR cash and 1,00 EUR change: applied = 900, tendered = 1000,
-        // change = 100 -> correct net = 1000 - 100 = 900, not 900 - 100 = 800.
-        val retainedCashCents = computeRetainedCashCents(
-            cashTenderedCents = request.cashTenderedCents,
-            changeCents = changeCents,
-        )
         if (retainedCashCents > 0) {
             when (val cashResult = cashLedgerRepository?.recordCashSale(
                 drawerId = CashDrawer.DEFAULT_DRAWER_ID,

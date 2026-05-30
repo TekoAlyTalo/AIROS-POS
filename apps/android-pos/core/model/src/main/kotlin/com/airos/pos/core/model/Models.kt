@@ -671,6 +671,52 @@ enum class PaymentMethod {
     VOUCHER,
 }
 
+data class LocalFinalizedSalePaymentRecord(
+    val method: PaymentMethod,
+    val amountCents: Int,
+    val cashTenderedCents: Int? = null,
+    val cashChangeCents: Int? = null,
+    val cashRetainedCents: Int? = null,
+)
+
+data class LocalFinalizedSaleRecord(
+    val id: String,
+    val sourcePosEventId: String,
+    val ticketId: String? = null,
+    val openSaleId: String? = null,
+    val receiptNumber: String? = null,
+    val tableId: String? = null,
+    val tableLabel: String? = null,
+    val finalizedAtEpochMillis: Long,
+    val totalCents: Int,
+    val sellerStaffId: String? = null,
+    val sellerDisplayName: String? = null,
+    val terminalId: String? = null,
+    val restaurantId: String? = null,
+    val payments: List<LocalFinalizedSalePaymentRecord>,
+)
+
+data class LocalSalesPaymentBreakdown(
+    val method: String,
+    val amountCents: Int,
+    val paymentCount: Int,
+)
+
+data class LocalSalesDayReport(
+    val startEpochMillisInclusive: Long,
+    val endEpochMillisExclusive: Long,
+    val totalSalesCents: Int,
+    val saleCount: Int,
+    val paymentBreakdown: List<LocalSalesPaymentBreakdown>,
+    val cashSalesCents: Int,
+    val cardSalesCents: Int,
+    val voucherSalesCents: Int,
+    val otherSalesCents: Int,
+    val refundCount: Int = 0,
+    val refundCents: Int = 0,
+    val refundsSupported: Boolean = false,
+)
+
 data class PaymentSummary(
     val ticketId: String,
     val totalDueCents: Int,

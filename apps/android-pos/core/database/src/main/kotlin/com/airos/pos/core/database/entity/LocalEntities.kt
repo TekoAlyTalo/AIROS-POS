@@ -1,6 +1,7 @@
 package com.airos.pos.core.database.entity
 
 import androidx.room.Entity
+import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
@@ -165,6 +166,60 @@ data class SalesLedgerOutboxLocalEntity(
     val updatedAtEpochMillis: Long,
     val lastAttemptAtEpochMillis: Long?,
     val syncedAtEpochMillis: Long?,
+)
+
+@Entity(
+    tableName = "local_finalized_sales",
+    indices = [
+        Index(value = ["sourcePosEventId"], unique = true),
+        Index(value = ["finalizedAtEpochMillis"]),
+        Index(value = ["sellerStaffId", "finalizedAtEpochMillis"]),
+        Index(value = ["terminalId", "finalizedAtEpochMillis"]),
+    ],
+)
+data class LocalFinalizedSaleEntity(
+    @PrimaryKey val id: String,
+    val sourcePosEventId: String,
+    val ticketId: String?,
+    val openSaleId: String?,
+    val receiptNumber: String?,
+    val tableId: String?,
+    val tableLabel: String?,
+    val finalizedAtEpochMillis: Long,
+    val totalCents: Int,
+    val sellerStaffId: String?,
+    val sellerDisplayName: String?,
+    val terminalId: String?,
+    val restaurantId: String?,
+    val status: String,
+    val createdAtEpochMillis: Long,
+)
+
+@Entity(
+    tableName = "local_finalized_sale_payments",
+    foreignKeys = [
+        ForeignKey(
+            entity = LocalFinalizedSaleEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["finalizedSaleId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [
+        Index(value = ["finalizedSaleId"]),
+        Index(value = ["method"]),
+        Index(value = ["createdAtEpochMillis"]),
+    ],
+)
+data class LocalFinalizedSalePaymentEntity(
+    @PrimaryKey val id: String,
+    val finalizedSaleId: String,
+    val method: String,
+    val amountCents: Int,
+    val cashTenderedCents: Int?,
+    val cashChangeCents: Int?,
+    val cashRetainedCents: Int?,
+    val createdAtEpochMillis: Long,
 )
 
 @Entity(
