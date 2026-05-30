@@ -495,6 +495,7 @@ fun ShiftScreen(
     attendanceMessage: String? = null,
     onClockIn: () -> Unit = {},
     onClockOut: () -> Unit = {},
+    onAcknowledgeRequiresReview: (sessionId: Int) -> Unit = {},
     journalNotes: List<JournalNote> = emptyList(),
     onNoteAdded: (String) -> Boolean = { false },
     onSystemNoteAdded: (String) -> Boolean = { false },
@@ -676,6 +677,9 @@ fun ShiftScreen(
                         isClockedIn = isClockedIn,
                         myAttendanceEntry = myAttendanceEntry,
                         attendanceStateLoading = attendanceStateLoading,
+                        requiresReviewEntries = attendance.requiresReview,
+                        attendanceBusy = attendanceBusy,
+                        onAcknowledgeRequiresReview = onAcknowledgeRequiresReview,
                         ownSchedule = ownSchedule,
                         ownScheduleLoading = ownScheduleLoading,
                         ownScheduleMessage = ownScheduleMessage,
@@ -1316,6 +1320,9 @@ private fun WorktimeSummaryCard(
     isClockedIn: Boolean,
     myAttendanceEntry: AttendanceEntry?,
     attendanceStateLoading: Boolean,
+    requiresReviewEntries: List<AttendanceEntry> = emptyList(),
+    attendanceBusy: Boolean = false,
+    onAcknowledgeRequiresReview: (sessionId: Int) -> Unit = {},
     ownSchedule: ShiftScheduleSnapshot?,
     ownScheduleLoading: Boolean,
     ownScheduleMessage: String?,
@@ -1357,6 +1364,13 @@ private fun WorktimeSummaryCard(
             )
         },
     ) {
+        if (requiresReviewEntries.isNotEmpty()) {
+            WorktimeRequiresReviewBanner(
+                entries = requiresReviewEntries,
+                busy = attendanceBusy,
+                onAcknowledge = onAcknowledgeRequiresReview,
+            )
+        }
         OwnShiftsCompactPanel(
             schedule = ownSchedule,
             currentStaffId = currentStaffId,
@@ -1368,6 +1382,67 @@ private fun WorktimeSummaryCard(
                 .fillMaxWidth()
                 .weight(1f),
         )
+    }
+}
+
+@Composable
+private fun WorktimeRequiresReviewBanner(
+    entries: List<AttendanceEntry>,
+    busy: Boolean,
+    onAcknowledge: (sessionId: Int) -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        entries.forEach { entry ->
+            val name = entry.staffName.ifBlank { entry.staffId }
+            val startedText = formatJournalTime(entry.startedAt).takeIf { it != "--:--" }
+                ?: entry.startedAt.take(10)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(ShiftWarning.copy(alpha = 0.10f), RoundedCornerShape(14.dp))
+                    .border(BorderStroke(1.dp, ShiftWarning.copy(alpha = 0.30f)), RoundedCornerShape(14.dp))
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Text(
+                        text = "Vanha työaika vaatii tarkistuksen",
+                        color = ShiftWarning,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                    )
+                    Text(
+                        text = "$name · alkaen $startedText · Työaikaa ei päätetty automaattisesti",
+                        color = ShiftTextSecondary,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Button(
+                        onClick = { if (entry.sessionId > 0) onAcknowledge(entry.sessionId) },
+                        enabled = !busy && entry.sessionId > 0,
+                        modifier = Modifier.height(32.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = ShiftWarning.copy(alpha = 0.84f),
+                            contentColor = Color(0xFF1A1000),
+                            disabledContainerColor = ShiftPanelRaisedColor,
+                            disabledContentColor = ShiftTextMuted,
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                        shape = RoundedCornerShape(10.dp),
+                    ) {
+                        Text(
+                            text = "MERKITSE TARKISTETUKSI",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 

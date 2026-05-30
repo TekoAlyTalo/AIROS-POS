@@ -1625,6 +1625,26 @@ private fun SignedInApp(
                         onClockOut = {
                             endWorktimeForStaff(currentStaffId, currentStaffName)
                         },
+                        onAcknowledgeRequiresReview = { sessionId ->
+                            if (!attendanceBusy) {
+                                attendanceScope.launch {
+                                    attendanceBusy = true
+                                    try {
+                                        when (val result = appContainer.worktimeAttendanceRepository.acknowledgeRequiresReview(sessionId)) {
+                                            is PosResult.Success -> {
+                                                Toast.makeText(context, "Tarkistus kirjattu", Toast.LENGTH_SHORT).show()
+                                                appContainer.worktimeAttendanceRepository.syncAndRefreshCurrentUser(currentStaffId, currentStaffName)
+                                            }
+                                            is PosResult.Failure -> {
+                                                Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                                            }
+                                        }
+                                    } finally {
+                                        attendanceBusy = false
+                                    }
+                                }
+                            }
+                        },
                         journalNotes = journalNotes,
                         onNoteAdded = { text -> addShiftJournalNote(text) },
                         onSystemNoteAdded = { text ->

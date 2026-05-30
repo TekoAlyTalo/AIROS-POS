@@ -153,6 +153,16 @@ class WorktimeAttendanceRepository(
         }
     }
 
+    // Explicitly acknowledge a stale/requires_review work session. The backend marks
+    // the session as "reviewed" without inventing an ended_at or creating a clock_out
+    // event. On success the global attendance snapshot is refreshed so the entry
+    // disappears from requiresReview[]. Calls syncPendingNow first to flush any
+    // in-flight attendance events before the review request, avoiding race conditions.
+    suspend fun acknowledgeRequiresReview(sessionId: Int): PosResult<Unit> {
+        syncPendingNow()
+        return client.acknowledgeSessionReview(sessionId)
+    }
+
     suspend fun syncAndRefreshCurrentUser(staffId: String, staffName: String): PosResult<Unit> {
         val scope = currentScope()
         syncPendingNow()

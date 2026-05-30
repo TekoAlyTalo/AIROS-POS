@@ -136,7 +136,49 @@ class WorktimeAttendanceClient(
                 durationMinutes = item.optDouble("duration_minutes", 0.0),
                 endedAt = item.optNullableString("ended_at"),
                 requiresReview = item.optBoolean("requires_review", false),
+                sessionId = item.optInt("session_id", -1),
             )
+        }
+    }
+
+    suspend fun acknowledgeSessionReview(sessionId: Int): PosResult<Unit> = withContext(Dispatchers.IO) {
+        val baseUrl = backendBaseUrlProvider().trim().trimEnd('/')
+        if (baseUrl.isBlank()) return@withContext PosResult.Failure("Taustajärjestelmän osoite puuttuu.")
+        val urlString = "$baseUrl/api/worktime/sessions/$sessionId/review"
+        var connection: HttpURLConnection? = null
+        try {
+            connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = connectTimeoutMs
+                readTimeout = readTimeoutMs
+                doInput = true
+                doOutput = true
+                useCaches = false
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("Content-Type", "application/json")
+            }
+            connection.outputStream.use { os ->
+                os.write("{}".toByteArray(StandardCharsets.UTF_8))
+            }
+            val statusCode = connection.responseCode
+            val body = readStream(if (statusCode in 200..299) connection.inputStream else connection.errorStream)
+            return@withContext when {
+                statusCode in 200..299 -> PosResult.Success(Unit)
+                statusCode == 404 -> PosResult.Failure("Työaikaa ei löydy (session $sessionId).")
+                statusCode == 409 -> {
+                    val detail = runCatching { JSONObject(body).optString("detail", "") }.getOrDefault("")
+                    PosResult.Failure("Tarkistusta ei voi tehdä: $detail".trimEnd(':').trimEnd())
+                }
+                else -> PosResult.Failure("Tarkistuksen tallennus epäonnistui (HTTP $statusCode).")
+            }
+        } catch (t: IOException) {
+            Log.d("AIROS", "[WorktimeAttendanceClient] review acknowledge transient: ${t.javaClass.simpleName}: ${t.message.orEmpty()}")
+            PosResult.Failure("Yhteys palvelimeen epäonnistui. Yritä uudelleen.")
+        } catch (t: Throwable) {
+            Log.d("AIROS", "[WorktimeAttendanceClient] review acknowledge error: ${t.javaClass.simpleName}: ${t.message.orEmpty()}")
+            PosResult.Failure("Tarkistuksen tallennus epäonnistui: ${t.message.orEmpty()}")
+        } finally {
+            connection?.disconnect()
         }
     }
 

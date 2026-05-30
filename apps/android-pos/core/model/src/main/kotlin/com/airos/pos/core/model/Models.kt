@@ -616,6 +616,7 @@ data class AttendanceEntry(
     val durationMinutes: Double,
     val endedAt: String? = null,
     val requiresReview: Boolean = false,
+    val sessionId: Int = -1,
 )
 
 data class WorktimeAttendanceSnapshot(
