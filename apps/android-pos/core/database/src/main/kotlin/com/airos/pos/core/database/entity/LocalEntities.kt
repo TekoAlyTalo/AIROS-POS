@@ -117,6 +117,8 @@ data class CashEventLocalEntity(
     val note: String?,
     val occurredAtEpochMillis: Long,
     val createdAtEpochMillis: Long,
+    val expectedCashCents: Int? = null,
+    val varianceCents: Int? = null,
 )
 
 @Entity(tableName = "sync_queue")

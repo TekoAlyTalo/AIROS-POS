@@ -67,7 +67,7 @@ import com.airos.pos.core.database.entity.TicketLocalEntity
         CashDrawerLocalEntity::class,
         CashEventLocalEntity::class,
     ],
-    version = 14,
+    version = 15,
     exportSchema = false,
 )
 abstract class AirosPosDatabase : RoomDatabase() {
@@ -575,6 +575,13 @@ abstract class AirosPosDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `cash_events` ADD COLUMN `expectedCashCents` INTEGER")
+                db.execSQL("ALTER TABLE `cash_events` ADD COLUMN `varianceCents` INTEGER")
+            }
+        }
+
         private val MIGRATION_9_10 = object : Migration(9, 10) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
@@ -626,6 +633,7 @@ abstract class AirosPosDatabase : RoomDatabase() {
                 MIGRATION_11_12,
                 MIGRATION_12_13,
                 MIGRATION_13_14,
+                MIGRATION_14_15,
             ).build()
         }
     }

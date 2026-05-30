@@ -3,6 +3,8 @@ package com.airos.pos.domain
 import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.model.AuthSession
 import com.airos.pos.core.model.CashCountResult
+import com.airos.pos.core.model.CashCountVarianceResult
+import com.airos.pos.core.model.CashDaySummary
 import com.airos.pos.core.model.CashEvent
 import com.airos.pos.core.model.CashLedgerState
 import com.airos.pos.core.model.FloorMap
@@ -129,6 +131,19 @@ interface CashLedgerRepository {
         staffName: String?,
         reason: String,
     ): PosResult<CashEvent>
+    suspend fun recordCashCountWithVariance(
+        drawerId: String,
+        countedCashCents: Int,
+        expectedCashCents: Int?,
+        staffId: String,
+        staffName: String?,
+        note: String? = null,
+    ): PosResult<CashCountVarianceResult>
+    fun observeDaySummary(
+        drawerId: String = com.airos.pos.core.model.CashDrawer.DEFAULT_DRAWER_ID,
+        dayStartEpochMillis: Long,
+        recentEventLimit: Int = 20,
+    ): Flow<CashDaySummary>
 }
 
 interface TableRepository {

@@ -106,6 +106,9 @@ interface CashLedgerDao {
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertEvent(entity: CashEventLocalEntity): Long
+
+    @Query("SELECT * FROM cash_events WHERE drawerId = :drawerId AND occurredAtEpochMillis >= :dayStartEpochMillis ORDER BY occurredAtEpochMillis ASC, createdAtEpochMillis ASC")
+    fun observeEventsFromDay(drawerId: String, dayStartEpochMillis: Long): Flow<List<CashEventLocalEntity>>
 }
 
 @Dao

@@ -87,6 +87,8 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.airos.pos.core.common.CentsFormatter
 import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.model.AttendanceEntry
+import com.airos.pos.core.model.CashCountVarianceResult
+import com.airos.pos.core.model.CashDaySummary
 import com.airos.pos.core.model.CashDrawer
 import com.airos.pos.core.model.CashDrawerStatus
 import com.airos.pos.core.model.CashExpectedState
@@ -193,6 +195,8 @@ data class ShiftUiState(
     val message: String? = null,
     val journalEventId: Long = 0,
     val journalEventText: String? = null,
+    val cashDaySummary: CashDaySummary? = null,
+    val lastCashCountVariance: CashCountVarianceResult? = null,
 )
 
 class ShiftViewModel(
@@ -226,7 +230,18 @@ class ShiftViewModel(
                 }
             }
         }
+        viewModelScope.launch {
+            cashLedgerRepository.observeDaySummary(
+                drawerId = CashDrawer.DEFAULT_DRAWER_ID,
+                dayStartEpochMillis = startOfTodayEpochMillis(),
+            ).collect { summary ->
+                mutableState.update { it.copy(cashDaySummary = summary) }
+            }
+        }
     }
+
+    private fun startOfTodayEpochMillis(): Long =
+        LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
 
     fun updateOpeningFloat(value: String) {
         mutableState.update { it.copy(openingFloatInput = value, message = null) }
@@ -262,7 +277,7 @@ class ShiftViewModel(
                                 openingFloatInput = centsToEuroInput(openingCents),
                                 busy = false,
                                 journalEventId = it.journalEventId + 1,
-                                journalEventText = "Ravintola avattu · Pohjakassa ${CentsFormatter.format(openingCents)}",
+                                journalEventText = "Ravintola avattu · Avauspohjakassa ${CentsFormatter.format(openingCents)}",
                             )
                         }
                         is PosResult.Failure -> mutableState.update { it.copy(message = cashResult.message, busy = false) }
@@ -280,18 +295,22 @@ class ShiftViewModel(
         }
         viewModelScope.launch {
             mutableState.update { it.copy(busy = true, message = null) }
-            when (val result = cashLedgerRepository.recordCashCount(
+            val expectedCents = mutableState.value.cashLedgerState.expectedCashCents
+            when (val result = cashLedgerRepository.recordCashCountWithVariance(
                 drawerId = CashDrawer.DEFAULT_DRAWER_ID,
-                amountCents = cents,
+                countedCashCents = cents,
+                expectedCashCents = expectedCents,
                 staffId = staffId,
                 staffName = staffName,
             )) {
                 is PosResult.Success -> mutableState.update {
+                    val variance = result.value
                     it.copy(
                         countedCashInput = centsToEuroInput(cents),
                         busy = false,
+                        lastCashCountVariance = variance,
                         journalEventId = it.journalEventId + 1,
-                        journalEventText = "Kassa laskettu · ${CentsFormatter.format(cents)}",
+                        journalEventText = buildCountJournalLine(cents, variance.varianceCents),
                     )
                 }
                 is PosResult.Failure -> mutableState.update { it.copy(message = result.message, busy = false) }
@@ -307,9 +326,11 @@ class ShiftViewModel(
         }
         viewModelScope.launch {
             mutableState.update { it.copy(busy = true, message = null) }
-            val countResult = cashLedgerRepository.recordCashCount(
+            val expectedCents = mutableState.value.cashLedgerState.expectedCashCents
+            val countResult = cashLedgerRepository.recordCashCountWithVariance(
                 drawerId = CashDrawer.DEFAULT_DRAWER_ID,
-                amountCents = cents,
+                countedCashCents = cents,
+                expectedCashCents = expectedCents,
                 staffId = staffId,
                 staffName = staffName,
                 note = "Counted at restaurant close.",
@@ -318,6 +339,7 @@ class ShiftViewModel(
                 mutableState.update { it.copy(message = countResult.message, busy = false) }
                 return@launch
             }
+            val varianceResult = (countResult as PosResult.Success).value
             when (val closeResult = shiftRepository.closeShift(cents)) {
                 is PosResult.Failure -> mutableState.update { it.copy(message = closeResult.message, busy = false) }
                 is PosResult.Success -> {
@@ -334,8 +356,9 @@ class ShiftViewModel(
                                 currentShift = null,
                                 countedCashInput = centsToEuroInput(cents),
                                 busy = false,
+                                lastCashCountVariance = varianceResult,
                                 journalEventId = it.journalEventId + 1,
-                                journalEventText = "Ravintola suljettu · Kassa laskettu: ${CentsFormatter.format(cents)}",
+                                journalEventText = "Ravintola suljettu · Kassa laskettu: ${CentsFormatter.format(cents)} · Erotus ${buildVarianceSuffix(varianceResult.varianceCents)}",
                             )
                         }
                         is PosResult.Failure -> mutableState.update { it.copy(message = cashClose.message, busy = false) }
@@ -422,6 +445,21 @@ class ShiftViewModel(
             val euros = cents / 100
             val remainder = cents % 100
             return "$euros,${remainder.toString().padStart(2, '0')}"
+        }
+
+        internal fun buildCountJournalLine(countedCents: Int, varianceCents: Int?): String {
+            val countedStr = CentsFormatter.format(countedCents)
+            return if (varianceCents == null) {
+                "Kassa laskettu · $countedStr"
+            } else {
+                "Kassa laskettu · $countedStr · Erotus ${buildVarianceSuffix(varianceCents)}"
+            }
+        }
+
+        internal fun buildVarianceSuffix(varianceCents: Int?): String {
+            if (varianceCents == null) return "—"
+            val sign = if (varianceCents >= 0) "+" else ""
+            return "${sign}${CentsFormatter.format(varianceCents)}"
         }
     }
 }
@@ -536,7 +574,7 @@ fun ShiftScreen(
     fun requestOpenRestaurant(staffId: String) {
         val openingFloatCents = ShiftViewModel.euroInputToCents(state.openingFloatInput)
         pendingCashOpenJournalText = openingFloatCents?.let {
-            "Ravintola avattu · Pohjakassa ${CentsFormatter.format(it)}"
+            "Ravintola avattu · Avauspohjakassa ${CentsFormatter.format(it)}"
         }
         onOpenShift(staffId, activeStaffName)
     }
@@ -832,6 +870,21 @@ private fun CashShiftCard(
     val isCashLedgerOpen = ledger.drawer.status == CashDrawerStatus.OPEN
     val restaurantCashLedgerMismatch = isRestaurantOpen != isCashLedgerOpen
     val openingBlockedByOpenCashLedger = !isRestaurantOpen && isCashLedgerOpen
+    val latestCountVarianceCents = state.cashDaySummary?.latestCountVarianceCents
+        ?: state.lastCashCountVariance?.varianceCents
+    val hasLatestCountVariance = latestCountVarianceCents != null && latestCountVarianceCents != 0
+    val latestCountedAtEpochMillis = state.cashDaySummary?.latestCountedAtEpochMillis
+        ?: ledger.latestCountedAtEpochMillis
+    val latestCountStatusLabel = if (hasLatestCountVariance) "Poikkeama" else "Viimeisin laskenta"
+    val latestCountStatusValue = if (hasLatestCountVariance) {
+        ShiftViewModel.buildVarianceSuffix(latestCountVarianceCents)
+    } else {
+        latestCountedAtEpochMillis
+            ?.toString()
+            ?.let(::formatJournalTime)
+            ?.takeIf { it != "--:--" }
+            ?: "Ei laskentaa"
+    }
     val feedbackContext = LocalContext.current
     LaunchedEffect(state.message) {
         state.message?.takeIf { it.isNotBlank() }?.let { message ->
@@ -942,13 +995,11 @@ private fun CashShiftCard(
                     )
                     ShiftKeyValueRow("Ravintola", if (isRestaurantOpen) "Avoin" else "Suljettu")
                     ShiftKeyValueRow("Kassakirja", cashDrawerStatusText(ledger))
-                    ShiftKeyValueRow("Ravintola avattu", restaurantOpenedAtText(currentShift))
-                    ShiftKeyValueRow("Pohjakassa", restaurantOpeningFloatText(currentShift))
-                    ShiftKeyValueRow("Laskettu kassa", latestCashCountText(ledger))
-                    ShiftKeyValueRow("Rahaa pitäisi olla nyt", cashExpectedText(ledger), highlight = true)
+                    ShiftKeyValueRow("Kassa nyt", cashExpectedText(ledger), highlight = true)
+                    ShiftKeyValueRow(latestCountStatusLabel, latestCountStatusValue, highlight = hasLatestCountVariance)
                     if (ledger.expectedState == CashExpectedState.MISSING_TRUTH) {
                         ShiftStatusBanner(
-                            text = ledger.warningMessage ?: "Kassassa pitäisi olla ei ole laskettavissa. Laske kassa.",
+                            text = "Kassa nyt ei ole laskettavissa. Laske kassa.",
                             tint = ShiftDanger,
                         )
                     }
@@ -972,6 +1023,19 @@ private fun CashLedgerWorkspaceOverlay(
     modifier: Modifier = Modifier,
 ) {
     val ledger = state.cashLedgerState
+    val countedCashCents = ShiftViewModel.euroInputToCents(state.countedCashInput)
+    val expectedBeforeCountCents = ledger.expectedCashCents
+    val pendingVarianceCents = if (countedCashCents != null && expectedBeforeCountCents != null) {
+        countedCashCents - expectedBeforeCountCents
+    } else {
+        null
+    }
+    val hasPendingVariance = pendingVarianceCents != null && pendingVarianceCents != 0
+    val latestCountedCashCents = state.cashDaySummary?.latestCountedCashCents ?: ledger.latestCountedCashCents
+    val latestCountExpectedCashCents = state.cashDaySummary?.latestCountExpectedCashCents
+        ?: state.lastCashCountVariance?.expectedCashCents
+    val latestCountVarianceCents = state.cashDaySummary?.latestCountVarianceCents
+        ?: state.lastCashCountVariance?.varianceCents
     var replaceCountedCashOnNextInput by remember(mode) { mutableStateOf(true) }
 
     Surface(
@@ -1035,121 +1099,170 @@ private fun CashLedgerWorkspaceOverlay(
                 }
             }
 
-            state.message?.takeIf { it.isNotBlank() }?.let { message ->
-                ShiftStatusBanner(text = message, tint = ShiftWarning)
-            }
-            if (ledger.expectedState == CashExpectedState.MISSING_TRUTH) {
-                ShiftStatusBanner(
-                    text = ledger.warningMessage ?: "Kassassa pitäisi olla ei ole laskettavissa. Laske kassa.",
-                    tint = ShiftDanger,
-                )
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                state.message?.takeIf { it.isNotBlank() }?.let { message ->
+                    ShiftStatusBanner(text = message, tint = ShiftWarning)
+                }
+                if (ledger.expectedState == CashExpectedState.MISSING_TRUTH) {
+                    ShiftStatusBanner(
+                        text = "Kassa nyt ei ole laskettavissa. Laske kassa.",
+                        tint = ShiftDanger,
+                    )
+                }
+
                 CashSummaryMetric(
-                    label = "Pohjakassa",
-                    value = cashOpeningFloatText(state),
-                    modifier = Modifier.weight(1f),
-                )
-                CashSummaryMetric(
-                    label = "Kassassa pitäisi olla",
+                    label = "Kassa nyt",
                     value = cashExpectedText(ledger),
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    CashSummaryMetric(
+                        label = "Viimeisin laskenta",
+                        value = latestCountedCashCents?.let(CentsFormatter::format) ?: "Ei kassalaskentaa",
+                        modifier = Modifier.weight(1f),
+                    )
+                    CashSummaryMetric(
+                        label = "Odotus ennen laskentaa",
+                        value = latestCountExpectedCashCents?.let(CentsFormatter::format) ?: "Ei laskettavissa",
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                CashSummaryMetric(
+                    label = "Erotus",
+                    value = ShiftViewModel.buildVarianceSuffix(latestCountVarianceCents),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                CashAmountDisplay(
+                    value = state.countedCashInput,
+                    label = "Laskettu käteinen",
+                )
+                if (hasPendingVariance) {
+                    ShiftStatusBanner(
+                        text = "Kassalaskennan erotus ${ShiftViewModel.buildVarianceSuffix(pendingVarianceCents)}",
+                        tint = ShiftWarning,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        CashSummaryMetric(
+                            label = "Odotus ennen laskentaa",
+                            value = expectedBeforeCountCents?.let(CentsFormatter::format) ?: "Ei laskettavissa",
+                            modifier = Modifier.weight(1f),
+                            compact = true,
+                        )
+                        CashSummaryMetric(
+                            label = "Laskettu",
+                            value = countedCashCents?.let(CentsFormatter::format) ?: "Ei syötetty",
+                            modifier = Modifier.weight(1f),
+                            compact = true,
+                        )
+                        CashSummaryMetric(
+                            label = "Erotus",
+                            value = ShiftViewModel.buildVarianceSuffix(pendingVarianceCents),
+                            modifier = Modifier.weight(1f),
+                            compact = true,
+                        )
+                    }
+                }
+                NumericMoneyPad(
+                    onDigit = { digit ->
+                        val nextValue = if (replaceCountedCashOnNextInput) {
+                            digit
+                        } else {
+                            appendShiftMoneyDigit(state.countedCashInput, digit)
+                        }
+                        replaceCountedCashOnNextInput = false
+                        onCountedCashChanged(nextValue)
+                    },
+                    onDecimal = {
+                        val nextValue = if (replaceCountedCashOnNextInput) {
+                            "0,"
+                        } else {
+                            appendShiftMoneyDecimal(state.countedCashInput)
+                        }
+                        replaceCountedCashOnNextInput = false
+                        onCountedCashChanged(nextValue)
+                    },
+                    onBackspace = {
+                        replaceCountedCashOnNextInput = false
+                        onCountedCashChanged(removeShiftMoneyChar(state.countedCashInput))
+                    },
+                    keyHeight = 48.dp,
+                    keyColor = ShiftKeyColor,
+                    keyContentColor = ShiftKeyContentColor,
                 )
             }
-            CashSummaryMetric(
-                label = "Viimeisin kassalaskenta",
-                value = latestCashCountText(ledger),
+
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-            )
-            CashAmountDisplay(
-                value = state.countedCashInput,
-                label = "Laskettu käteinen",
-            )
-            NumericMoneyPad(
-                onDigit = { digit ->
-                    val nextValue = if (replaceCountedCashOnNextInput) {
-                        digit
-                    } else {
-                        appendShiftMoneyDigit(state.countedCashInput, digit)
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (mode == CashWorkspaceMode.CLOSE && ledger.latestExplicitCashCents != null) {
+                    Button(
+                        onClick = { currentStaffId?.let(onCloseWithoutNewCount) },
+                        enabled = !state.busy && currentStaffId != null,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = ShiftPanelDeepColor,
+                            contentColor = ShiftTextSecondary,
+                            disabledContainerColor = ShiftPanelDeepColor,
+                            disabledContentColor = ShiftTextMuted,
+                        ),
+                        shape = RoundedCornerShape(16.dp),
+                    ) {
+                        Text(
+                            text = "Sulje ilman uutta laskentaa",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                        )
                     }
-                    replaceCountedCashOnNextInput = false
-                    onCountedCashChanged(nextValue)
-                },
-                onDecimal = {
-                    val nextValue = if (replaceCountedCashOnNextInput) {
-                        "0,"
-                    } else {
-                        appendShiftMoneyDecimal(state.countedCashInput)
-                    }
-                    replaceCountedCashOnNextInput = false
-                    onCountedCashChanged(nextValue)
-                },
-                onBackspace = {
-                    replaceCountedCashOnNextInput = false
-                    onCountedCashChanged(removeShiftMoneyChar(state.countedCashInput))
-                },
-                keyHeight = 48.dp,
-                keyColor = ShiftKeyColor,
-                keyContentColor = ShiftKeyContentColor,
-            )
+                } else if (mode == CashWorkspaceMode.CLOSE && ledger.latestExplicitCashCents == null) {
+                    ShiftStatusBanner(
+                        text = "Sulkeminen vaatii kassalaskennan, koska vahvistettua kassasummaa ei ole.",
+                        tint = ShiftDanger,
+                    )
+                }
 
-            Spacer(modifier = Modifier.weight(1f))
-
-            if (mode == CashWorkspaceMode.CLOSE && ledger.latestExplicitCashCents != null) {
                 Button(
-                    onClick = { currentStaffId?.let(onCloseWithoutNewCount) },
+                    onClick = {
+                        currentStaffId?.let { staffId ->
+                            if (mode == CashWorkspaceMode.CLOSE) {
+                                onCloseWithCount(staffId)
+                            } else {
+                                onRecordCashCount(staffId)
+                            }
+                        }
+                    },
                     enabled = !state.busy && currentStaffId != null,
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = ShiftPanelDeepColor,
-                        contentColor = ShiftTextSecondary,
+                        containerColor = if (mode == CashWorkspaceMode.CLOSE) ShiftGold.copy(alpha = 0.86f) else ShiftCyan.copy(alpha = 0.86f),
+                        contentColor = Color(0xFF071109),
                         disabledContainerColor = ShiftPanelDeepColor,
                         disabledContentColor = ShiftTextMuted,
                     ),
                     shape = RoundedCornerShape(16.dp),
                 ) {
                     Text(
-                        text = "Sulje ilman uutta laskentaa",
+                        text = when {
+                            hasPendingVariance -> "Hyväksy poikkeama ${ShiftViewModel.buildVarianceSuffix(pendingVarianceCents)}"
+                            mode == CashWorkspaceMode.CLOSE -> "Kirjaa laskenta ja sulje"
+                            else -> "Kirjaa kassalaskenta"
+                        },
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
                     )
                 }
-            } else if (mode == CashWorkspaceMode.CLOSE && ledger.latestExplicitCashCents == null) {
-                ShiftStatusBanner(
-                    text = "Sulkeminen vaatii kassalaskennan, koska vahvistettua kassasummaa ei ole.",
-                    tint = ShiftDanger,
-                )
-            }
-
-            Button(
-                onClick = {
-                    currentStaffId?.let { staffId ->
-                        if (mode == CashWorkspaceMode.CLOSE) {
-                            onCloseWithCount(staffId)
-                        } else {
-                            onRecordCashCount(staffId)
-                        }
-                    }
-                },
-                enabled = !state.busy && currentStaffId != null,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (mode == CashWorkspaceMode.CLOSE) ShiftGold.copy(alpha = 0.86f) else ShiftCyan.copy(alpha = 0.86f),
-                    contentColor = Color(0xFF071109),
-                    disabledContainerColor = ShiftPanelDeepColor,
-                    disabledContentColor = ShiftTextMuted,
-                ),
-                shape = RoundedCornerShape(16.dp),
-            ) {
-                Text(
-                    text = if (mode == CashWorkspaceMode.CLOSE) "Kirjaa laskenta ja sulje" else "Kirjaa kassalaskenta",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                )
             }
         }
     }
@@ -2063,8 +2176,8 @@ private fun ShiftJournalCard(
                     JournalEvent(
                         marker = "✓",
                         tint = ShiftSuccess,
-                        title = "Pohjakassa avoinna",
-                        detail = "Pohjakassa ${CentsFormatter.format(shift.openingFloatCents)}",
+                        title = "Ravintola avattu",
+                        detail = "Avauspohjakassa ${CentsFormatter.format(shift.openingFloatCents)}",
                         timestamp = shift.openedAtEpochMillis.toString(),
                     ),
                 )

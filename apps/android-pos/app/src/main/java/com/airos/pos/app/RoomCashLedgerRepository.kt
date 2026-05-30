@@ -6,6 +6,8 @@ import com.airos.pos.core.database.AirosPosDatabase
 import com.airos.pos.core.database.entity.CashDrawerLocalEntity
 import com.airos.pos.core.database.entity.CashEventLocalEntity
 import com.airos.pos.core.model.CashCountResult
+import com.airos.pos.core.model.CashCountVarianceResult
+import com.airos.pos.core.model.CashDaySummary
 import com.airos.pos.core.model.CashDrawer
 import com.airos.pos.core.model.CashDrawerStatus
 import com.airos.pos.core.model.CashEvent
@@ -223,6 +225,8 @@ class RoomCashLedgerRepository(
         sourceId: String?,
         idempotencyKey: String?,
         note: String?,
+        expectedCashCents: Int? = null,
+        varianceCents: Int? = null,
     ): PosResult<CashEvent> {
         return try {
             val now = System.currentTimeMillis()
@@ -240,6 +244,8 @@ class RoomCashLedgerRepository(
                 note = note,
                 occurredAtEpochMillis = now,
                 createdAtEpochMillis = now,
+                expectedCashCents = expectedCashCents,
+                varianceCents = varianceCents,
             )
 
             val persisted = database.withTransaction {
@@ -282,7 +288,7 @@ class RoomCashLedgerRepository(
                 latestCountedAtEpochMillis = drawer.latestCountedAtEpochMillis,
                 latestCountedByStaffName = drawer.latestCountedByStaffName,
                 lastEventAtEpochMillis = events.maxOfOrNull { it.occurredAtEpochMillis },
-                warningMessage = "Kassassa pitäisi olla ei ole laskettavissa. Laske kassa.",
+                warningMessage = "Kassa nyt ei ole laskettavissa. Laske kassa.",
             )
         }
 
@@ -379,6 +385,124 @@ class RoomCashLedgerRepository(
             note = note,
             occurredAtEpochMillis = occurredAtEpochMillis,
             createdAtEpochMillis = createdAtEpochMillis,
+            expectedCashCents = expectedCashCents,
+            varianceCents = varianceCents,
+        )
+    }
+
+    override suspend fun recordCashCountWithVariance(
+        drawerId: String,
+        countedCashCents: Int,
+        expectedCashCents: Int?,
+        staffId: String,
+        staffName: String?,
+        note: String?,
+    ): PosResult<CashCountVarianceResult> {
+        val varianceCents = expectedCashCents?.let { countedCashCents - it }
+        return when (
+            val result = insertCashEvent(
+                drawerId = drawerId,
+                type = CashEventType.CASH_COUNT_RECORDED,
+                amountCents = countedCashCents,
+                deltaCents = 0,
+                staffId = staffId,
+                staffName = staffName,
+                sourceType = "manual_cash_count",
+                sourceId = null,
+                idempotencyKey = null,
+                note = note,
+                expectedCashCents = expectedCashCents,
+                varianceCents = varianceCents,
+            )
+        ) {
+            is PosResult.Success -> PosResult.Success(
+                CashCountVarianceResult(
+                    event = result.value,
+                    countedCashCents = countedCashCents,
+                    expectedCashCents = expectedCashCents,
+                    varianceCents = varianceCents,
+                )
+            )
+            is PosResult.Failure -> result
+        }
+    }
+
+    override fun observeDaySummary(
+        drawerId: String,
+        dayStartEpochMillis: Long,
+        recentEventLimit: Int,
+    ): Flow<CashDaySummary> {
+        return combine(
+            observeState(drawerId),
+            dao.observeEventsFromDay(drawerId, dayStartEpochMillis),
+        ) { ledgerState, dayEvents ->
+            buildDaySummary(
+                drawerId = drawerId,
+                dayStartEpochMillis = dayStartEpochMillis,
+                ledgerState = ledgerState,
+                dayEvents = dayEvents,
+                recentEventLimit = recentEventLimit,
+            )
+        }
+    }
+
+    private fun buildDaySummary(
+        drawerId: String,
+        dayStartEpochMillis: Long,
+        ledgerState: CashLedgerState,
+        dayEvents: List<CashEventLocalEntity>,
+        recentEventLimit: Int,
+    ): CashDaySummary {
+        val openingEvent = dayEvents.firstOrNull { it.type == CashEventType.CASH_OPENED.name }
+        val latestCountEvent = dayEvents
+            .filter { it.type == CashEventType.CASH_COUNT_RECORDED.name }
+            .maxWithOrNull(compareBy<CashEventLocalEntity> { it.occurredAtEpochMillis }.thenBy { it.createdAtEpochMillis })
+
+        var cashSalesCents = 0
+        var cashSalesCount = 0
+        var cashRefundsCents = 0
+        var cashRefundsCount = 0
+        var cashAddedCents = 0
+        var cashRemovedCents = 0
+        var cashCountCount = 0
+
+        for (event in dayEvents) {
+            when (event.type) {
+                CashEventType.CASH_SALE_RECEIVED.name -> {
+                    cashSalesCents += event.amountCents ?: 0
+                    cashSalesCount++
+                }
+                CashEventType.CASH_REFUND_PAID.name -> {
+                    cashRefundsCents += event.amountCents ?: 0
+                    cashRefundsCount++
+                }
+                CashEventType.CASH_ADDED.name -> cashAddedCents += event.amountCents ?: 0
+                CashEventType.CASH_REMOVED.name -> cashRemovedCents += event.amountCents ?: 0
+                CashEventType.CASH_COUNT_RECORDED.name -> cashCountCount++
+            }
+        }
+
+        val recentEvents = dayEvents.takeLast(recentEventLimit).map { it.toModel() }
+
+        return CashDaySummary(
+            drawerId = drawerId,
+            dayStartEpochMillis = dayStartEpochMillis,
+            openingFloatCents = openingEvent?.amountCents,
+            openingAtEpochMillis = openingEvent?.occurredAtEpochMillis,
+            cashSalesCents = cashSalesCents,
+            cashSalesCount = cashSalesCount,
+            cashRefundsCents = cashRefundsCents,
+            cashRefundsCount = cashRefundsCount,
+            cashAddedCents = cashAddedCents,
+            cashRemovedCents = cashRemovedCents,
+            cashCountCount = cashCountCount,
+            latestCountedCashCents = latestCountEvent?.amountCents,
+            latestCountExpectedCashCents = latestCountEvent?.expectedCashCents,
+            latestCountVarianceCents = latestCountEvent?.varianceCents,
+            latestCountedAtEpochMillis = latestCountEvent?.occurredAtEpochMillis,
+            latestCountedByStaffName = latestCountEvent?.staffName,
+            expectedCashCents = ledgerState.expectedCashCents,
+            recentCashEvents = recentEvents,
         )
     }
 

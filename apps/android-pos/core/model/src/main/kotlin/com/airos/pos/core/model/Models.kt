@@ -548,6 +548,8 @@ data class CashEvent(
     val note: String?,
     val occurredAtEpochMillis: Long,
     val createdAtEpochMillis: Long,
+    val expectedCashCents: Int? = null,
+    val varianceCents: Int? = null,
 )
 
 enum class CashExpectedState {
@@ -558,6 +560,34 @@ enum class CashExpectedState {
 data class CashCountResult(
     val event: CashEvent,
     val countedCashCents: Int,
+)
+
+data class CashCountVarianceResult(
+    val event: CashEvent,
+    val countedCashCents: Int,
+    val expectedCashCents: Int?,
+    val varianceCents: Int?,
+)
+
+data class CashDaySummary(
+    val drawerId: String,
+    val dayStartEpochMillis: Long,
+    val openingFloatCents: Int?,
+    val openingAtEpochMillis: Long?,
+    val cashSalesCents: Int,
+    val cashSalesCount: Int,
+    val cashRefundsCents: Int,
+    val cashRefundsCount: Int,
+    val cashAddedCents: Int,
+    val cashRemovedCents: Int,
+    val cashCountCount: Int,
+    val latestCountedCashCents: Int?,
+    val latestCountExpectedCashCents: Int?,
+    val latestCountVarianceCents: Int?,
+    val latestCountedAtEpochMillis: Long?,
+    val latestCountedByStaffName: String?,
+    val expectedCashCents: Int?,
+    val recentCashEvents: List<CashEvent>,
 )
 
 data class CashLedgerState(
@@ -575,7 +605,7 @@ data class CashLedgerState(
     val latestCountedAtEpochMillis: Long? = null,
     val latestCountedByStaffName: String? = null,
     val lastEventAtEpochMillis: Long? = null,
-    val warningMessage: String? = "Kassassa pitäisi olla ei ole laskettavissa ennen kassalaskentaa.",
+    val warningMessage: String? = "Kassa nyt ei ole laskettavissa ennen kassalaskentaa.",
 )
 
 data class AttendanceEntry(
