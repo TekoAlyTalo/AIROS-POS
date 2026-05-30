@@ -2294,7 +2294,7 @@ private fun SignedInApp(
                     TransactionsRoute(
                         openSaleRepository = appContainer.openSaleRepository,
                         salesLedgerOutboxDao = appContainer.database.salesLedgerOutboxDao(),
-                        backendBaseUrlProvider = appContainer.reportsBackendBaseUrlProvider,
+                        salesDayReportRepository = appContainer.salesDayReportRepository,
                     )
                 }
 

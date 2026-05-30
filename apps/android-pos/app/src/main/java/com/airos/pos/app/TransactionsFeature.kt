@@ -4,7 +4,6 @@ import android.text.format.DateFormat
 import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -48,6 +47,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.airos.pos.core.common.CentsFormatter
 import com.airos.pos.core.database.dao.SalesLedgerOutboxDao
 import com.airos.pos.core.database.entity.SalesLedgerOutboxLocalEntity
+import com.airos.pos.core.model.LocalSalesDayReport
 import com.airos.pos.core.model.PaymentMethod
 import com.airos.pos.core.model.PersistedOpenSale
 import com.airos.pos.core.model.PersistedOpenSaleLine
@@ -60,6 +60,7 @@ import com.airos.pos.core.model.ReceiptTotals
 import com.airos.pos.core.model.ReceiptVatRow
 import com.airos.pos.core.ui.PosPane
 import com.airos.pos.domain.OpenSaleRepository
+import com.airos.pos.domain.SalesDayReportRepository
 import java.util.Calendar
 import java.util.Locale
 import kotlinx.coroutines.flow.Flow
@@ -69,17 +70,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.BufferedReader
-import java.io.InputStream
-import java.io.InputStreamReader
-import java.net.HttpURLConnection
-import java.net.URL
-import java.nio.charset.StandardCharsets
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -189,10 +180,8 @@ private data class TransactionsUiState(
     val currentEvents: List<TransactionRecord> = emptyList(),
     val pastEvents: List<TransactionRecord> = emptyList(),
     val selectedEventId: String? = null,
-    val backendKpiState: BackendKpiState = BackendKpiState.Loading,
+    val localDayReport: LocalSalesDayReport? = null,
 )
-
-private data class HourlyBucket(val hour: Int, val amountCents: Int)
 
 private data class PaymentMethodBucket(
     val methodCode: String,
@@ -201,33 +190,10 @@ private data class PaymentMethodBucket(
     val totalCents: Int,
 )
 
-private data class BackendDayKpi(
-    val grossTotalCents: Int,
-    val receiptCount: Int,
-    val paymentsBreakdown: List<TransactionPaymentSnapshot>,
-)
-
-private data class BackendTransactionRow(
-    val finalizedAtMs: Long,
-    val totalCents: Int,
-)
-
-private sealed class BackendKpiState {
-    object Loading : BackendKpiState()
-    data class Available(
-        val grossTotalCents: Int,
-        val receiptCount: Int,
-        val lastHourTotalCents: Int,
-        val paymentsBreakdown: List<TransactionPaymentSnapshot>,
-        val hourlyBuckets: List<HourlyBucket>,
-    ) : BackendKpiState()
-    object Unavailable : BackendKpiState()
-}
-
 private class TransactionsRepository(
     private val openSaleRepository: OpenSaleRepository,
     private val salesLedgerOutboxDao: SalesLedgerOutboxDao,
-    private val backendBaseUrlProvider: () -> String,
+    private val salesDayReportRepository: SalesDayReportRepository,
 ) {
     fun observeCurrentTransactions(): Flow<List<TransactionRecord>> {
         return combine(
@@ -294,6 +260,13 @@ private class TransactionsRepository(
                     )
                 }
         }
+    }
+
+    fun observeTodaySalesReport(): Flow<LocalSalesDayReport> {
+        return salesDayReportRepository.observeSalesReport(
+            startEpochMillisInclusive = startOfTodayEpochMillis(),
+            endEpochMillisExclusive = startOfTomorrowEpochMillis(),
+        )
     }
 
     private fun buildCurrentTimeline(
@@ -364,118 +337,6 @@ private class TransactionsRepository(
         return timeline.sortedBy { it.occurredAtEpochMillis }
     }
 
-    suspend fun fetchDayReport(startMs: Long, endMs: Long): BackendDayKpi? = withContext(Dispatchers.IO) {
-        val baseUrl = normalizedBaseUrl() ?: return@withContext null
-        val urlString = "$baseUrl/api/pos/reports/day?start=$startMs&end=$endMs"
-        var connection: HttpURLConnection? = null
-        try {
-            connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 4_000
-                readTimeout = 6_000
-                doInput = true
-                useCaches = false
-                setRequestProperty("Accept", "application/json")
-            }
-            val statusCode = connection.responseCode
-            val body = readBackendStream(if (statusCode in 200..299) connection.inputStream else connection.errorStream)
-            if (statusCode !in 200..299) {
-                Log.d("AIROS_REPORTS", "day report fetch failed status=$statusCode")
-                return@withContext null
-            }
-            parseDayReport(body)
-        } catch (t: Throwable) {
-            Log.d("AIROS_REPORTS", "day report fetch failed: ${t.javaClass.simpleName}: ${t.message.orEmpty()}")
-            null
-        } finally {
-            connection?.disconnect()
-        }
-    }
-
-    suspend fun fetchTodayTransactions(startMs: Long, endMs: Long): List<BackendTransactionRow>? = withContext(Dispatchers.IO) {
-        val baseUrl = normalizedBaseUrl() ?: return@withContext null
-        val urlString = "$baseUrl/api/pos/reports/transactions/search?start=$startMs&end=$endMs"
-        var connection: HttpURLConnection? = null
-        try {
-            connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 4_000
-                readTimeout = 6_000
-                doInput = true
-                useCaches = false
-                setRequestProperty("Accept", "application/json")
-            }
-            val statusCode = connection.responseCode
-            val body = readBackendStream(if (statusCode in 200..299) connection.inputStream else connection.errorStream)
-            if (statusCode !in 200..299) {
-                Log.d("AIROS_REPORTS", "transaction search failed status=$statusCode")
-                return@withContext null
-            }
-            parseTransactionRows(body)
-        } catch (t: Throwable) {
-            Log.d("AIROS_REPORTS", "transaction search failed: ${t.javaClass.simpleName}: ${t.message.orEmpty()}")
-            null
-        } finally {
-            connection?.disconnect()
-        }
-    }
-
-    private fun parseDayReport(body: String): BackendDayKpi? {
-        if (body.isBlank()) return null
-        return runCatching {
-            val root = JSONObject(body)
-            val paymentsArray = root.optJSONArray("payments_summary")
-            val paymentList = mutableListOf<TransactionPaymentSnapshot>()
-            if (paymentsArray != null) {
-                for (i in 0 until paymentsArray.length()) {
-                    val pm = paymentsArray.optJSONObject(i) ?: continue
-                    val method = pm.optString("payment_method").takeIf { it.isNotBlank() } ?: continue
-                    paymentList += TransactionPaymentSnapshot(
-                        methodCode = method,
-                        amountCents = pm.optInt("amount_total_cents"),
-                    )
-                }
-            }
-            BackendDayKpi(
-                grossTotalCents = root.optInt("gross_sales_total_cents"),
-                receiptCount = root.optInt("total_sales_count"),
-                paymentsBreakdown = paymentList,
-            )
-        }.getOrNull()
-    }
-
-    private fun parseTransactionRows(body: String): List<BackendTransactionRow>? {
-        if (body.isBlank()) return null
-        return runCatching {
-            val root = JSONObject(body)
-            val results = root.optJSONArray("results") ?: return@runCatching emptyList()
-            (0 until results.length()).mapNotNull { i ->
-                val obj = results.optJSONObject(i) ?: return@mapNotNull null
-                val ms = obj.optLong("finalized_at_epoch_ms", -1L)
-                val cents = obj.optInt("total_cents", 0)
-                if (ms > 0) BackendTransactionRow(finalizedAtMs = ms, totalCents = cents) else null
-            }
-        }.getOrNull()
-    }
-
-    private fun normalizedBaseUrl(): String? {
-        val url = backendBaseUrlProvider().trim().trimEnd('/')
-        return url.ifBlank { null }
-    }
-
-    private fun readBackendStream(stream: InputStream?): String {
-        if (stream == null) return ""
-        return stream.use { input ->
-            BufferedReader(InputStreamReader(input, StandardCharsets.UTF_8)).use { reader ->
-                buildString {
-                    while (true) {
-                        val line = reader.readLine() ?: break
-                        append(line)
-                    }
-                }
-            }
-        }
-    }
 }
 
 private class TransactionsViewModel private constructor(
@@ -496,33 +357,8 @@ private class TransactionsViewModel private constructor(
             }
         }
         viewModelScope.launch {
-            val startMs = startOfTodayEpochMillis()
-            val endMs = System.currentTimeMillis()
-            coroutineScope {
-                val dayKpiDeferred = async { repository.fetchDayReport(startMs, endMs) }
-                val txnRowsDeferred = async { repository.fetchTodayTransactions(startMs, endMs) }
-                val dayKpi = dayKpiDeferred.await()
-                val txnRows = txnRowsDeferred.await()
-                val hourAgo = System.currentTimeMillis() - 3_600_000L
-                val newKpiState = if (dayKpi != null) {
-                    val lastHourCents = txnRows
-                        ?.filter { it.finalizedAtMs >= hourAgo }
-                        ?.sumOf { it.totalCents }
-                        ?: 0
-                    val hourlyBuckets = txnRows
-                        ?.let { computeHourlyBucketsFromRows(it) }
-                        ?: emptyList()
-                    BackendKpiState.Available(
-                        grossTotalCents = dayKpi.grossTotalCents,
-                        receiptCount = dayKpi.receiptCount,
-                        lastHourTotalCents = lastHourCents,
-                        paymentsBreakdown = dayKpi.paymentsBreakdown,
-                        hourlyBuckets = hourlyBuckets,
-                    )
-                } else {
-                    BackendKpiState.Unavailable
-                }
-                mutableState.update { it.copy(backendKpiState = newKpiState) }
+            repository.observeTodaySalesReport().collect { report ->
+                mutableState.update { it.copy(localDayReport = report) }
             }
         }
     }
@@ -535,14 +371,14 @@ private class TransactionsViewModel private constructor(
         fun factory(
             openSaleRepository: OpenSaleRepository,
             salesLedgerOutboxDao: SalesLedgerOutboxDao,
-            backendBaseUrlProvider: () -> String,
+            salesDayReportRepository: SalesDayReportRepository,
         ): ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 TransactionsViewModel(
                     repository = TransactionsRepository(
                         openSaleRepository = openSaleRepository,
                         salesLedgerOutboxDao = salesLedgerOutboxDao,
-                        backendBaseUrlProvider = backendBaseUrlProvider,
+                        salesDayReportRepository = salesDayReportRepository,
                     ),
                 )
             }
@@ -557,34 +393,26 @@ private fun TransactionsScreen(
 ) {
     val strings = rememberCashierStrings()
 
-    val openBillsCount = remember(state.currentEvents) { state.currentEvents.size }
-    val recentSales = remember(state.pastEvents) { state.pastEvents.take(20) }
     val openBills = state.currentEvents
 
-    val kpiState = state.backendKpiState
-    val hourlyBuckets = remember(kpiState) {
-        if (kpiState is BackendKpiState.Available) kpiState.hourlyBuckets else emptyList()
-    }
-    val paymentBuckets = remember(kpiState, strings) {
-        if (kpiState is BackendKpiState.Available) {
-            val total = kpiState.grossTotalCents
-            kpiState.paymentsBreakdown
-                .sortedByDescending { it.amountCents }
-                .map { pm ->
-                    PaymentMethodBucket(
-                        methodCode = pm.methodCode,
-                        label = pm.methodCode.toPaymentLabel(strings),
-                        amountCents = pm.amountCents,
-                        totalCents = total,
-                    )
-                }
-        } else {
-            emptyList()
-        }
+    val dayReport = state.localDayReport
+    val paymentBuckets = remember(dayReport, strings) {
+        dayReport
+            ?.paymentBreakdown
+            ?.sortedByDescending { it.amountCents }
+            ?.map { pm ->
+                PaymentMethodBucket(
+                    methodCode = pm.method,
+                    label = pm.method.toPaymentLabel(strings),
+                    amountCents = pm.amountCents,
+                    totalCents = dayReport.totalSalesCents,
+                )
+            }
+            .orEmpty()
     }
 
-    val selectedEvent = remember(state.selectedEventId, openBills, recentSales) {
-        (openBills + recentSales).firstOrNull { it.stableId == state.selectedEventId }
+    val selectedEvent = remember(state.selectedEventId, openBills) {
+        openBills.firstOrNull { it.stableId == state.selectedEventId }
     }
 
     Row(
@@ -593,7 +421,7 @@ private fun TransactionsScreen(
     ) {
         PosPane(
             title = strings[CashierStringKey.TransactionsTitle],
-            supportingText = strings[CashierStringKey.TransactionsSupporting],
+            supportingText = "Tämän kassan päiväraportti ja avoimet laskut.",
             modifier = Modifier
                 .weight(1.2f)
                 .fillMaxHeight(),
@@ -610,70 +438,33 @@ private fun TransactionsScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         SalesKpiCard(
-                            label = strings[CashierStringKey.SalesDashboardToday],
-                            value = when (kpiState) {
-                                BackendKpiState.Loading -> "..."
-                                BackendKpiState.Unavailable -> "—"
-                                is BackendKpiState.Available -> CentsFormatter.format(kpiState.grossTotalCents)
-                            },
+                            label = "Tämän kassan myynti",
+                            value = dayReport?.let { CentsFormatter.format(it.totalSalesCents) } ?: "...",
                             modifier = Modifier.weight(1f),
                         )
                         SalesKpiCard(
-                            label = strings[CashierStringKey.SalesDashboardLastHour],
-                            value = when (kpiState) {
-                                BackendKpiState.Loading -> "..."
-                                BackendKpiState.Unavailable -> "—"
-                                is BackendKpiState.Available -> CentsFormatter.format(kpiState.lastHourTotalCents)
-                            },
+                            label = "Käteinen",
+                            value = dayReport?.let { CentsFormatter.format(it.cashSalesCents) } ?: "...",
                             modifier = Modifier.weight(1f),
                         )
                         SalesKpiCard(
-                            label = strings[CashierStringKey.SalesDashboardReceiptCount],
-                            value = when (kpiState) {
-                                BackendKpiState.Loading -> "..."
-                                BackendKpiState.Unavailable -> "—"
-                                is BackendKpiState.Available -> kpiState.receiptCount.toString()
-                            },
+                            label = "Kortti",
+                            value = dayReport?.let { CentsFormatter.format(it.cardSalesCents) } ?: "...",
                             modifier = Modifier.weight(1f),
                         )
                         SalesKpiCard(
-                            label = strings[CashierStringKey.SalesDashboardOpenBillsKpi],
-                            value = openBillsCount.toString(),
+                            label = "Myyntejä",
+                            value = dayReport?.saleCount?.toString() ?: "...",
                             modifier = Modifier.weight(1f),
                         )
                     }
-                }
-
-                item { DashboardSectionHeader(strings[CashierStringKey.SalesDashboardHourlySales]) }
-                item {
-                    HourlySalesChart(
-                        buckets = hourlyBuckets,
-                        noDataText = strings[CashierStringKey.SalesDashboardNoHourlyData],
-                    )
                 }
 
                 item { DashboardSectionHeader(strings[CashierStringKey.SalesDashboardPaymentMethods]) }
-                if (paymentBuckets.isEmpty()) {
-                    item {
-                        Text(
-                            text = strings[CashierStringKey.SalesDashboardNoData],
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                } else {
+                if (paymentBuckets.isNotEmpty()) {
                     items(paymentBuckets, key = { it.methodCode }) { bucket ->
                         PaymentMethodRow(bucket = bucket)
                     }
-                }
-
-                item { DashboardSectionHeader(strings[CashierStringKey.SalesDashboardByCategory]) }
-                item {
-                    CategoryBreakdownSection(
-                        totalCents = if (kpiState is BackendKpiState.Available) kpiState.grossTotalCents else 0,
-                        categoryLabel = strings[CashierStringKey.SalesDashboardCategoryOther],
-                        noDataText = strings[CashierStringKey.SalesDashboardNoCategoryData],
-                    )
                 }
 
                 item { DashboardSectionHeader(strings[CashierStringKey.SalesDashboardOpenBillsSection]) }
@@ -688,26 +479,6 @@ private fun TransactionsScreen(
                 } else {
                     items(openBills, key = { it.stableId }) { event ->
                         OpenBillRow(
-                            event = event,
-                            selected = selectedEvent?.stableId == event.stableId,
-                            strings = strings,
-                            onClick = { onSelectEvent(event.stableId) },
-                        )
-                    }
-                }
-
-                item { DashboardSectionHeader(strings[CashierStringKey.SalesDashboardRecentSales]) }
-                if (recentSales.isEmpty()) {
-                    item {
-                        Text(
-                            text = strings[CashierStringKey.SalesDashboardNoData],
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                } else {
-                    items(recentSales, key = { it.stableId }) { event ->
-                        RecentSaleRow(
                             event = event,
                             selected = selectedEvent?.stableId == event.stableId,
                             strings = strings,
@@ -734,13 +505,13 @@ private fun TransactionsScreen(
 internal fun TransactionsRoute(
     openSaleRepository: OpenSaleRepository,
     salesLedgerOutboxDao: SalesLedgerOutboxDao,
-    backendBaseUrlProvider: () -> String = { "" },
+    salesDayReportRepository: SalesDayReportRepository,
 ) {
     val viewModel: TransactionsViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
         factory = TransactionsViewModel.factory(
             openSaleRepository = openSaleRepository,
             salesLedgerOutboxDao = salesLedgerOutboxDao,
-            backendBaseUrlProvider = backendBaseUrlProvider,
+            salesDayReportRepository = salesDayReportRepository,
         ),
     )
     val state by viewModel.uiState.collectAsState()
@@ -795,58 +566,6 @@ private fun DashboardSectionHeader(title: String) {
 }
 
 @Composable
-private fun HourlySalesChart(
-    buckets: List<HourlyBucket>,
-    noDataText: String,
-) {
-    val hasData = buckets.any { it.amountCents > 0 }
-    if (!hasData) {
-        Text(
-            text = noDataText,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        return
-    }
-    val maxCents = buckets.maxOf { it.amountCents }.coerceAtLeast(1)
-    val scrollState = rememberScrollState()
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(scrollState),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalAlignment = Alignment.Bottom,
-    ) {
-        buckets.forEach { bucket ->
-            val fraction = bucket.amountCents.toFloat() / maxCents.toFloat()
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Bottom,
-            ) {
-                Box(
-                    modifier = Modifier
-                        .width(26.dp)
-                        .height((80.dp * fraction).coerceAtLeast(2.dp))
-                        .background(
-                            color = if (bucket.amountCents > 0) {
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.72f)
-                            } else {
-                                MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)
-                            },
-                            shape = RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp),
-                        ),
-                )
-                Text(
-                    text = "${bucket.hour}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
-}
-
-@Composable
 private fun PaymentMethodRow(bucket: PaymentMethodBucket) {
     val pct = if (bucket.totalCents > 0) bucket.amountCents * 100 / bucket.totalCents else 0
     Surface(
@@ -880,49 +599,18 @@ private fun PaymentMethodRow(bucket: PaymentMethodBucket) {
 }
 
 @Composable
-private fun CategoryBreakdownSection(
-    totalCents: Int,
-    categoryLabel: String,
-    noDataText: String,
-) {
-    if (totalCents == 0) {
-        Text(
-            text = noDataText,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        return
-    }
+private fun UnsupportedReportSection(text: String) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(10.dp),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f),
     ) {
-        Column(
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text(text = categoryLabel, style = MaterialTheme.typography.bodyMedium)
-                Text(
-                    text = "100%  ${CentsFormatter.format(totalCents)}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(6.dp)
-                    .background(
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.72f),
-                        shape = RoundedCornerShape(3.dp),
-                    ),
-            )
-        }
+        )
     }
 }
 
@@ -1424,24 +1112,6 @@ private fun AirosActionDialog(
     )
 }
 
-private fun computeHourlyBuckets(events: List<TransactionRecord>): List<HourlyBucket> {
-    val byHour = Array(24) { 0 }
-    events.forEach { event ->
-        val cal = Calendar.getInstance().apply { timeInMillis = event.occurredAtEpochMillis }
-        byHour[cal.get(Calendar.HOUR_OF_DAY)] += event.amountCents
-    }
-    return (0 until 24).map { h -> HourlyBucket(hour = h, amountCents = byHour[h]) }
-}
-
-private fun computeHourlyBucketsFromRows(rows: List<BackendTransactionRow>): List<HourlyBucket> {
-    val byHour = Array(24) { 0 }
-    rows.forEach { row ->
-        val cal = Calendar.getInstance().apply { timeInMillis = row.finalizedAtMs }
-        byHour[cal.get(Calendar.HOUR_OF_DAY)] += row.totalCents
-    }
-    return (0 until 24).map { h -> HourlyBucket(hour = h, amountCents = byHour[h]) }
-}
-
 private fun computePaymentBuckets(events: List<TransactionRecord>, strings: CashierStrings): List<PaymentMethodBucket> {
     val totalCents = events.sumOf { it.amountCents }
     val byMethod = mutableMapOf<String, Int>()
@@ -1826,6 +1496,16 @@ private fun startOfTodayEpochMillis(): Long {
         set(Calendar.MINUTE, 0)
         set(Calendar.SECOND, 0)
         set(Calendar.MILLISECOND, 0)
+    }.timeInMillis
+}
+
+private fun startOfTomorrowEpochMillis(): Long {
+    return Calendar.getInstance().apply {
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+        add(Calendar.DAY_OF_YEAR, 1)
     }.timeInMillis
 }
 
