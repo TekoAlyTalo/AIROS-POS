@@ -1811,7 +1811,7 @@ private fun ShiftSchedulePulseCard(
 
         Column(
             modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             when {
                 loading && schedule == null -> ShiftEmptyText("Haetaan työvuorosuunnitelmaa backendistä.")
@@ -1968,7 +1968,7 @@ private fun ShiftSchedulePulseCard(
                                 .fillMaxWidth()
                                 .weight(1f)
                                 .then(pinchZoomModifier),
-                            verticalArrangement = Arrangement.spacedBy(5.dp),
+                            verticalArrangement = Arrangement.spacedBy(PulseTimelineSectionGap),
                         ) {
                             PulseTimelineHeader(
                                 windowStart = windowStart,
@@ -1985,7 +1985,7 @@ private fun ShiftSchedulePulseCard(
                                     modifier = Modifier
                                         .fillMaxSize()
                                         .verticalScroll(rememberScrollState()),
-                                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                                    verticalArrangement = Arrangement.spacedBy(PulseTimelineRowGap),
                                 ) {
                             plannedRows.forEachIndexed { index, staffRow ->
                                 PulseTimelineShiftRow(
@@ -2720,6 +2720,11 @@ private val PulseTimelineMinimumChartWidth = 684.dp
 private val PulseTimelineWidthPerHour = 96.dp
 private val PulseLeftColumnWidth = 224.dp
 private val PulseTimelineGap = 10.dp
+private val PulseTimelineSectionGap = 3.dp
+private val PulseTimelineRowGap = 2.dp
+private val PulseTimelineRowMinHeight = 38.dp
+private val PulseTimelineHeaderHeight = 16.dp
+private val PulseTimelineBarHeight = 18.dp
 private val PulseTickLabelWidth = 48.dp
 private val PulseTickLabelHalfWidth = 24.dp
 private val PulseChartEdgePadding = PulseTickLabelHalfWidth + 6.dp
@@ -2910,12 +2915,12 @@ private fun PulseTimelineHeader(
                 .weight(1f)
                 .padding(start = PulseTimelineGap)
                 .horizontalScroll(horizontalScrollState)
-                .height(18.dp),
+                .height(PulseTimelineHeaderHeight),
         ) {
             BoxWithConstraints(
                 modifier = Modifier
                     .width(chartWidth)
-                    .height(18.dp),
+                    .height(PulseTimelineHeaderHeight),
             ) {
                 tickTimes.forEach { tickTime ->
                     val fraction = pulseFraction(tickTime, windowStart, windowEnd)
@@ -2985,7 +2990,7 @@ private fun PulseTimelineShiftRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 42.dp)
+            .heightIn(min = PulseTimelineRowMinHeight)
             .clickable(enabled = shift.staffId.isNotBlank() || shift.staffName.isNotBlank()) {
                 onStaffSelected(shift.staffId, shift.staffName)
             },
@@ -3052,7 +3057,7 @@ private fun PulseTimelineShiftRow(
                         modifier = Modifier
                             .offset(x = pulseTimelineX(maxWidth, segmentStartFraction))
                             .width(pulseTimelineSpan(maxWidth, segmentWidthFraction))
-                            .height(22.dp)
+                            .height(PulseTimelineBarHeight)
                             .clip(RoundedCornerShape(5.dp))
                             .pulseBarModifier(pulseStatus),
                     )
@@ -3099,7 +3104,7 @@ private fun PulseTimelinePresenceRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 42.dp)
+            .heightIn(min = PulseTimelineRowMinHeight)
             .clickable(enabled = entry.staffId.isNotBlank() || entry.staffName.isNotBlank()) {
                 onStaffSelected(entry.staffId, entry.staffName)
             },
@@ -3192,7 +3197,7 @@ private fun PulseTimelinePresenceRow(
                         modifier = Modifier
                             .offset(x = pulseTimelineX(maxWidth, startFraction))
                             .width(pulseTimelineSpan(maxWidth, barWidthFraction))
-                            .height(22.dp)
+                            .height(PulseTimelineBarHeight)
                             .clip(RoundedCornerShape(5.dp))
                             .background(tint.copy(alpha = 0.55f), RoundedCornerShape(5.dp))
                             .border(BorderStroke(1.dp, tint.copy(alpha = 0.70f)), RoundedCornerShape(5.dp)),
@@ -3225,7 +3230,7 @@ private fun PulseTimelineLastSeenRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 42.dp)
+            .heightIn(min = PulseTimelineRowMinHeight)
             .clickable(enabled = event.staffId.isNotBlank() || event.staffName.isNotBlank()) {
                 onStaffSelected(event.staffId, event.staffName)
             },
