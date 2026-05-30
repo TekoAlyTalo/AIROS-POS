@@ -49,12 +49,20 @@ data class WorktimeAttendanceSyncEvent(
 // Classified outcome of attempting to deliver a single attendance event to the backend.
 // - Delivered: server accepted the event (new authoritative state will be available on next refresh).
 // - ConflictReconciled: server had already recorded this effective state (idempotent — treat as success).
+// - SequenceRecoverable: server rejected the event because the terminal_sequence_number conflicts with
+//   an existing accepted sequence (duplicate_terminal_sequence) or is behind the backend's last_seen
+//   counter (stale_terminal_sequence). The carried backendLastSeenTerminalSequence is the authoritative
+//   counter the caller MUST advance past before resubmitting under a fresh event_id.
 // - TransientFailure: network/offline condition; safe to retry soon.
 // - RetriableServerFailure: backend 5xx / indeterminate state; retry later.
 // - NonRetriableFailure: contract / schema / business rejection that will not self-heal on retry.
 sealed class AttendanceSyncOutcome {
     object Delivered : AttendanceSyncOutcome()
     object ConflictReconciled : AttendanceSyncOutcome()
+    data class SequenceRecoverable(
+        val backendLastSeenTerminalSequence: Long,
+        val message: String,
+    ) : AttendanceSyncOutcome()
     data class TransientFailure(val message: String) : AttendanceSyncOutcome()
     data class RetriableServerFailure(val message: String) : AttendanceSyncOutcome()
     data class NonRetriableFailure(val message: String) : AttendanceSyncOutcome()
@@ -169,7 +177,9 @@ class WorktimeAttendanceClient(
             val statusCode = connection.responseCode
             val body = readStream(if (statusCode in 200..299) connection.inputStream else connection.errorStream)
             when {
-                statusCode in 200..299 -> PrimaryEndpointResult.Final(AttendanceSyncOutcome.Delivered)
+                statusCode in 200..299 -> PrimaryEndpointResult.Final(
+                    classifyEventsSyncBody(body, event.terminalId, statusCode),
+                )
                 statusCode == 404 || statusCode == 405 || statusCode == 409 -> {
                     Log.d("AIROS", "[WorktimeAttendanceClient] event sync endpoint unavailable/conflict status=$statusCode body=$body")
                     PrimaryEndpointResult.Final(
@@ -195,6 +205,92 @@ class WorktimeAttendanceClient(
             PrimaryEndpointResult.Final(AttendanceSyncOutcome.NonRetriableFailure("Työaikatapahtumaa ei voitu vahvistaa: ${t.message.orEmpty()}"))
         } finally {
             connection?.disconnect()
+        }
+    }
+
+    // Inspect the /api/worktime/events/sync envelope and classify the single submitted event's
+    // outcome. The envelope returns HTTP 200 even when every event was rejected (per-event status
+    // lives in results[].processing_status/result_status), so the body must be inspected here.
+    // terminal_states[]/results[].last_seen_terminal_sequence are the backend's authoritative
+    // sequence counter — required to recover from terminal sequence drift.
+    private fun classifyEventsSyncBody(
+        body: String,
+        terminalId: String,
+        statusCode: Int,
+    ): AttendanceSyncOutcome {
+        if (body.isBlank()) {
+            Log.d("AIROS", "[WorktimeAttendanceClient] event sync 2xx with empty body status=$statusCode — falling back to Delivered")
+            return AttendanceSyncOutcome.Delivered
+        }
+        val root = try {
+            JSONObject(body)
+        } catch (t: Throwable) {
+            Log.d("AIROS", "[WorktimeAttendanceClient] event sync body parse failed: ${t.javaClass.simpleName}: ${t.message.orEmpty()} — falling back to Delivered")
+            return AttendanceSyncOutcome.Delivered
+        }
+        val results = root.optJSONArray("results")
+        val result = results?.optJSONObject(0)
+        if (result == null) {
+            Log.d("AIROS", "[WorktimeAttendanceClient] event sync body has no results[] — falling back to Delivered")
+            return AttendanceSyncOutcome.Delivered
+        }
+        val processingStatus = result.optString("processing_status", "").trim().lowercase()
+        val resultStatus = result.optString("result_status", "").trim().lowercase()
+        val resultMessage = result.optNullableString("result_message")
+        val lastSeenFromResult = result.optLong("last_seen_terminal_sequence", -1L)
+        val lastSeenFromTerminalStates = root.optJSONArray("terminal_states")?.let { array ->
+            (0 until array.length()).asSequence()
+                .mapNotNull { idx -> array.optJSONObject(idx) }
+                .firstOrNull { state -> state.optString("terminal_id") == terminalId }
+                ?.optLong("last_seen_terminal_sequence", -1L)
+        } ?: -1L
+        val backendLastSeen = maxOf(lastSeenFromResult, lastSeenFromTerminalStates).coerceAtLeast(0L)
+        return when {
+            resultStatus == "duplicate_terminal_sequence" || resultStatus == "stale_terminal_sequence" -> {
+                Log.d("AIROS", "[WorktimeAttendanceClient] event sync rejected result_status=$resultStatus backendLastSeen=$backendLastSeen message=$resultMessage")
+                AttendanceSyncOutcome.SequenceRecoverable(
+                    backendLastSeenTerminalSequence = backendLastSeen,
+                    message = resultMessage
+                        ?: "Työaikatapahtuma hylättiin: terminaalin järjestysnumero on jo käytössä palvelimella.",
+                )
+            }
+            resultStatus == "stale_requires_review" -> {
+                AttendanceSyncOutcome.NonRetriableFailure(
+                    resultMessage
+                        ?: "Työaikatapahtumaa ei voi viedä loppuun: edellinen työaika vaatii tarkistuksen.",
+                )
+            }
+            resultStatus == "unsupported_action" -> {
+                AttendanceSyncOutcome.NonRetriableFailure(
+                    resultMessage ?: "Työaikatapahtumaa ei tueta palvelimella.",
+                )
+            }
+            resultStatus in setOf("clocked_in", "clocked_out") -> AttendanceSyncOutcome.Delivered
+            resultStatus in setOf("already_active", "already_closed") -> AttendanceSyncOutcome.ConflictReconciled
+            processingStatus == "duplicate" -> {
+                // Re-submission of an event_id the server has seen before. If the original
+                // outcome was a normal success / reconciled state, treat as idempotent
+                // success; otherwise the original was a rejection being re-presented and
+                // must NOT be silently treated as success.
+                if (resultStatus in setOf("clocked_in", "clocked_out", "already_active", "already_closed")) {
+                    AttendanceSyncOutcome.ConflictReconciled
+                } else {
+                    AttendanceSyncOutcome.NonRetriableFailure(
+                        resultMessage
+                            ?: "Työaikatapahtumaa ei voitu vahvistaa palvelimella (toistuva tapahtuma, alkuperäinen hylätty).",
+                    )
+                }
+            }
+            processingStatus == "rejected" -> {
+                AttendanceSyncOutcome.NonRetriableFailure(
+                    resultMessage ?: "Työaikatapahtuma hylättiin palvelimella.",
+                )
+            }
+            processingStatus == "processed" -> AttendanceSyncOutcome.Delivered
+            else -> {
+                Log.d("AIROS", "[WorktimeAttendanceClient] event sync unrecognised processingStatus=$processingStatus resultStatus=$resultStatus body=$body")
+                AttendanceSyncOutcome.Delivered
+            }
         }
     }
 

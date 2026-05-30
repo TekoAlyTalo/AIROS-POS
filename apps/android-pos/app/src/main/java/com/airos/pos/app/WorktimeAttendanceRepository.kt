@@ -62,6 +62,11 @@ private const val AttendanceSyncStateContractBlocked = "contract_blocked"
 private const val OfflineSyncNotice = "Offline, syncing later"
 private const val DefaultRestaurantKey = "ravintola_default"
 private const val DefaultTerminalId = "android-pos-terminal"
+// Upper bound on terminal-sequence recoveries within a single syncPendingNow call.
+// Each recovery rewrites one rejected event to a fresh sequence above backend.last_seen.
+// A cap prevents an infinite loop if backend keeps reporting a stale sequence (which would
+// indicate a deeper bug, not normal drift to recover from).
+private const val MaxSequenceRecoveriesPerSync = 5
 
 class WorktimeAttendanceRepository(
     private val database: AirosPosDatabase,
@@ -176,6 +181,7 @@ class WorktimeAttendanceRepository(
         val batchStartedAt = System.currentTimeMillis()
         val touchedStaff = linkedMapOf<String, String>()
         var syncedAnyEvent = false
+        var sequenceRecoveriesUsed = 0
         var pendingEvents = attendanceDao.pendingEvents(scope.metadataKey, limit = 25)
 
         if (pendingEvents.isEmpty()) {
@@ -194,6 +200,36 @@ class WorktimeAttendanceRepository(
                         attendanceDao.markEventSynced(event.eventId, batchId, System.currentTimeMillis())
                         touchedStaff[event.staffId] = event.staffName
                         syncedAnyEvent = true
+                    }
+                    is AttendanceSyncOutcome.SequenceRecoverable -> {
+                        // Backend rejected because terminal_sequence_number is already taken
+                        // (or is behind backend.last_seen_terminal_sequence). The rejected
+                        // event_id stays rejected in the backend ledger; we cannot reuse it
+                        // because backend's duplicate-event_id short-circuit would re-present
+                        // the same rejection. Replace the local event with a fresh event_id at
+                        // a sequence strictly greater than the backend's authoritative counter,
+                        // and let the loop re-pick it up. Cap the number of recoveries per
+                        // sync to avoid runaway loops if something is fundamentally desynced.
+                        if (sequenceRecoveriesUsed >= MaxSequenceRecoveriesPerSync) {
+                            attendanceDao.markEventBlocked(
+                                event.eventId,
+                                batchId,
+                                System.currentTimeMillis(),
+                                "Terminal sequence recovery limit reached: ${outcome.message}",
+                            )
+                            markSyncState(scope, AttendanceSyncStateContractBlocked, batchId, outcome.message)
+                            return@withLock PosResult.Failure(outcome.message)
+                        }
+                        sequenceRecoveriesUsed += 1
+                        recoverEventSequenceFromBackend(
+                            scope = scope,
+                            rejected = event,
+                            backendLastSeenTerminalSequence = outcome.backendLastSeenTerminalSequence,
+                            batchId = batchId,
+                            rejectionMessage = outcome.message,
+                        )
+                        // Do not mark synced; the next pendingEvents() read will surface the
+                        // replacement event with the corrected sequence.
                     }
                     is AttendanceSyncOutcome.TransientFailure -> {
                         attendanceDao.markEventFailed(event.eventId, batchId, System.currentTimeMillis(), outcome.message)
@@ -305,6 +341,54 @@ class WorktimeAttendanceRepository(
                 ),
             )
             event
+        }
+    }
+
+    // Replace a locally-queued event whose terminal_sequence_number was rejected by the
+    // backend (duplicate_terminal_sequence / stale_terminal_sequence). The rejected
+    // event_id is parked (so it never retries under the bad sequence) and a fresh event
+    // with the same business payload but a new event_id and a sequence strictly above
+    // backend.last_seen_terminal_sequence is enqueued in its place. Local metadata's
+    // lastSeenTerminalSequence is advanced so subsequent appends never reuse the gap.
+    private suspend fun recoverEventSequenceFromBackend(
+        scope: AttendanceScope,
+        rejected: AttendanceEventLocalEntity,
+        backendLastSeenTerminalSequence: Long,
+        batchId: String,
+        rejectionMessage: String,
+    ) {
+        database.withTransaction {
+            val now = System.currentTimeMillis()
+            attendanceDao.markEventBlocked(
+                rejected.eventId,
+                batchId,
+                now,
+                "Replaced after backend rejection (backend last_seen=$backendLastSeenTerminalSequence): $rejectionMessage",
+            )
+            val metadata = attendanceDao.loadSyncMetadata(scope.metadataKey) ?: scope.emptyMetadata(now)
+            val baseline = maxOf(
+                attendanceDao.maxTerminalSequence(scope.metadataKey),
+                metadata.lastSeenTerminalSequence,
+                backendLastSeenTerminalSequence,
+            )
+            val replacementSequence = baseline + 1
+            val replacement = rejected.copy(
+                eventId = UUID.randomUUID().toString(),
+                terminalSequenceNumber = replacementSequence,
+                syncStatus = AttendanceSyncStatusQueued,
+                syncBatchId = null,
+                lastError = null,
+                updatedAtEpochMillis = now,
+            )
+            attendanceDao.insertEvent(replacement)
+            attendanceDao.upsertSyncMetadata(
+                metadata.copy(
+                    lastSeenTerminalSequence = replacementSequence,
+                    lastError = null,
+                    syncState = AttendanceSyncStateSyncing,
+                    updatedAtEpochMillis = now,
+                ),
+            )
         }
     }
 
