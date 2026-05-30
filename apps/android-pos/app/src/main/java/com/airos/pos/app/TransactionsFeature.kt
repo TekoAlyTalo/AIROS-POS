@@ -1,8 +1,11 @@
 package com.airos.pos.app
 
+import android.annotation.SuppressLint
 import android.text.format.DateFormat
-import android.util.Log
-import androidx.compose.foundation.background
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,12 +23,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -34,30 +35,23 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.airos.pos.core.common.CentsFormatter
-import com.airos.pos.core.database.dao.SalesLedgerOutboxDao
-import com.airos.pos.core.database.entity.SalesLedgerOutboxLocalEntity
+import com.airos.pos.core.model.LocalFinalizedSaleRecord
 import com.airos.pos.core.model.LocalSalesDayReport
 import com.airos.pos.core.model.PaymentMethod
 import com.airos.pos.core.model.PersistedOpenSale
 import com.airos.pos.core.model.PersistedOpenSaleLine
 import com.airos.pos.core.model.PersistedOpenSaleTransferEvent
-import com.airos.pos.core.model.ReceiptAlignment
-import com.airos.pos.core.model.ReceiptDocument
-import com.airos.pos.core.model.ReceiptLine
-import com.airos.pos.core.model.ReceiptPaymentRecord
-import com.airos.pos.core.model.ReceiptTotals
-import com.airos.pos.core.model.ReceiptVatRow
 import com.airos.pos.core.ui.PosPane
 import com.airos.pos.domain.OpenSaleRepository
 import com.airos.pos.domain.SalesDayReportRepository
@@ -71,8 +65,6 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import org.json.JSONArray
-import org.json.JSONObject
 
 private enum class TransactionsScope {
     CURRENT,
@@ -90,10 +82,6 @@ private enum class TransactionsStatusFilter {
     ALL,
     OPEN,
     PAID,
-    SYNCED,
-    PENDING,
-    FAILED,
-    BLOCKED,
 }
 
 private enum class TransactionsPaymentFilter {
@@ -102,6 +90,11 @@ private enum class TransactionsPaymentFilter {
     CARD,
     VOUCHER,
     MIXED,
+}
+
+private enum class TransactionsSortOption {
+    TIME_DESC,
+    AMOUNT_DESC,
 }
 
 private enum class TransactionBusinessStatus {
@@ -116,12 +109,6 @@ private enum class TransactionSyncStatus {
     FAILED,
     BLOCKED,
     UNKNOWN,
-}
-
-private enum class SalesActionDialogType {
-    REPRINT,
-    REFUND,
-    CORRECT,
 }
 
 private data class TransactionPaymentSnapshot(
@@ -152,23 +139,11 @@ private data class TransactionRecord(
     val businessStatus: TransactionBusinessStatus,
     val syncStatus: TransactionSyncStatus? = null,
     val paymentMethods: List<TransactionPaymentSnapshot> = emptyList(),
-    val receiptDocument: ReceiptDocument? = null,
     val openSale: PersistedOpenSale? = null,
     val transferEvents: List<PersistedOpenSaleTransferEvent> = emptyList(),
     val timeline: List<TransactionTimelineEntry> = emptyList(),
-    val publicReceiptUrlPath: String? = null,
-)
-
-private data class ParsedFinalizeSaleRequest(
-    val occurredAtEpochMillis: Long?,
-    val receiptNumber: String?,
-    val tableId: String?,
-    val tableLabel: String?,
-    val cashierStaffId: String?,
-    val cashierName: String?,
-    val totalCents: Int?,
-    val payments: List<TransactionPaymentSnapshot>,
-    val receiptDocument: ReceiptDocument?,
+    val publicReceiptUrl: String? = null,
+    val publicUrlPath: String? = null,
 )
 
 private data class TransactionsUiState(
@@ -177,6 +152,7 @@ private data class TransactionsUiState(
     val dateRange: TransactionsDateRange = TransactionsDateRange.ALL,
     val statusFilter: TransactionsStatusFilter = TransactionsStatusFilter.ALL,
     val paymentFilter: TransactionsPaymentFilter = TransactionsPaymentFilter.ALL,
+    val sortOption: TransactionsSortOption = TransactionsSortOption.TIME_DESC,
     val currentEvents: List<TransactionRecord> = emptyList(),
     val pastEvents: List<TransactionRecord> = emptyList(),
     val selectedEventId: String? = null,
@@ -192,8 +168,8 @@ private data class PaymentMethodBucket(
 
 private class TransactionsRepository(
     private val openSaleRepository: OpenSaleRepository,
-    private val salesLedgerOutboxDao: SalesLedgerOutboxDao,
     private val salesDayReportRepository: SalesDayReportRepository,
+    private val backendBaseUrl: String?,
 ) {
     fun observeCurrentTransactions(): Flow<List<TransactionRecord>> {
         return combine(
@@ -220,43 +196,11 @@ private class TransactionsRepository(
                         businessStatus = TransactionBusinessStatus.OPEN,
                         syncStatus = null,
                         paymentMethods = emptyList(),
-                        receiptDocument = null,
                         openSale = sale,
                         transferEvents = saleTransfers,
                         timeline = buildCurrentTimeline(sale, saleTransfers),
-                        publicReceiptUrlPath = null,
-                    )
-                }
-        }
-    }
-
-    fun observePastTransactions(): Flow<List<TransactionRecord>> {
-        return salesLedgerOutboxDao.observeAll().map { entities ->
-            entities
-                .sortedByDescending { it.createdAtEpochMillis }
-                .map { entity ->
-                    val parsed = parseFinalizeSaleRequest(entity.requestJson)
-                    val syncStatus = entity.syncStatus.toTransactionSyncStatus()
-                    TransactionRecord(
-                        stableId = "past:${entity.sourcePosEventId}",
-                        source = TransactionsScope.PAST,
-                        occurredAtEpochMillis = parsed.occurredAtEpochMillis ?: entity.createdAtEpochMillis,
-                        updatedAtEpochMillis = entity.updatedAtEpochMillis,
-                        receiptNumber = parsed.receiptNumber ?: entity.receiptNumber,
-                        saleId = entity.serverSaleId,
-                        tableId = parsed.tableId ?: entity.tableId,
-                        tableLabel = parsed.tableLabel,
-                        actorStaffId = parsed.cashierStaffId ?: entity.cashierStaffId,
-                        actorDisplayName = parsed.cashierName ?: parsed.receiptDocument?.cashierName,
-                        amountCents = parsed.totalCents ?: entity.totalCents,
-                        businessStatus = TransactionBusinessStatus.PAID,
-                        syncStatus = syncStatus,
-                        paymentMethods = parsed.payments,
-                        receiptDocument = parsed.receiptDocument,
-                        openSale = null,
-                        transferEvents = emptyList(),
-                        timeline = buildPastTimeline(entity, syncStatus),
-                        publicReceiptUrlPath = entity.publicUrlPath,
+                        publicReceiptUrl = null,
+                        publicUrlPath = null,
                     )
                 }
         }
@@ -267,6 +211,14 @@ private class TransactionsRepository(
             startEpochMillisInclusive = startOfTodayEpochMillis(),
             endEpochMillisExclusive = startOfTomorrowEpochMillis(),
         )
+    }
+
+    fun observePaidTransactions(): Flow<List<TransactionRecord>> {
+        return observeTodaySalesReport().map { report ->
+            report.finalizedSales
+                .sortedByDescending { it.finalizedAtEpochMillis }
+                .map { sale -> sale.toTransactionRecord(backendBaseUrl) }
+        }
     }
 
     private fun buildCurrentTimeline(
@@ -298,45 +250,64 @@ private class TransactionsRepository(
         return timeline.sortedBy { it.occurredAtEpochMillis }
     }
 
-    private fun buildPastTimeline(
-        entity: SalesLedgerOutboxLocalEntity,
-        syncStatus: TransactionSyncStatus,
-    ): List<TransactionTimelineEntry> {
-        val timeline = mutableListOf(
-            TransactionTimelineEntry(
-                id = "finalized:${entity.sourcePosEventId}",
-                titleKey = CashierStringKey.TransactionsTimelineFinalized,
-                occurredAtEpochMillis = entity.createdAtEpochMillis,
-                supportingText = entity.receiptNumber,
-            ),
-        )
-        entity.syncedAtEpochMillis?.let { syncedAt ->
-            timeline += TransactionTimelineEntry(
-                id = "synced:${entity.sourcePosEventId}",
-                titleKey = CashierStringKey.TransactionsTimelineSynced,
-                occurredAtEpochMillis = syncedAt,
-                supportingText = entity.serverSaleId ?: entity.publicUrlPath,
-            )
-        }
-        if (syncStatus == TransactionSyncStatus.FAILED) {
-            timeline += TransactionTimelineEntry(
-                id = "failed:${entity.sourcePosEventId}",
-                titleKey = CashierStringKey.TransactionsTimelineFailed,
-                occurredAtEpochMillis = entity.updatedAtEpochMillis,
-                supportingText = entity.lastError,
-            )
-        }
-        if (syncStatus == TransactionSyncStatus.BLOCKED) {
-            timeline += TransactionTimelineEntry(
-                id = "blocked:${entity.sourcePosEventId}",
-                titleKey = CashierStringKey.TransactionsTimelineBlocked,
-                occurredAtEpochMillis = entity.updatedAtEpochMillis,
-                supportingText = entity.lastError,
-            )
-        }
-        return timeline.sortedBy { it.occurredAtEpochMillis }
-    }
+}
 
+private fun LocalFinalizedSaleRecord.toTransactionRecord(backendBaseUrl: String?): TransactionRecord {
+    val resolvedPublicReceiptUrl = resolvePublicReceiptUrl(
+        publicReceiptUrl = publicReceiptUrl,
+        publicUrlPath = publicUrlPath,
+        backendBaseUrl = backendBaseUrl,
+    )
+    return TransactionRecord(
+        stableId = "paid:$id",
+        source = TransactionsScope.PAST,
+        occurredAtEpochMillis = finalizedAtEpochMillis,
+        updatedAtEpochMillis = finalizedAtEpochMillis,
+        receiptNumber = receiptNumber,
+        saleId = id,
+        tableId = tableId,
+        tableLabel = tableLabel,
+        actorStaffId = sellerStaffId,
+        actorDisplayName = sellerDisplayName,
+        amountCents = totalCents,
+        businessStatus = TransactionBusinessStatus.PAID,
+        syncStatus = TransactionSyncStatus.SYNCED,
+        paymentMethods = payments.map { payment ->
+            TransactionPaymentSnapshot(
+                methodCode = payment.method.name,
+                amountCents = payment.amountCents,
+                displayLabel = payment.method.name,
+            )
+        },
+        openSale = null,
+        transferEvents = emptyList(),
+        timeline = listOf(
+            TransactionTimelineEntry(
+                id = "finalized:$id",
+                titleKey = CashierStringKey.TransactionsTimelineFinalized,
+                occurredAtEpochMillis = finalizedAtEpochMillis,
+                supportingText = receiptNumber,
+            ),
+        ),
+        publicReceiptUrl = resolvedPublicReceiptUrl,
+        publicUrlPath = publicUrlPath,
+    )
+}
+
+private fun resolvePublicReceiptUrl(
+    publicReceiptUrl: String?,
+    publicUrlPath: String?,
+    backendBaseUrl: String?,
+): String? {
+    val directUrl = publicReceiptUrl?.trim().orEmpty()
+    if (directUrl.startsWith("http://") || directUrl.startsWith("https://")) return directUrl
+
+    val rawPath = publicUrlPath?.trim().orEmpty()
+    if (rawPath.startsWith("http://") || rawPath.startsWith("https://")) return rawPath
+
+    val baseUrl = backendBaseUrl?.trim()?.trimEnd('/').orEmpty()
+    if (baseUrl.isBlank() || rawPath.isBlank()) return null
+    return "$baseUrl/${rawPath.trimStart('/')}"
 }
 
 private class TransactionsViewModel private constructor(
@@ -352,7 +323,7 @@ private class TransactionsViewModel private constructor(
             }
         }
         viewModelScope.launch {
-            repository.observePastTransactions().collect { items ->
+            repository.observePaidTransactions().collect { items ->
                 mutableState.update { current -> current.copy(pastEvents = items) }
             }
         }
@@ -367,18 +338,30 @@ private class TransactionsViewModel private constructor(
         mutableState.update { it.copy(selectedEventId = stableId) }
     }
 
+    fun updateSearchQuery(query: String) {
+        mutableState.update { it.copy(searchQuery = query) }
+    }
+
+    fun setStatusFilter(filter: TransactionsStatusFilter) {
+        mutableState.update { it.copy(statusFilter = filter) }
+    }
+
+    fun setSortOption(sortOption: TransactionsSortOption) {
+        mutableState.update { it.copy(sortOption = sortOption) }
+    }
+
     companion object {
         fun factory(
             openSaleRepository: OpenSaleRepository,
-            salesLedgerOutboxDao: SalesLedgerOutboxDao,
             salesDayReportRepository: SalesDayReportRepository,
+            backendBaseUrl: String?,
         ): ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 TransactionsViewModel(
                     repository = TransactionsRepository(
                         openSaleRepository = openSaleRepository,
-                        salesLedgerOutboxDao = salesLedgerOutboxDao,
                         salesDayReportRepository = salesDayReportRepository,
+                        backendBaseUrl = backendBaseUrl,
                     ),
                 )
             }
@@ -390,10 +373,31 @@ private class TransactionsViewModel private constructor(
 private fun TransactionsScreen(
     state: TransactionsUiState,
     onSelectEvent: (String) -> Unit,
+    onSearchQueryChange: (String) -> Unit,
+    onStatusFilterChange: (TransactionsStatusFilter) -> Unit,
+    onSortOptionChange: (TransactionsSortOption) -> Unit,
 ) {
     val strings = rememberCashierStrings()
 
     val openBills = state.currentEvents
+    val paidSales = state.pastEvents
+    val dayEvents = remember(
+        openBills,
+        paidSales,
+        state.searchQuery,
+        state.statusFilter,
+        state.sortOption,
+    ) {
+        (paidSales + openBills)
+            .filter { it.matchesStatus(state.statusFilter) }
+            .filter { it.matchesSearch(state.searchQuery) }
+            .let { events ->
+                when (state.sortOption) {
+                    TransactionsSortOption.TIME_DESC -> events.sortedByDescending { it.occurredAtEpochMillis }
+                    TransactionsSortOption.AMOUNT_DESC -> events.sortedByDescending { it.amountCents }
+                }
+            }
+    }
 
     val dayReport = state.localDayReport
     val paymentBuckets = remember(dayReport, strings) {
@@ -411,8 +415,8 @@ private fun TransactionsScreen(
             .orEmpty()
     }
 
-    val selectedEvent = remember(state.selectedEventId, openBills) {
-        openBills.firstOrNull { it.stableId == state.selectedEventId }
+    val selectedEvent = remember(state.selectedEventId, dayEvents) {
+        dayEvents.firstOrNull { it.stableId == state.selectedEventId }
     }
 
     Row(
@@ -420,8 +424,8 @@ private fun TransactionsScreen(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         PosPane(
-            title = strings[CashierStringKey.TransactionsTitle],
-            supportingText = "Tämän kassan päiväraportti ja avoimet laskut.",
+            title = "Päivän myynti",
+            supportingText = "Tämän kassan myynti, maksutavat ja avoimet laskut.",
             modifier = Modifier
                 .weight(1.2f)
                 .fillMaxHeight(),
@@ -438,8 +442,18 @@ private fun TransactionsScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         SalesKpiCard(
-                            label = "Tämän kassan myynti",
+                            label = "Myynti tänään",
                             value = dayReport?.let { CentsFormatter.format(it.totalSalesCents) } ?: "...",
+                            modifier = Modifier.weight(1f),
+                        )
+                        SalesKpiCard(
+                            label = "Avoinna",
+                            value = openBills.size.toString(),
+                            modifier = Modifier.weight(1f),
+                        )
+                        SalesKpiCard(
+                            label = "Myyntejä",
+                            value = dayReport?.saleCount?.toString() ?: "...",
                             modifier = Modifier.weight(1f),
                         )
                         SalesKpiCard(
@@ -452,11 +466,6 @@ private fun TransactionsScreen(
                             value = dayReport?.let { CentsFormatter.format(it.cardSalesCents) } ?: "...",
                             modifier = Modifier.weight(1f),
                         )
-                        SalesKpiCard(
-                            label = "Myyntejä",
-                            value = dayReport?.saleCount?.toString() ?: "...",
-                            modifier = Modifier.weight(1f),
-                        )
                     }
                 }
 
@@ -465,25 +474,86 @@ private fun TransactionsScreen(
                     items(paymentBuckets, key = { it.methodCode }) { bucket ->
                         PaymentMethodRow(bucket = bucket)
                     }
-                }
-
-                item { DashboardSectionHeader(strings[CashierStringKey.SalesDashboardOpenBillsSection]) }
-                if (openBills.isEmpty()) {
+                } else {
                     item {
                         Text(
-                            text = strings[CashierStringKey.SalesDashboardNoOpenBills],
+                            text = "Ei maksettuja myyntejä tänään.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
+                item {
+                    OutlinedTextField(
+                        value = state.searchQuery,
+                        onValueChange = onSearchQueryChange,
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        placeholder = { Text("Hae myyntiä, pöytää tai kuittia") },
+                    )
+                }
+
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        ReportFilterChip(
+                            label = "Kaikki",
+                            selected = state.statusFilter == TransactionsStatusFilter.ALL,
+                            onClick = { onStatusFilterChange(TransactionsStatusFilter.ALL) },
+                        )
+                        ReportFilterChip(
+                            label = "Maksetut",
+                            selected = state.statusFilter == TransactionsStatusFilter.PAID,
+                            onClick = { onStatusFilterChange(TransactionsStatusFilter.PAID) },
+                        )
+                        ReportFilterChip(
+                            label = "Avoimet",
+                            selected = state.statusFilter == TransactionsStatusFilter.OPEN,
+                            onClick = { onStatusFilterChange(TransactionsStatusFilter.OPEN) },
+                        )
+                        Spacer(modifier = Modifier.weight(1f))
+                        ReportFilterChip(
+                            label = "Uusin ensin",
+                            selected = state.sortOption == TransactionsSortOption.TIME_DESC,
+                            onClick = { onSortOptionChange(TransactionsSortOption.TIME_DESC) },
+                        )
+                        ReportFilterChip(
+                            label = "Suurin summa",
+                            selected = state.sortOption == TransactionsSortOption.AMOUNT_DESC,
+                            onClick = { onSortOptionChange(TransactionsSortOption.AMOUNT_DESC) },
+                        )
+                    }
+                }
+
+                item { DashboardSectionHeader("Päivän tapahtumat") }
+                if (dayEvents.isEmpty()) {
+                    item {
+                        Text(
+                            text = "Ei tapahtumia valituilla rajauksilla.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 } else {
-                    items(openBills, key = { it.stableId }) { event ->
-                        OpenBillRow(
-                            event = event,
-                            selected = selectedEvent?.stableId == event.stableId,
-                            strings = strings,
-                            onClick = { onSelectEvent(event.stableId) },
-                        )
+                    items(dayEvents, key = { it.stableId }) { event ->
+                        if (event.businessStatus == TransactionBusinessStatus.OPEN) {
+                            OpenBillRow(
+                                event = event,
+                                selected = selectedEvent?.stableId == event.stableId,
+                                strings = strings,
+                                onClick = { onSelectEvent(event.stableId) },
+                            )
+                        } else {
+                            RecentSaleRow(
+                                event = event,
+                                selected = selectedEvent?.stableId == event.stableId,
+                                strings = strings,
+                                onClick = { onSelectEvent(event.stableId) },
+                            )
+                        }
                     }
                 }
 
@@ -491,7 +561,7 @@ private fun TransactionsScreen(
             }
         }
 
-        PaperReceiptPane(
+        SalesDetailPane(
             event = selectedEvent,
             strings = strings,
             modifier = Modifier
@@ -504,20 +574,23 @@ private fun TransactionsScreen(
 @Composable
 internal fun TransactionsRoute(
     openSaleRepository: OpenSaleRepository,
-    salesLedgerOutboxDao: SalesLedgerOutboxDao,
     salesDayReportRepository: SalesDayReportRepository,
+    backendBaseUrl: String?,
 ) {
     val viewModel: TransactionsViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
         factory = TransactionsViewModel.factory(
             openSaleRepository = openSaleRepository,
-            salesLedgerOutboxDao = salesLedgerOutboxDao,
             salesDayReportRepository = salesDayReportRepository,
+            backendBaseUrl = backendBaseUrl,
         ),
     )
     val state by viewModel.uiState.collectAsState()
     TransactionsScreen(
         state = state,
         onSelectEvent = viewModel::selectEvent,
+        onSearchQueryChange = viewModel::updateSearchQuery,
+        onStatusFilterChange = viewModel::setStatusFilter,
+        onSortOptionChange = viewModel::setSortOption,
     )
 }
 
@@ -748,17 +821,45 @@ private fun RecentSaleRow(
 }
 
 @Composable
-private fun PaperReceiptPane(
+private fun ReportFilterChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.clickable(onClick = onClick),
+        shape = RoundedCornerShape(999.dp),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        },
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.22f),
+        ),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun SalesDetailPane(
     event: TransactionRecord?,
     strings: CashierStrings,
     modifier: Modifier = Modifier,
 ) {
-    var activeDialog by remember { mutableStateOf<SalesActionDialogType?>(null) }
-
     PosPane(
         title = strings[CashierStringKey.TransactionsReceiptPreview],
         supportingText = event?.detailSupportingText(strings)
-            ?: strings[CashierStringKey.SalesDashboardSelectSaleHint],
+            ?: "Kuittitiedot näytetään, kun myynti valitaan.",
         modifier = modifier,
     ) {
         Box(
@@ -766,352 +867,229 @@ private fun PaperReceiptPane(
                 .fillMaxWidth()
                 .weight(1f),
         ) {
-            if (event == null) {
-                Text(
-                    text = strings[CashierStringKey.SalesDashboardSelectSaleHint],
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else {
-                PaperReceiptCard(
-                    event = event,
-                    strings = strings,
-                    modifier = Modifier.fillMaxSize(),
-                )
+            when {
+                event == null -> {
+                    Text(
+                        text = "Kuittitiedot näytetään, kun myynti valitaan.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                event.businessStatus == TransactionBusinessStatus.OPEN -> {
+                    OpenBillDetailCard(
+                        event = event,
+                        strings = strings,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+                event.publicReceiptUrl.isNullOrBlank() -> {
+                    ReceiptTruthError(
+                        message = "Julkisen kuitin linkki puuttuu tältä myynniltä. Kuittia ei näytetä ilman backendin kuittitotuutta.",
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                else -> {
+                    PublicReceiptPreview(
+                        publicReceiptUrl = event.publicReceiptUrl,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
         }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            OutlinedButton(
-                onClick = { activeDialog = SalesActionDialogType.REPRINT },
-                enabled = event != null,
-                modifier = Modifier.weight(1f),
-            ) {
-                Text(strings[CashierStringKey.TransactionsActionReprint])
-            }
-            OutlinedButton(
-                onClick = { activeDialog = SalesActionDialogType.REFUND },
-                enabled = event?.businessStatus == TransactionBusinessStatus.PAID,
-                modifier = Modifier.weight(1f),
-            ) {
-                Text(strings[CashierStringKey.TransactionsActionRefund])
-            }
-            OutlinedButton(
-                onClick = { activeDialog = SalesActionDialogType.CORRECT },
-                enabled = event?.businessStatus == TransactionBusinessStatus.PAID,
-                modifier = Modifier.weight(1f),
-            ) {
-                Text(strings[CashierStringKey.TransactionsActionCorrect])
-            }
-        }
-    }
-
-    activeDialog?.let { type ->
-        AirosActionDialog(
-            type = type,
-            strings = strings,
-            onDismiss = { activeDialog = null },
-        )
     }
 }
 
 @Composable
-private fun PaperReceiptCard(
+private fun OpenBillDetailCard(
     event: TransactionRecord,
     strings: CashierStrings,
     modifier: Modifier = Modifier,
 ) {
-    val receiptPaper = Color(0xFFFAF9F5)
-    val receiptInk = Color(0xFF1C1410)
     val scrollState = rememberScrollState()
+    val openSale = event.openSale
 
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(6.dp),
-        color = receiptPaper,
-        shadowElevation = 4.dp,
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f),
     ) {
         Column(
             modifier = Modifier
-                .padding(horizontal = 18.dp, vertical = 20.dp)
+                .padding(14.dp)
                 .verticalScroll(scrollState),
-            verticalArrangement = Arrangement.spacedBy(3.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            // Header block
             Text(
-                text = event.receiptDocument?.title?.takeIf { it.isNotBlank() }
-                    ?: strings[CashierStringKey.TransactionsReceiptPreview],
-                style = MaterialTheme.typography.titleMedium,
+                text = strings[CashierStringKey.SalesDashboardOpenBillDetail],
+                style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold,
-                color = receiptInk,
-                modifier = Modifier.fillMaxWidth(),
-                textAlign = TextAlign.Center,
             )
-            val headerTimestamp = event.receiptDocument?.printedAtEpochMillis
-                ?: event.occurredAtEpochMillis
+
+            DetailKvRow(label = strings[CashierStringKey.TransactionsFieldStatus], value = event.statusLabel(strings))
+            DetailKvRow(label = strings[CashierStringKey.TransactionsFieldTime], value = formatUiDateTime(event.occurredAtEpochMillis))
+            DetailKvRow(label = strings[CashierStringKey.TransactionsFieldTable], value = event.locationLabel(strings))
+
+            if (openSale == null || openSale.lines.isEmpty()) {
+                Text(
+                    text = strings[CashierStringKey.TransactionsNoLineItems],
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    openSale.lines.forEach { line ->
+                        OpenBillLineRow(line = line, strings = strings)
+                    }
+                }
+            }
+
+            DetailKvRow(
+                label = strings[CashierStringKey.TransactionsTotal],
+                value = CentsFormatter.format(event.amountCents),
+                bold = true,
+            )
+        }
+    }
+}
+
+@Composable
+private fun OpenBillLineRow(
+    line: PersistedOpenSaleLine,
+    strings: CashierStrings,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
             Text(
-                text = formatUiDateTime(headerTimestamp),
+                text = "${line.quantity}x ${line.name}",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = CentsFormatter.format(line.totalCents()),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(start = 8.dp),
+            )
+        }
+        line.discountSummary(strings)?.let { discount ->
+            Text(
+                text = discount,
                 style = MaterialTheme.typography.bodySmall,
-                color = receiptInk.copy(alpha = 0.65f),
-                modifier = Modifier.fillMaxWidth(),
-                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            event.receiptDocument?.receiptNumber?.let { num ->
-                Text(
-                    text = num,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = receiptInk.copy(alpha = 0.65f),
-                    modifier = Modifier.fillMaxWidth(),
-                    textAlign = TextAlign.Center,
-                )
-            }
-            val location = event.receiptDocument?.tableLabel ?: event.tableLabel
-            if (!location.isNullOrBlank()) {
-                Text(
-                    text = location,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = receiptInk.copy(alpha = 0.65f),
-                    modifier = Modifier.fillMaxWidth(),
-                    textAlign = TextAlign.Center,
-                )
-            }
-            event.receiptDocument?.cashierName?.takeIf { it.isNotBlank() }?.let { cashier ->
-                Text(
-                    text = cashier,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = receiptInk.copy(alpha = 0.65f),
-                    modifier = Modifier.fillMaxWidth(),
-                    textAlign = TextAlign.Center,
-                )
-            }
-            event.receiptDocument?.headerText?.takeIf { it.isNotBlank() }?.let { header ->
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = header,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = receiptInk.copy(alpha = 0.8f),
-                )
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-            ReceiptDivider(inkColor = receiptInk)
-            Spacer(modifier = Modifier.height(4.dp))
-
-            // Line items
-            if (event.receiptDocument != null) {
-                event.receiptDocument.lines.forEach { line ->
-                    ReceiptLineRow(line = line, inkColor = receiptInk)
-                }
-            } else if (event.openSale != null) {
-                event.openSale.lines.forEach { line ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Text(
-                            text = "${line.quantity}x ${line.name}",
-                            modifier = Modifier.weight(1f),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = receiptInk,
-                        )
-                        Text(
-                            text = CentsFormatter.format(line.totalCents()),
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = receiptInk,
-                        )
-                    }
-                }
-            } else {
-                Text(
-                    text = strings[CashierStringKey.TransactionsUnavailable],
-                    style = MaterialTheme.typography.bodySmall,
-                    color = receiptInk.copy(alpha = 0.55f),
-                )
-            }
-
-            // Totals
-            Spacer(modifier = Modifier.height(4.dp))
-            ReceiptDivider(inkColor = receiptInk)
-            Spacer(modifier = Modifier.height(4.dp))
-
-            val totals = event.receiptDocument?.totals
-            if (totals != null) {
-                if (totals.discountCents > 0) {
-                    ReceiptKvRow(strings[CashierStringKey.TransactionsDiscount], CentsFormatter.format(totals.discountCents), receiptInk)
-                }
-                if (totals.taxCents > 0) {
-                    ReceiptKvRow(strings[CashierStringKey.TransactionsTax], CentsFormatter.format(totals.taxCents), receiptInk)
-                }
-                ReceiptKvRow(strings[CashierStringKey.TransactionsTotal], CentsFormatter.format(totals.totalCents), receiptInk, bold = true)
-            } else {
-                ReceiptKvRow(strings[CashierStringKey.TransactionsTotal], CentsFormatter.format(event.amountCents), receiptInk, bold = true)
-            }
-
-            // Payments
-            val docPayments = event.receiptDocument?.payments.orEmpty()
-            if (docPayments.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(4.dp))
-                docPayments.forEach { payment ->
-                    ReceiptKvRow(
-                        label = payment.displayLabel ?: payment.method.name.toPaymentLabel(strings),
-                        value = CentsFormatter.format(payment.amountCents),
-                        color = receiptInk,
-                    )
-                }
-            } else if (event.paymentMethods.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(4.dp))
-                event.paymentMethods.forEach { pm ->
-                    ReceiptKvRow(
-                        label = pm.methodCode.toPaymentLabel(strings),
-                        value = CentsFormatter.format(pm.amountCents),
-                        color = receiptInk,
-                    )
-                }
-            }
-
-            // Footer
-            event.receiptDocument?.footerText?.takeIf { it.isNotBlank() }?.let { footer ->
-                Spacer(modifier = Modifier.height(8.dp))
-                ReceiptDivider(inkColor = receiptInk)
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = footer,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = receiptInk.copy(alpha = 0.65f),
-                    modifier = Modifier.fillMaxWidth(),
-                    textAlign = TextAlign.Center,
-                )
-            }
         }
     }
 }
 
 @Composable
-private fun ReceiptLineRow(line: ReceiptLine, inkColor: Color) {
-    when (line.alignment) {
-        ReceiptAlignment.CENTER -> {
-            Text(
-                text = buildString {
-                    line.quantity?.let { append(it); append(' ') }
-                    append(line.label)
-                },
-                style = MaterialTheme.typography.bodyMedium,
-                color = inkColor,
-                modifier = Modifier.fillMaxWidth(),
-                textAlign = TextAlign.Center,
-            )
-        }
-        ReceiptAlignment.RIGHT -> {
-            Text(
-                text = line.label,
-                style = MaterialTheme.typography.bodyMedium,
-                color = inkColor,
-                modifier = Modifier.fillMaxWidth(),
-                textAlign = TextAlign.End,
-            )
-        }
-        ReceiptAlignment.LEFT -> {
-            Column {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Text(
-                        text = buildString {
-                            line.quantity?.let { append(it); append(' ') }
-                            append(line.label)
-                        },
-                        modifier = Modifier.weight(1f),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = inkColor,
-                    )
-                    val priceText = line.value
-                        ?: line.totalPriceCents?.let(CentsFormatter::format)
-                        ?: line.unitPriceCents?.let(CentsFormatter::format)
-                    if (priceText != null) {
-                        Text(
-                            text = priceText,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = inkColor,
-                        )
-                    }
-                }
-                line.note?.takeIf { it.isNotBlank() }?.let { note ->
-                    Text(
-                        text = note,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = inkColor.copy(alpha = 0.65f),
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ReceiptKvRow(label: String, value: String, color: Color, bold: Boolean = false) {
+private fun DetailKvRow(
+    label: String,
+    value: String,
+    bold: Boolean = false,
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             text = label,
             style = MaterialTheme.typography.bodyMedium,
-            color = color.copy(alpha = if (bold) 1f else 0.85f),
-            fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
         )
         Text(
             text = value,
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = if (bold) FontWeight.Bold else FontWeight.SemiBold,
-            color = color,
+            textAlign = TextAlign.End,
+            modifier = Modifier.padding(start = 12.dp),
         )
     }
 }
 
+@SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun ReceiptDivider(inkColor: Color) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(1.dp)
-            .background(inkColor.copy(alpha = 0.18f)),
-    )
-}
-
-@Composable
-private fun AirosActionDialog(
-    type: SalesActionDialogType,
-    strings: CashierStrings,
-    onDismiss: () -> Unit,
+private fun PublicReceiptPreview(
+    publicReceiptUrl: String,
+    modifier: Modifier = Modifier,
 ) {
-    val titleKey = when (type) {
-        SalesActionDialogType.REPRINT -> CashierStringKey.SalesDashboardReprintDialogTitle
-        SalesActionDialogType.REFUND -> CashierStringKey.SalesDashboardRefundDialogTitle
-        SalesActionDialogType.CORRECT -> CashierStringKey.SalesDashboardCorrectDialogTitle
+    var loadError by remember(publicReceiptUrl) { mutableStateOf<String?>(null) }
+
+    Box(modifier = modifier) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surface,
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp,
+                MaterialTheme.colorScheme.outline.copy(alpha = 0.22f),
+            ),
+        ) {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { context ->
+                    WebView(context).apply {
+                        settings.javaScriptEnabled = false
+                        webViewClient = object : WebViewClient() {
+                            override fun onReceivedError(
+                                view: WebView,
+                                request: WebResourceRequest,
+                                error: WebResourceError,
+                            ) {
+                                if (request.isForMainFrame) {
+                                    loadError = "Kuitin lataus epäonnistui: ${error.description}"
+                                }
+                            }
+                        }
+                        tag = publicReceiptUrl
+                        loadUrl(publicReceiptUrl)
+                    }
+                },
+                update = { webView ->
+                    if (webView.tag != publicReceiptUrl) {
+                        loadError = null
+                        webView.tag = publicReceiptUrl
+                        webView.loadUrl(publicReceiptUrl)
+                    }
+                },
+            )
+        }
+
+        loadError?.let { error ->
+            ReceiptTruthError(
+                message = error,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(12.dp),
+            )
+        }
     }
-    val bodyKey = when (type) {
-        SalesActionDialogType.REPRINT -> CashierStringKey.SalesDashboardReprintDialogBody
-        SalesActionDialogType.REFUND -> CashierStringKey.SalesDashboardRefundDialogBody
-        SalesActionDialogType.CORRECT -> CashierStringKey.SalesDashboardCorrectDialogBody
-    }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(strings[titleKey]) },
-        text = { Text(strings[bodyKey]) },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(strings[CashierStringKey.SalesDashboardDialogOk])
-            }
-        },
-    )
 }
 
+@Composable
+private fun ReceiptTruthError(
+    message: String,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.errorContainer,
+    ) {
+        Text(
+            text = message,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onErrorContainer,
+            modifier = Modifier.padding(14.dp),
+        )
+    }
+}
 private fun computePaymentBuckets(events: List<TransactionRecord>, strings: CashierStrings): List<PaymentMethodBucket> {
     val totalCents = events.sumOf { it.amountCents }
     val byMethod = mutableMapOf<String, Int>()
@@ -1149,10 +1127,6 @@ private fun TransactionRecord.matchesStatus(filter: TransactionsStatusFilter): B
         TransactionsStatusFilter.ALL -> true
         TransactionsStatusFilter.OPEN -> businessStatus == TransactionBusinessStatus.OPEN
         TransactionsStatusFilter.PAID -> businessStatus == TransactionBusinessStatus.PAID
-        TransactionsStatusFilter.SYNCED -> syncStatus == TransactionSyncStatus.SYNCED
-        TransactionsStatusFilter.PENDING -> syncStatus == TransactionSyncStatus.QUEUED || syncStatus == TransactionSyncStatus.SYNCING
-        TransactionsStatusFilter.FAILED -> syncStatus == TransactionSyncStatus.FAILED
-        TransactionsStatusFilter.BLOCKED -> syncStatus == TransactionSyncStatus.BLOCKED
     }
 }
 
@@ -1168,6 +1142,7 @@ private fun TransactionRecord.matchesPayment(filter: TransactionsPaymentFilter):
 
 private fun TransactionRecord.matchesSearch(query: String): Boolean {
     if (query.isBlank()) return true
+    val normalizedQuery = query.trim().lowercase(Locale.ROOT)
     val haystack = buildString {
         append(receiptNumber.orEmpty())
         append(' ')
@@ -1187,7 +1162,7 @@ private fun TransactionRecord.matchesSearch(query: String): Boolean {
         append(' ')
         append(businessStatus.name)
     }.lowercase(Locale.ROOT)
-    return haystack.contains(query)
+    return haystack.contains(normalizedQuery)
 }
 
 private fun TransactionRecord.locationLabel(strings: CashierStrings): String {
@@ -1254,10 +1229,6 @@ private fun TransactionsStatusFilter.toStringKey(): CashierStringKey {
         TransactionsStatusFilter.ALL -> CashierStringKey.TransactionsFilterAll
         TransactionsStatusFilter.OPEN -> CashierStringKey.TransactionsStatusOpen
         TransactionsStatusFilter.PAID -> CashierStringKey.TransactionsStatusPaid
-        TransactionsStatusFilter.SYNCED -> CashierStringKey.TransactionsStatusSynced
-        TransactionsStatusFilter.PENDING -> CashierStringKey.TransactionsStatusPending
-        TransactionsStatusFilter.FAILED -> CashierStringKey.TransactionsStatusFailed
-        TransactionsStatusFilter.BLOCKED -> CashierStringKey.TransactionsStatusBlocked
     }
 }
 
@@ -1271,150 +1242,6 @@ private fun TransactionsPaymentFilter.toStringKey(): CashierStringKey {
     }
 }
 
-private fun parseFinalizeSaleRequest(requestJson: String): ParsedFinalizeSaleRequest {
-    return runCatching {
-        val root = JSONObject(requestJson)
-        val payments = root.optJSONArray("payments").toPaymentSnapshots()
-        val receiptNumber = root.optStringOrNull("receipt_number")
-        val tableLabel = root.optStringOrNull("table_label")
-        val occurredAt = root.optLongOrNull("finalized_at_epoch_ms")
-        val receiptDocument = root.optJSONObject("receipt_document")?.toReceiptDocument(
-            defaultReceiptNumber = receiptNumber,
-            defaultPrintedAtEpochMillis = occurredAt,
-            tableLabel = tableLabel,
-            languageCode = root.optStringOrNull("language_code") ?: "fi",
-        )
-        ParsedFinalizeSaleRequest(
-            occurredAtEpochMillis = occurredAt,
-            receiptNumber = receiptNumber,
-            tableId = root.optStringOrNull("table_id"),
-            tableLabel = tableLabel,
-            cashierStaffId = root.optStringOrNull("cashier_staff_id"),
-            cashierName = root.optStringOrNull("cashier_name"),
-            totalCents = root.optIntOrNull("total_cents"),
-            payments = payments,
-            receiptDocument = receiptDocument,
-        )
-    }.getOrElse {
-        ParsedFinalizeSaleRequest(
-            occurredAtEpochMillis = null,
-            receiptNumber = null,
-            tableId = null,
-            tableLabel = null,
-            cashierStaffId = null,
-            cashierName = null,
-            totalCents = null,
-            payments = emptyList(),
-            receiptDocument = null,
-        )
-    }
-}
-
-private fun JSONObject.toReceiptDocument(
-    defaultReceiptNumber: String?,
-    defaultPrintedAtEpochMillis: Long?,
-    tableLabel: String?,
-    languageCode: String,
-): ReceiptDocument {
-    val documentPayments = optJSONArray("payments").toReceiptPaymentRecords()
-    return ReceiptDocument(
-        title = optStringOrNull("title").orEmpty(),
-        lines = optJSONArray("lines").toReceiptLines(),
-        footer = optStringOrNull("footer").orEmpty(),
-        currencyCode = optStringOrNull("currencyCode") ?: "EUR",
-        headerText = optStringOrNull("headerText"),
-        footerText = optStringOrNull("footerText"),
-        totals = optJSONObject("totals")?.toReceiptTotals(),
-        payments = documentPayments,
-        receiptNumber = optStringOrNull("receiptNumber") ?: defaultReceiptNumber,
-        orderNumber = optStringOrNull("orderNumber"),
-        printedAtEpochMillis = optLongOrNull("printedAtEpochMillis") ?: defaultPrintedAtEpochMillis,
-        cashierName = optStringOrNull("cashierName"),
-        customerDisplayName = optStringOrNull("customerDisplayName"),
-        customerNote = optStringOrNull("customerNote"),
-        internalNote = optStringOrNull("internalNote"),
-        extraTextBlocks = optJSONArray("extraTextBlocks").toStringList(),
-        tableLabel = tableLabel,
-        languageCode = languageCode,
-    )
-}
-
-private fun JSONObject.toReceiptTotals(): ReceiptTotals {
-    return ReceiptTotals(
-        subtotalCents = optInt("subtotalCents"),
-        discountCents = optInt("discountCents"),
-        taxCents = optInt("taxCents"),
-        totalCents = optInt("totalCents"),
-        vatBreakdown = optJSONArray("vatBreakdown").toVatRows(),
-    )
-}
-
-private fun JSONArray?.toReceiptLines(): List<ReceiptLine> {
-    if (this == null) return emptyList()
-    return (0 until length()).mapNotNull { index ->
-        val item = optJSONObject(index) ?: return@mapNotNull null
-        ReceiptLine(
-            label = item.optStringOrNull("label").orEmpty(),
-            value = item.optStringOrNull("value"),
-            quantity = item.optStringOrNull("quantity"),
-            unitPriceCents = item.optIntOrNull("unitPriceCents"),
-            totalPriceCents = item.optIntOrNull("totalPriceCents"),
-            note = item.optStringOrNull("note"),
-            alignment = item.optStringOrNull("alignment").toReceiptAlignment(),
-        )
-    }
-}
-
-private fun JSONArray?.toReceiptPaymentRecords(): List<ReceiptPaymentRecord> {
-    if (this == null) return emptyList()
-    return (0 until length()).mapNotNull { index ->
-        val item = optJSONObject(index) ?: return@mapNotNull null
-        val method = item.optStringOrNull("method").toPaymentMethod() ?: return@mapNotNull null
-        ReceiptPaymentRecord(
-            method = method,
-            amountCents = item.optInt("amountCents"),
-            reference = item.optStringOrNull("reference"),
-            displayLabel = item.optStringOrNull("displayLabel"),
-        )
-    }
-}
-
-private fun JSONArray?.toPaymentSnapshots(): List<TransactionPaymentSnapshot> {
-    if (this == null) return emptyList()
-    return (0 until length()).mapNotNull { index ->
-        val item = optJSONObject(index) ?: return@mapNotNull null
-        TransactionPaymentSnapshot(
-            methodCode = item.optStringOrNull("method") ?: return@mapNotNull null,
-            amountCents = item.optInt("amount_cents"),
-            displayLabel = item.optStringOrNull("display_label"),
-        )
-    }
-}
-
-private fun JSONArray?.toVatRows(): List<ReceiptVatRow> {
-    if (this == null) return emptyList()
-    return (0 until length()).mapNotNull { index ->
-        val item = optJSONObject(index) ?: return@mapNotNull null
-        ReceiptVatRow(
-            ratePercent = item.optDouble("ratePercent"),
-            taxCents = item.optInt("taxCents"),
-            baseCents = item.optInt("baseCents"),
-        )
-    }
-}
-
-private fun JSONArray?.toStringList(): List<String> {
-    if (this == null) return emptyList()
-    return (0 until length()).mapNotNull { index ->
-        optString(index).takeIf { it.isNotBlank() }
-    }
-}
-
-private fun String?.toPaymentMethod(): PaymentMethod? {
-    val normalized = this?.trim()?.uppercase(Locale.ROOT) ?: return null
-    return runCatching { PaymentMethod.valueOf(normalized) }.getOrNull()
-}
-
 private fun String?.toPaymentLabel(strings: CashierStrings): String {
     val normalized = this?.trim()?.uppercase(Locale.ROOT).orEmpty()
     return when (normalized) {
@@ -1422,48 +1249,6 @@ private fun String?.toPaymentLabel(strings: CashierStrings): String {
         PaymentMethod.CARD.name -> strings[CashierStringKey.TransactionsPaymentCard]
         PaymentMethod.VOUCHER.name -> strings[CashierStringKey.TransactionsPaymentVoucher]
         else -> normalized.ifBlank { strings[CashierStringKey.TransactionsUnavailable] }
-    }
-}
-
-private fun String?.toReceiptAlignment(): ReceiptAlignment {
-    return when (this?.trim()?.uppercase(Locale.ROOT)) {
-        ReceiptAlignment.CENTER.name -> ReceiptAlignment.CENTER
-        ReceiptAlignment.RIGHT.name -> ReceiptAlignment.RIGHT
-        else -> ReceiptAlignment.LEFT
-    }
-}
-
-private fun String?.toTransactionSyncStatus(): TransactionSyncStatus {
-    return when (this?.trim()?.lowercase(Locale.ROOT)) {
-        "queued" -> TransactionSyncStatus.QUEUED
-        "syncing" -> TransactionSyncStatus.SYNCING
-        "synced" -> TransactionSyncStatus.SYNCED
-        "failed" -> TransactionSyncStatus.FAILED
-        "blocked" -> TransactionSyncStatus.BLOCKED
-        else -> TransactionSyncStatus.UNKNOWN
-    }
-}
-
-private fun JSONObject.optStringOrNull(key: String): String? {
-    if (isNull(key)) return null
-    return optString(key).trim().takeIf { it.isNotEmpty() }
-}
-
-private fun JSONObject.optLongOrNull(key: String): Long? {
-    if (isNull(key)) return null
-    return when (val value = opt(key)) {
-        is Number -> value.toLong()
-        is String -> value.toLongOrNull()
-        else -> null
-    }
-}
-
-private fun JSONObject.optIntOrNull(key: String): Int? {
-    if (isNull(key)) return null
-    return when (val value = opt(key)) {
-        is Number -> value.toInt()
-        is String -> value.toIntOrNull()
-        else -> null
     }
 }
 

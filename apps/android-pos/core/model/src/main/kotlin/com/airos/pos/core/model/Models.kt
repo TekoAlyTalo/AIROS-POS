@@ -689,6 +689,9 @@ data class LocalFinalizedSaleRecord(
     val ticketId: String? = null,
     val openSaleId: String? = null,
     val receiptNumber: String? = null,
+    val receiptSnapshotId: String? = null,
+    val publicReceiptUrl: String? = null,
+    val publicUrlPath: String? = null,
     val tableId: String? = null,
     val tableLabel: String? = null,
     val finalizedAtEpochMillis: Long,
@@ -719,6 +722,7 @@ data class LocalSalesDayReport(
     val refundCount: Int = 0,
     val refundCents: Int = 0,
     val refundsSupported: Boolean = false,
+    val finalizedSales: List<LocalFinalizedSaleRecord> = emptyList(),
 )
 
 data class PaymentSummary(

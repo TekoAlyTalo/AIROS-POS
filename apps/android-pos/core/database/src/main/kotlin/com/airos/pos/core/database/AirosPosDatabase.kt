@@ -72,7 +72,7 @@ import com.airos.pos.core.database.entity.TicketLocalEntity
         LocalFinalizedSaleEntity::class,
         LocalFinalizedSalePaymentEntity::class,
     ],
-    version = 16,
+    version = 17,
     exportSchema = false,
 )
 abstract class AirosPosDatabase : RoomDatabase() {
@@ -598,6 +598,9 @@ abstract class AirosPosDatabase : RoomDatabase() {
                         `ticketId` TEXT,
                         `openSaleId` TEXT,
                         `receiptNumber` TEXT,
+                        `receiptSnapshotId` TEXT,
+                        `publicReceiptUrl` TEXT,
+                        `publicUrlPath` TEXT,
                         `tableId` TEXT,
                         `tableLabel` TEXT,
                         `finalizedAtEpochMillis` INTEGER NOT NULL,
@@ -673,6 +676,14 @@ abstract class AirosPosDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `local_finalized_sales` ADD COLUMN `receiptSnapshotId` TEXT")
+                db.execSQL("ALTER TABLE `local_finalized_sales` ADD COLUMN `publicReceiptUrl` TEXT")
+                db.execSQL("ALTER TABLE `local_finalized_sales` ADD COLUMN `publicUrlPath` TEXT")
+            }
+        }
+
         private val MIGRATION_9_10 = object : Migration(9, 10) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
@@ -726,6 +737,7 @@ abstract class AirosPosDatabase : RoomDatabase() {
                 MIGRATION_13_14,
                 MIGRATION_14_15,
                 MIGRATION_15_16,
+                MIGRATION_16_17,
             ).build()
         }
     }

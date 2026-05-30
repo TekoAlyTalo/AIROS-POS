@@ -2293,8 +2293,8 @@ private fun SignedInApp(
                 composable(Routes.Transactions) {
                     TransactionsRoute(
                         openSaleRepository = appContainer.openSaleRepository,
-                        salesLedgerOutboxDao = appContainer.database.salesLedgerOutboxDao(),
                         salesDayReportRepository = appContainer.salesDayReportRepository,
+                        backendBaseUrl = terminalSettings.edgeBaseUrl,
                     )
                 }
 

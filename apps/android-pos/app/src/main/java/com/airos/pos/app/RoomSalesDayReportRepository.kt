@@ -4,6 +4,7 @@ import com.airos.pos.core.common.PosResult
 import com.airos.pos.core.database.dao.LocalFinalizedSalesReportDao
 import com.airos.pos.core.database.entity.LocalFinalizedSaleEntity
 import com.airos.pos.core.database.entity.LocalFinalizedSalePaymentEntity
+import com.airos.pos.core.model.LocalFinalizedSalePaymentRecord
 import com.airos.pos.core.model.LocalFinalizedSaleRecord
 import com.airos.pos.core.model.LocalSalesDayReport
 import com.airos.pos.core.model.LocalSalesPaymentBreakdown
@@ -75,6 +76,7 @@ internal fun buildLocalSalesDayReport(
         .map { it.id }
         .toSet()
     val completedPayments = payments.filter { it.finalizedSaleId in completedSaleIds }
+    val paymentsBySaleId = completedPayments.groupBy { it.finalizedSaleId }
     val breakdown = completedPayments
         .groupBy { it.method }
         .map { (method, rows) ->
@@ -109,6 +111,9 @@ internal fun buildLocalSalesDayReport(
         refundCount = 0,
         refundCents = 0,
         refundsSupported = false,
+        finalizedSales = sales
+            .filter { it.id in completedSaleIds }
+            .map { sale -> sale.toRecord(paymentsBySaleId[sale.id].orEmpty()) },
     )
 }
 
@@ -119,6 +124,9 @@ private fun LocalFinalizedSaleRecord.toEntity(): LocalFinalizedSaleEntity =
         ticketId = ticketId,
         openSaleId = openSaleId,
         receiptNumber = receiptNumber,
+        receiptSnapshotId = receiptSnapshotId,
+        publicReceiptUrl = publicReceiptUrl,
+        publicUrlPath = publicUrlPath,
         tableId = tableId,
         tableLabel = tableLabel,
         finalizedAtEpochMillis = finalizedAtEpochMillis,
@@ -129,4 +137,35 @@ private fun LocalFinalizedSaleRecord.toEntity(): LocalFinalizedSaleEntity =
         restaurantId = restaurantId,
         status = LocalFinalizedSaleStatusCompleted,
         createdAtEpochMillis = finalizedAtEpochMillis,
+    )
+
+private fun LocalFinalizedSaleEntity.toRecord(
+    payments: List<LocalFinalizedSalePaymentEntity>,
+): LocalFinalizedSaleRecord =
+    LocalFinalizedSaleRecord(
+        id = id,
+        sourcePosEventId = sourcePosEventId,
+        ticketId = ticketId,
+        openSaleId = openSaleId,
+        receiptNumber = receiptNumber,
+        receiptSnapshotId = receiptSnapshotId,
+        publicReceiptUrl = publicReceiptUrl,
+        publicUrlPath = publicUrlPath,
+        tableId = tableId,
+        tableLabel = tableLabel,
+        finalizedAtEpochMillis = finalizedAtEpochMillis,
+        totalCents = totalCents,
+        sellerStaffId = sellerStaffId,
+        sellerDisplayName = sellerDisplayName,
+        terminalId = terminalId,
+        restaurantId = restaurantId,
+        payments = payments.map { payment ->
+            LocalFinalizedSalePaymentRecord(
+                method = PaymentMethod.valueOf(payment.method),
+                amountCents = payment.amountCents,
+                cashTenderedCents = payment.cashTenderedCents,
+                cashChangeCents = payment.cashChangeCents,
+                cashRetainedCents = payment.cashRetainedCents,
+            )
+        },
     )
