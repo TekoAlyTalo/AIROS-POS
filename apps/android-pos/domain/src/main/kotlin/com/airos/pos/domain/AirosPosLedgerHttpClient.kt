@@ -23,6 +23,16 @@ import java.nio.charset.StandardCharsets
  */
 interface AirosPosLedgerHttpClient {
     suspend fun finalizeSale(request: LedgerFinalizeSaleRequest): PosResult<LedgerFinalizeSaleResponse>
+    suspend fun createCorrectionSale(
+        originalSaleId: String,
+        request: LedgerCreateCorrectionRequest,
+    ): PosResult<LedgerCorrectionSaleResponse>
+
+    suspend fun createFullSaleCorrection(
+        originalSaleId: String,
+        request: LedgerCreateCorrectionRequest,
+    ): PosResult<LedgerCorrectionSaleResponse> = createCorrectionSale(originalSaleId, request)
+
     suspend fun finalizeSaleJson(
         requestJson: String,
         receiptNumber: String,
@@ -51,6 +61,95 @@ class DefaultAirosPosLedgerHttpClient(
             requestJson = request.toJsonString(),
             receiptNumber = request.receipt_number,
         )
+    }
+
+    override suspend fun createCorrectionSale(
+        originalSaleId: String,
+        request: LedgerCreateCorrectionRequest,
+    ): PosResult<LedgerCorrectionSaleResponse> {
+        return withContext(Dispatchers.IO) {
+            val rawBaseUrl = backendBaseUrlProvider.invoke()
+            val baseUrl = rawBaseUrl.trim().trimEnd('/')
+            if (baseUrl.isEmpty()) {
+                debugLog("baseUrl empty raw='${rawBaseUrl}'")
+                return@withContext PosResult.Failure("AIROS ledger backend base URL is empty.")
+            }
+
+            val safeSaleId = originalSaleId.trim()
+            if (safeSaleId.isEmpty()) {
+                return@withContext PosResult.Failure("Korjauksen alkuperäinen myynti puuttuu.")
+            }
+
+            val urlString = "$baseUrl/api/pos/sales/${urlPathSegment(safeSaleId)}/corrections"
+            val requestJson = request.toJsonString()
+            debugLog("createCorrection start baseUrl='${baseUrl}' url='${urlString}' originalSaleId='${safeSaleId}'")
+
+            val connection = try {
+                (URL(urlString).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = connectTimeoutMs
+                    readTimeout = readTimeoutMs
+                    doInput = true
+                    doOutput = true
+                    useCaches = false
+                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                    setRequestProperty("Accept", "application/json")
+                    authHeaderProvider?.invoke()?.trim()?.takeIf { it.isNotEmpty() }?.let { header ->
+                        setRequestProperty("Authorization", header)
+                    }
+                }
+            } catch (t: Throwable) {
+                debugLog("correction connection open failed originalSaleId='${safeSaleId}' type=${t.javaClass.simpleName}")
+                return@withContext PosResult.Failure(
+                    "Korjausmyyntiä ei voitu luoda: yhteys palvelimeen epäonnistui.",
+                )
+            }
+
+            try {
+                OutputStreamWriter(connection.outputStream, StandardCharsets.UTF_8).use { writer ->
+                    writer.write(requestJson)
+                    writer.flush()
+                }
+
+                val statusCode = connection.responseCode
+                val responseBody = readResponseBody(
+                    if (statusCode in 200..299) connection.inputStream else connection.errorStream,
+                )
+                debugLog("correction response status=${statusCode} bodyLength=${responseBody.length} originalSaleId='${safeSaleId}'")
+
+                if (statusCode !in 200..299) {
+                    val detail = parseErrorMessage(responseBody)
+                    val userMessage = when {
+                        statusCode == 404 -> "Korjausmyyntiä ei voitu luoda: myynniltä puuttuu backendin myyntitunniste tai kuittipalvelu ei löytänyt alkuperäistä myyntiä."
+                        statusCode == 400 && detail.isNotBlank() -> "Korjausmyyntiä ei voitu luoda: $detail"
+                        statusCode == 409 && detail.isNotBlank() -> "Korjausmyyntiä ei voitu luoda: $detail"
+                        statusCode == 409 -> "Korjausmyyntiä ei voitu luoda: backend esti vaarallisen korjauksen."
+                        statusCode in 500..599 -> "Korjausmyyntiä ei voitu luoda: palvelimella tapahtui virhe (HTTP $statusCode)."
+                        else -> "Korjausmyyntiä ei voitu luoda (HTTP $statusCode)."
+                    }
+                    return@withContext PosResult.Failure(userMessage)
+                }
+
+                val parsed = try {
+                    responseBody.toLedgerCorrectionSaleResponse()
+                } catch (t: Throwable) {
+                    debugLog("correction response parse failed type=${t.javaClass.simpleName} bodyLength=${responseBody.length}")
+                    return@withContext PosResult.Failure(
+                        "Korjausmyyntiä ei voitu luoda: palvelimen vastauksen käsittely epäonnistui.",
+                    )
+                }
+
+                debugLog("correction success correctionSaleId='${parsed.correction_sale_id}' originalSaleId='${safeSaleId}'")
+                PosResult.Success(parsed)
+            } catch (t: Throwable) {
+                debugLog("correction request failed originalSaleId='${safeSaleId}' type=${t.javaClass.simpleName}")
+                PosResult.Failure(
+                    "Korjausmyyntiä ei voitu luoda: yhteysongelma palvelimen kanssa.",
+                )
+            } finally {
+                connection.disconnect()
+            }
+        }
     }
 
     override suspend fun finalizeSaleJson(
@@ -100,7 +199,7 @@ class DefaultAirosPosLedgerHttpClient(
                 val responseBody = readResponseBody(
                     if (statusCode in 200..299) connection.inputStream else connection.errorStream,
                 )
-                debugLog("response status=${statusCode} body=${responseBody.take(500)}")
+                debugLog("response status=${statusCode} bodyLength=${responseBody.length} receipt='${receiptNumber}'")
 
                 if (statusCode !in 200..299) {
                     val message = parseErrorMessage(responseBody)
@@ -112,7 +211,7 @@ class DefaultAirosPosLedgerHttpClient(
                 val parsed = try {
                     responseBody.toLedgerFinalizeSaleResponse()
                 } catch (t: Throwable) {
-                    debugLog("response parse failed type=${t.javaClass.simpleName} message=${t.message} body=${responseBody.take(500)}")
+                    debugLog("response parse failed type=${t.javaClass.simpleName} receipt='${receiptNumber}'")
                     return@withContext PosResult.Failure(
                         "AIROS ledger finalize response parse failed from ${urlString}: ${t.javaClass.simpleName}: ${t.message ?: "no message"}",
                     )
@@ -202,6 +301,43 @@ object AirosPosLedgerFinalizeBridge {
 }
 
 fun LedgerFinalizeSaleRequest.toJsonString(): String = jsonString(toJsonMap())
+
+private fun LedgerCreateCorrectionRequest.toJsonString(): String = jsonString(
+    linkedMapOf(
+        "reason" to reason,
+        "actor_staff_id" to actor_staff_id,
+        "actor_name" to actor_name,
+        "source_pos_event_id" to source_pos_event_id,
+        "idempotency_key" to idempotency_key,
+        "target_sale_id" to target_sale_id,
+        "operations" to operations.map { it.toJsonMap() },
+        "refund_method" to refund_method,
+        "settlement_method" to settlement_method,
+        "compensation_type" to compensation_type,
+        "compensation_details" to compensation_details,
+        "correction_mode" to correction_mode,
+        "finalized_at_epoch_ms" to finalized_at_epoch_ms,
+        "enable_public_receipt" to enable_public_receipt,
+        "delivery_mode" to delivery_mode,
+        "token_ttl_ms" to token_ttl_ms,
+        "public_route_prefix" to public_route_prefix,
+    ),
+)
+
+private fun LedgerCorrectionOperationRequest.toJsonMap(): Map<String, Any?> = linkedMapOf(
+    "operation_type" to operation_type,
+    "original_line_id" to original_line_id,
+    "added_product_id" to added_product_id,
+    "product_name" to product_name,
+    "quantity_delta" to quantity_delta,
+    "quantity" to quantity,
+    "unit_price_cents" to unit_price_cents,
+    "vat_rate_basis_points" to vat_rate_basis_points,
+    "discount_cents" to discount_cents,
+    "discount_percent" to discount_percent,
+    "financial_effect_cents" to financial_effect_cents,
+    "metadata" to metadata,
+)
 
 private fun LedgerFinalizeSaleRequest.toJsonMap(): Map<String, Any?> = linkedMapOf(
     "receipt_number" to receipt_number,
@@ -412,8 +548,45 @@ private fun String.toLedgerFinalizeSaleResponse(): LedgerFinalizeSaleResponse {
     )
 }
 
+private fun String.toLedgerCorrectionSaleResponse(): LedgerCorrectionSaleResponse {
+    val originalSaleId = requireJsonString("original_sale_id")
+    val correctionAmountCents = requireJsonInt("correction_amount_cents")
+    return LedgerCorrectionSaleResponse(
+        ok = jsonBoolean("ok") ?: true,
+        original_sale_id = originalSaleId,
+        root_original_sale_id = jsonNullableString("root_original_sale_id") ?: originalSaleId,
+        target_sale_id = jsonNullableString("target_sale_id"),
+        parent_correction_id = jsonNullableString("parent_correction_id"),
+        original_receipt_number = jsonNullableString("original_receipt_number"),
+        correction_sale_id = requireJsonString("correction_sale_id"),
+        correction_receipt_number = requireJsonString("correction_receipt_number"),
+        correction_amount_cents = correctionAmountCents,
+        financial_effect_cents = (jsonLong("financial_effect_cents") ?: correctionAmountCents.toLong()).toInt(),
+        correction_reason = requireJsonString("correction_reason"),
+        correction_id = jsonNullableString("correction_id"),
+        correction_kind = jsonNullableString("correction_kind"),
+        operation_types = jsonStringArray("operation_types"),
+        refund_method = jsonNullableString("refund_method"),
+        compensation_type = jsonNullableString("compensation_type"),
+        receipt_snapshot_id = requireJsonString("receipt_snapshot_id"),
+        inventory_event_id = jsonNullableString("inventory_event_id"),
+        delivery_token_ids = jsonStringArray("delivery_token_ids"),
+        finalized_at_epoch_ms = requireJsonLong("finalized_at_epoch_ms"),
+        raw_public_token = jsonNullableString("raw_public_token"),
+        public_url_path = jsonNullableString("public_url_path"),
+    )
+}
+
 private fun String.requireJsonString(key: String): String {
     return jsonNullableString(key) ?: error("Missing required field '$key'")
+}
+
+private fun String.requireJsonInt(key: String): Int {
+    return requireJsonLong(key).toInt()
+}
+
+private fun String.requireJsonLong(key: String): Long {
+    return jsonLong(key) ?: error("Missing required field '$key'")
 }
 
 private fun String.jsonNullableString(key: String): String? {
@@ -428,6 +601,12 @@ private fun String.jsonBoolean(key: String): Boolean? {
     val pattern = Regex("\"${Regex.escape(key)}\"\\s*:\\s*(true|false)")
     val match = pattern.find(this) ?: return null
     return match.groupValues[1].toBooleanStrictOrNull()
+}
+
+private fun String.jsonLong(key: String): Long? {
+    val pattern = Regex("\"${Regex.escape(key)}\"\\s*:\\s*(-?\\d+)")
+    val match = pattern.find(this) ?: return null
+    return match.groupValues[1].toLongOrNull()
 }
 
 private fun String.jsonStringArray(key: String): List<String> {
@@ -522,6 +701,10 @@ private fun parseErrorMessage(responseBody: String): String {
     return responseBody.jsonNullableString("detail")
         ?: responseBody.jsonNullableString("message")
         ?: responseBody.take(300)
+}
+
+private fun urlPathSegment(value: String): String {
+    return java.net.URLEncoder.encode(value, StandardCharsets.UTF_8.name()).replace("+", "%20")
 }
 
 private fun readResponseBody(stream: InputStream?): String {

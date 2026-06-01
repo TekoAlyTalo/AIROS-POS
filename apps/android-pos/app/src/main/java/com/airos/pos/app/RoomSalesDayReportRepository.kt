@@ -39,7 +39,7 @@ class RoomSalesDayReportRepository(
         if (record.payments.isEmpty()) {
             return PosResult.Failure("Finalized sale report row requires at least one payment.")
         }
-        if (record.totalCents < 0 || record.payments.any { it.amountCents < 0 }) {
+        if (record.saleKind != "CORRECTION" && (record.totalCents < 0 || record.payments.any { it.amountCents < 0 })) {
             return PosResult.Failure("Finalized sale report amounts cannot be negative.")
         }
 
@@ -101,7 +101,7 @@ internal fun buildLocalSalesDayReport(
         endEpochMillisExclusive = endEpochMillisExclusive,
         totalSalesCents = sales
             .filter { it.id in completedSaleIds }
-            .sumOf { it.totalCents },
+            .sumOf { it.reportAmountCents() },
         saleCount = completedSaleIds.size,
         paymentBreakdown = breakdown,
         cashSalesCents = amountFor(PaymentMethod.CASH),
@@ -135,6 +135,12 @@ private fun LocalFinalizedSaleRecord.toEntity(): LocalFinalizedSaleEntity =
         sellerDisplayName = sellerDisplayName,
         terminalId = terminalId,
         restaurantId = restaurantId,
+        saleKind = saleKind,
+        correctionOriginalSaleId = correctionOriginalSaleId,
+        correctionOriginalReceiptNumber = correctionOriginalReceiptNumber,
+        correctionReason = correctionReason,
+        correctionAmountCents = correctionAmountCents,
+        serverSaleId = serverSaleId,
         status = LocalFinalizedSaleStatusCompleted,
         createdAtEpochMillis = finalizedAtEpochMillis,
     )
@@ -159,6 +165,12 @@ private fun LocalFinalizedSaleEntity.toRecord(
         sellerDisplayName = sellerDisplayName,
         terminalId = terminalId,
         restaurantId = restaurantId,
+        saleKind = saleKind,
+        correctionOriginalSaleId = correctionOriginalSaleId,
+        correctionOriginalReceiptNumber = correctionOriginalReceiptNumber,
+        correctionReason = correctionReason,
+        correctionAmountCents = correctionAmountCents,
+        serverSaleId = serverSaleId,
         payments = payments.map { payment ->
             LocalFinalizedSalePaymentRecord(
                 method = PaymentMethod.valueOf(payment.method),
@@ -169,3 +181,11 @@ private fun LocalFinalizedSaleEntity.toRecord(
             )
         },
     )
+
+private fun LocalFinalizedSaleEntity.reportAmountCents(): Int {
+    return if (saleKind == "CORRECTION") {
+        correctionAmountCents ?: -kotlin.math.abs(totalCents)
+    } else {
+        totalCents
+    }
+}

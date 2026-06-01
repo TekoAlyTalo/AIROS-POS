@@ -203,6 +203,73 @@ data class LedgerFinalizeSaleResponse(
     }
 }
 
+data class LedgerCreateCorrectionRequest(
+    val reason: String,
+    val actor_staff_id: String? = null,
+    val actor_name: String? = null,
+    val source_pos_event_id: String? = null,
+    val idempotency_key: String? = null,
+    val target_sale_id: String? = null,
+    val operations: List<LedgerCorrectionOperationRequest> = emptyList(),
+    val refund_method: String? = null,
+    val settlement_method: String? = null,
+    val compensation_type: String? = null,
+    val compensation_details: Map<String, Any?>? = null,
+    val correction_mode: String? = null,
+    val finalized_at_epoch_ms: Long? = null,
+    val enable_public_receipt: Boolean = true,
+    val delivery_mode: String = "QR",
+    val token_ttl_ms: Long? = null,
+    val public_route_prefix: String = "/api/pos/receipts/public",
+)
+
+data class LedgerCorrectionOperationRequest(
+    val operation_type: String,
+    val original_line_id: String? = null,
+    val added_product_id: String? = null,
+    val product_name: String? = null,
+    val quantity_delta: Int? = null,
+    val quantity: Int? = null,
+    val unit_price_cents: Int? = null,
+    val vat_rate_basis_points: Int? = null,
+    val discount_cents: Int? = null,
+    val discount_percent: Double? = null,
+    val financial_effect_cents: Int? = null,
+    val metadata: Map<String, Any?>? = null,
+)
+
+data class LedgerCorrectionSaleResponse(
+    val ok: Boolean = true,
+    val original_sale_id: String,
+    val root_original_sale_id: String = original_sale_id,
+    val target_sale_id: String? = null,
+    val parent_correction_id: String? = null,
+    val original_receipt_number: String? = null,
+    val correction_sale_id: String,
+    val correction_receipt_number: String,
+    val correction_amount_cents: Int,
+    val financial_effect_cents: Int = correction_amount_cents,
+    val correction_reason: String,
+    val correction_id: String? = null,
+    val correction_kind: String? = null,
+    val operation_types: List<String> = emptyList(),
+    val refund_method: String? = null,
+    val compensation_type: String? = null,
+    val receipt_snapshot_id: String,
+    val inventory_event_id: String? = null,
+    val delivery_token_ids: List<String> = emptyList(),
+    val finalized_at_epoch_ms: Long,
+    val raw_public_token: String? = null,
+    val public_url_path: String? = null,
+) {
+    fun absolutePublicReceiptUrl(backendBaseUrl: String): String? {
+        val path = public_url_path?.trim().orEmpty()
+        if (path.isEmpty()) return null
+        val base = backendBaseUrl.trim().trimEnd('/')
+        return if (path.startsWith("http://") || path.startsWith("https://")) path else "$base/${path.trimStart('/')}"
+    }
+}
+
 object AirosPosLedgerMapper {
     fun buildFinalizeSaleRequest(
         paymentRequest: TablePaymentRequest,

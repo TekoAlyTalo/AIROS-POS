@@ -2294,7 +2294,27 @@ private fun SignedInApp(
                     TransactionsRoute(
                         openSaleRepository = appContainer.openSaleRepository,
                         salesDayReportRepository = appContainer.salesDayReportRepository,
+                        ledgerHttpClient = appContainer.ledgerHttpClient,
                         backendBaseUrl = terminalSettings.edgeBaseUrl,
+                        currentStaffId = currentStaffId,
+                        currentStaffName = currentStaffName,
+                        onContinueOpenBill = { openSale ->
+                            val returnToTableView = !openSale.serviceSpotId.isNullOrBlank()
+                            activeSaleContext = ActiveSaleContext(
+                                tableId = openSale.serviceSpotId,
+                                tableLabel = openSale.serviceSpotLabel,
+                                saleId = openSale.saleId,
+                                returnToTableView = returnToTableView,
+                            )
+                            navController.navigate(
+                                Routes.menu(
+                                    tableId = openSale.serviceSpotId,
+                                    tableLabel = openSale.serviceSpotLabel,
+                                    saleId = openSale.saleId,
+                                    returnToTableView = returnToTableView,
+                                ),
+                            )
+                        },
                     )
                 }
 

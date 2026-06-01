@@ -72,7 +72,7 @@ import com.airos.pos.core.database.entity.TicketLocalEntity
         LocalFinalizedSaleEntity::class,
         LocalFinalizedSalePaymentEntity::class,
     ],
-    version = 17,
+    version = 19,
     exportSchema = false,
 )
 abstract class AirosPosDatabase : RoomDatabase() {
@@ -684,6 +684,34 @@ abstract class AirosPosDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_17_18 = object : Migration(17, 18) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `local_finalized_sales` ADD COLUMN `saleKind` TEXT NOT NULL DEFAULT 'NORMAL_SALE'")
+                db.execSQL("ALTER TABLE `local_finalized_sales` ADD COLUMN `correctionOriginalSaleId` TEXT")
+                db.execSQL("ALTER TABLE `local_finalized_sales` ADD COLUMN `correctionOriginalReceiptNumber` TEXT")
+                db.execSQL("ALTER TABLE `local_finalized_sales` ADD COLUMN `correctionReason` TEXT")
+                db.execSQL("ALTER TABLE `local_finalized_sales` ADD COLUMN `correctionAmountCents` INTEGER")
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `index_local_finalized_sales_saleKind_finalizedAtEpochMillis`
+                    ON `local_finalized_sales` (`saleKind`, `finalizedAtEpochMillis`)
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `index_local_finalized_sales_correctionOriginalSaleId`
+                    ON `local_finalized_sales` (`correctionOriginalSaleId`)
+                    """.trimIndent(),
+                )
+            }
+        }
+
+        private val MIGRATION_18_19 = object : Migration(18, 19) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `local_finalized_sales` ADD COLUMN `serverSaleId` TEXT")
+            }
+        }
+
         private val MIGRATION_9_10 = object : Migration(9, 10) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
@@ -738,6 +766,8 @@ abstract class AirosPosDatabase : RoomDatabase() {
                 MIGRATION_14_15,
                 MIGRATION_15_16,
                 MIGRATION_16_17,
+                MIGRATION_17_18,
+                MIGRATION_18_19,
             ).build()
         }
     }

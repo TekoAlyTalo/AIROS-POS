@@ -66,6 +66,7 @@ interface AppContainer {
     val ticketRepository: TicketRepository
     val kitchenRepository: KitchenRepository
     val paymentRepository: PaymentRepository
+    val ledgerHttpClient: AirosPosLedgerHttpClient
     val salesDayReportRepository: SalesDayReportRepository
     val settingsRepository: SettingsRepository
     val staffUiPreferencesRepository: StaffUiPreferencesRepository
@@ -280,7 +281,7 @@ class DefaultAppContainer(
         )
     }
 
-    private val ledgerHttpClient: AirosPosLedgerHttpClient by lazy {
+    override val ledgerHttpClient: AirosPosLedgerHttpClient by lazy {
         DefaultAirosPosLedgerHttpClient(
             backendBaseUrlProvider = { currentLedgerBackendBaseUrl().orEmpty() },
         )

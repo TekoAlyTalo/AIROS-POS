@@ -700,7 +700,16 @@ data class LocalFinalizedSaleRecord(
     val sellerDisplayName: String? = null,
     val terminalId: String? = null,
     val restaurantId: String? = null,
+    val saleKind: String = "NORMAL_SALE",
+    val correctionOriginalSaleId: String? = null,
+    val correctionOriginalReceiptNumber: String? = null,
+    val correctionReason: String? = null,
+    val correctionAmountCents: Int? = null,
     val payments: List<LocalFinalizedSalePaymentRecord>,
+    // Backend-assigned sale id from LedgerFinalizeSaleResponse.sale_id.
+    // Required to call POST /api/pos/sales/{serverSaleId}/corrections.
+    // Null for sales recorded before this field was added or when the ledger sync was offline.
+    val serverSaleId: String? = null,
 )
 
 data class LocalSalesPaymentBreakdown(

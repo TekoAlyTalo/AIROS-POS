@@ -341,6 +341,7 @@ class LocalPaymentRepository(
             receiptSnapshotId = receiptHandoffPayload?.receiptSnapshotId,
             publicReceiptUrl = receiptHandoffPayload?.publicReceiptUrl,
             publicUrlPath = receiptHandoffPayload?.publicUrlPath,
+            serverSaleId = receiptHandoffPayload?.saleId?.trim()?.ifBlank { null },
             tableId = resolvedTableId,
             tableLabel = resolvedTableLabel,
             finalizedAtEpochMillis = settingsAppliedReceiptDocument.printedAtEpochMillis ?: store.now(),

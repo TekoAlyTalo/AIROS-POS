@@ -175,6 +175,8 @@ data class SalesLedgerOutboxLocalEntity(
         Index(value = ["finalizedAtEpochMillis"]),
         Index(value = ["sellerStaffId", "finalizedAtEpochMillis"]),
         Index(value = ["terminalId", "finalizedAtEpochMillis"]),
+        Index(value = ["saleKind", "finalizedAtEpochMillis"]),
+        Index(value = ["correctionOriginalSaleId"]),
     ],
 )
 data class LocalFinalizedSaleEntity(
@@ -194,6 +196,12 @@ data class LocalFinalizedSaleEntity(
     val sellerDisplayName: String?,
     val terminalId: String?,
     val restaurantId: String?,
+    val saleKind: String = "NORMAL_SALE",
+    val correctionOriginalSaleId: String? = null,
+    val correctionOriginalReceiptNumber: String? = null,
+    val correctionReason: String? = null,
+    val correctionAmountCents: Int? = null,
+    val serverSaleId: String? = null,
     val status: String,
     val createdAtEpochMillis: Long,
 )
