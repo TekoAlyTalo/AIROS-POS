@@ -6,9 +6,7 @@ import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,7 +17,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -46,7 +43,6 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -926,13 +922,6 @@ private fun String.euroTextToCentsOrNull(): Int? {
     return (euros * 100.0).let { kotlin.math.round(it).toInt() }
 }
 
-private fun centsToEuroInput(cents: Int): String {
-    val safeCents = cents.coerceAtLeast(0)
-    val euros = safeCents / 100
-    val remainder = safeCents % 100
-    return "$euros,${remainder.toString().padStart(2, '0')}"
-}
-
 private fun JSONArray?.orEmptyJsonArray(): JSONArray = this ?: JSONArray()
 
 private fun JSONArray.mapObjects(): List<JSONObject> {
@@ -1033,7 +1022,7 @@ private class TransactionsViewModel private constructor(
         mutableState.update {
             it.copy(
                 correctionDialogEventId = event.stableId,
-                correctionOperationType = CorrectionOperationType.REMOVE_LINE,
+                correctionOperationType = CorrectionOperationType.FULL_REVERSAL,
                 correctionSaleDetail = null,
                 correctionDetailLoading = true,
                 correctionSelectedLineId = null,
@@ -1053,10 +1042,11 @@ private class TransactionsViewModel private constructor(
                     it.copy(correctionDetailLoading = false, correctionMessage = detail.message)
                 }
                 is PosResult.Success -> mutableState.update {
+                    val defaultLineId = detail.value.lineItems.firstOrNull()?.id
                     it.copy(
                         correctionDetailLoading = false,
                         correctionSaleDetail = detail.value,
-                        correctionSelectedLineId = null,
+                        correctionSelectedLineId = defaultLineId,
                     )
                 }
             }
@@ -1080,14 +1070,11 @@ private class TransactionsViewModel private constructor(
     }
 
     fun selectCorrectionOperation(operationType: CorrectionOperationType) {
-        mutableState.update { current ->
-            current.copy(
+        mutableState.update {
+            it.copy(
                 correctionOperationType = operationType,
                 correctionMessage = null,
-                correctionSelectedLineId = when {
-                    operationType.requiresExistingLine() -> current.correctionSelectedLineId
-                    else -> null
-                },
+                correctionSelectedLineId = it.correctionSaleDetail?.lineItems?.firstOrNull()?.id,
             )
         }
     }
@@ -1132,6 +1119,10 @@ private class TransactionsViewModel private constructor(
             mutableState.update { it.copy(correctionMessage = "Korjattavaa myyntiä ei löydy.") }
             return
         }
+        if (snapshot.correctionReason.isBlank()) {
+            mutableState.update { it.copy(correctionMessage = "Korjausmyynnin syy on pakollinen.") }
+            return
+        }
         mutableState.update { it.copy(correctionBusy = true, correctionMessage = null) }
         viewModelScope.launch {
             val draft = CorrectionSubmitDraft(
@@ -1143,7 +1134,7 @@ private class TransactionsViewModel private constructor(
                 refundMethod = snapshot.correctionRefundMethod,
                 compensationType = snapshot.correctionCompensationType,
                 compensationDetails = snapshot.correctionCompensationDetails,
-                reason = snapshot.correctionReason.ifBlank { snapshot.correctionOperationType.defaultReason() },
+                reason = snapshot.correctionReason,
             )
             when (
                 val result = repository.createCorrectionSale(
@@ -1474,7 +1465,6 @@ private fun TransactionsScreen(
                                 selected = selectedEvent?.stableId == event.stableId,
                                 strings = strings,
                                 onClick = { onSelectEvent(event.stableId) },
-                                onCreateCorrection = onOpenCorrection,
                             )
                         }
                     }
@@ -1735,7 +1725,6 @@ private fun RecentSaleRow(
     selected: Boolean,
     strings: CashierStrings,
     onClick: () -> Unit,
-    onCreateCorrection: (TransactionRecord) -> Unit,
 ) {
     Surface(
         modifier = Modifier
@@ -1809,17 +1798,6 @@ private fun RecentSaleRow(
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(start = 12.dp),
             )
-            if (event.canCreateCorrection()) {
-                TextButton(
-                    onClick = {
-                        onClick()
-                        onCreateCorrection(event)
-                    },
-                    modifier = Modifier.padding(start = 8.dp),
-                ) {
-                    Text("Korjaa")
-                }
-            }
         }
     }
 }
@@ -1970,12 +1948,6 @@ private fun SalesDetailPane(
     }
 }
 
-private enum class CorrectionDiscountInputMode {
-    PERCENT,
-    EURO,
-}
-
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun CorrectionSaleDialog(
     event: TransactionRecord,
@@ -2004,131 +1976,201 @@ private fun CorrectionSaleDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    var reasonFocused by remember { mutableStateOf(false) }
     val strings = rememberCashierStrings()
     val scrollState = rememberScrollState()
     val disabledReason = operationType.disabledReason(detail, detailLoading)
-    val selectedLine = detail?.lineItems?.firstOrNull { it.id == selectedLineId }
     val lineRequired = operationType.requiresExistingLine()
-    val hasValidDraft = when (operationType) {
-        CorrectionOperationType.REMOVE_LINE -> selectedLine != null
-        CorrectionOperationType.CHANGE_QUANTITY -> selectedLine != null &&
-            quantityDelta.trim().toIntOrNull()?.let { it != 0 } == true
-        CorrectionOperationType.APPLY_DISCOUNT -> selectedLine != null &&
-            discountCents.euroTextToCentsOrNull()?.let { it > 0 } == true
-        else -> !lineRequired || selectedLine != null
-    }
     val confirmEnabled = !busy &&
+        reason.isNotBlank() &&
         disabledReason == null &&
-        hasValidDraft
-    var discountInputMode by remember { mutableStateOf<CorrectionDiscountInputMode?>(null) }
-    var discountInputLine by remember { mutableStateOf<BackendSaleLine?>(null) }
-    var discountInputText by remember { mutableStateOf("") }
-
+        (!lineRequired || !selectedLineId.isNullOrBlank())
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
         title = {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    text = "Korjaa kuitti",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    text = buildString {
-                        append(detail?.receiptNumber ?: event.receiptNumber ?: event.saleId.orEmpty())
-                        event.tableLabel?.let { append(" · $it") }
-                        append(" · ")
-                        append(CentsFormatter.format(event.amountCents))
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+            Text(
+                text = "Tee korjausmyynti",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
         },
         text = {
             Column(
                 modifier = Modifier.verticalScroll(scrollState),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                DetailKvRow(label = "Kuitti", value = detail?.receiptNumber ?: event.receiptNumber ?: event.saleId.orEmpty())
+                event.correctionOriginalReceiptNumber?.let { originalReceipt ->
+                    DetailKvRow(label = "Alkuperäinen kuitti", value = originalReceipt)
+                }
+                DetailKvRow(label = "Paikka", value = detail?.tableLabel ?: event.tableLabel ?: "Pikamyynti")
+                DetailKvRow(label = "Summa", value = CentsFormatter.format(event.amountCents))
+                DetailKvRow(label = "Maksutapa", value = event.paymentSummary(strings))
+                DetailKvRow(label = "Aika", value = formatUiDateTime(event.occurredAtEpochMillis))
                 if (detailLoading) {
                     Text(
-                        text = "Haetaan rivejä...",
+                        text = "Haetaan backendin rivitietoja...",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-
-                val lines = detail?.lineItems.orEmpty()
-                if (!detailLoading && lines.isEmpty()) {
-                    ReceiptTruthError(
-                        message = "Rakenteisia kuitin rivejä ei ole saatavilla.",
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                } else {
-                    lines.forEach { line ->
-                        val markedForRefund = selectedLineId == line.id && operationType == CorrectionOperationType.REMOVE_LINE
-                        CorrectionSmartLineRow(
-                            line = line,
-                            selected = selectedLineId == line.id,
-                            operationType = operationType,
-                            quantityDelta = quantityDelta,
-                            discountCents = discountCents,
-                            busy = busy,
-                            onRefundLine = {
-                                if (markedForRefund) {
-                                    onLineChange("")
-                                } else {
-                                    onLineChange(line.id)
-                                    onOperationChange(CorrectionOperationType.REMOVE_LINE)
-                                    if (reason.isBlank()) onReasonChange("Rivin hyvitys")
-                                }
+                if (!detailLoading && detail?.corrections?.isNotEmpty() == true) {
+                    DashboardSectionHeader("Korjausketju")
+                    detail.corrections.forEach { correction ->
+                        Text(
+                            text = buildString {
+                                append(correction.correctionReceiptNumber ?: correction.correctionSaleId ?: correction.correctionId ?: "Korjaus")
+                                correction.correctionKind?.let { append(" · $it") }
+                                correction.financialEffectCents?.let { append(" · ${CentsFormatter.format(it)}") }
+                                correction.reason?.takeIf { it.isNotBlank() }?.let { append(" · $it") }
                             },
-                            onLongPressLine = {
-                                // Reserved for drag/select. Do not make long press perform the same refund toggle as quick tap.
-                            },
-                            onQuantity = {
-                                onLineChange(line.id)
-                                onOperationChange(CorrectionOperationType.CHANGE_QUANTITY)
-                                if (reason.isBlank()) onReasonChange("Määrän korjaus")
-                            },
-                            onQuantityMinus = {
-                                onLineChange(line.id)
-                                onOperationChange(CorrectionOperationType.CHANGE_QUANTITY)
-                                onQuantityDeltaChange("-1")
-                                if (reason.isBlank()) onReasonChange("Määrän korjaus")
-                            },
-                            onQuantityPlus = {
-                                onLineChange(line.id)
-                                onOperationChange(CorrectionOperationType.CHANGE_QUANTITY)
-                                onQuantityDeltaChange("1")
-                                if (reason.isBlank()) onReasonChange("Määrän korjaus")
-                            },
-                            onDiscount = {
-                                onLineChange(line.id)
-                                onOperationChange(CorrectionOperationType.APPLY_DISCOUNT)
-                                if (reason.isBlank()) onReasonChange("Rivin alennus")
-                            },
-                            onDiscountPercent = {
-                                discountInputLine = line
-                                discountInputMode = CorrectionDiscountInputMode.PERCENT
-                                discountInputText = ""
-                            },
-                            onDiscountEuro = {
-                                discountInputLine = line
-                                discountInputMode = CorrectionDiscountInputMode.EURO
-                                discountInputText = ""
-                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
 
-
-                if (message != null) {
-                    ReceiptTruthError(message = message, modifier = Modifier.fillMaxWidth())
+                DashboardSectionHeader("Toimenpide")
+                CorrectionOperationType.values().forEach { operation ->
+                    val reasonText = operation.disabledReason(detail, detailLoading)
+                    CorrectionChoiceRow(
+                        label = operation.label,
+                        selected = operationType == operation,
+                        disabledReason = reasonText,
+                        enabled = !busy && reasonText == null,
+                        onClick = { onOperationChange(operation) },
+                    )
                 }
+
+                if (operationType.requiresExistingLine()) {
+                    DashboardSectionHeader("Rivi")
+                    val lines = detail?.lineItems.orEmpty()
+                    if (lines.isEmpty()) {
+                        Text(
+                            text = "Backend ei palauttanut rakenteisia myyntirivejä tälle kuitille.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    } else {
+                        lines.forEach { line ->
+                            CorrectionChoiceRow(
+                                label = "${line.quantity} x ${line.productName} · ${CentsFormatter.format(line.lineTotalCents)}",
+                                selected = selectedLineId == line.id,
+                                disabledReason = null,
+                                enabled = !busy,
+                                onClick = { onLineChange(line.id) },
+                            )
+                        }
+                    }
+                }
+
+                when (operationType) {
+                    CorrectionOperationType.CHANGE_QUANTITY -> {
+                        OutlinedTextField(
+                            value = quantityDelta,
+                            onValueChange = onQuantityDeltaChange,
+                            label = { Text("Määrän muutos, esim. -1") },
+                            enabled = !busy,
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    CorrectionOperationType.APPLY_DISCOUNT -> {
+                        OutlinedTextField(
+                            value = discountCents,
+                            onValueChange = onDiscountCentsChange,
+                            label = { Text("Alennus euroina, esim. 2,50") },
+                            enabled = !busy,
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    CorrectionOperationType.MONETARY_REFUND -> {
+                        OutlinedTextField(
+                            value = refundAmount,
+                            onValueChange = onRefundAmountChange,
+                            label = { Text("Hyvitys euroina, tyhjä = koko summa") },
+                            enabled = !busy,
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            ReportFilterChip(
+                                label = "Kortti",
+                                selected = refundMethod == "CARD",
+                                onClick = { onRefundMethodChange("CARD") },
+                            )
+                            ReportFilterChip(
+                                label = "Käteinen",
+                                selected = refundMethod == "CASH",
+                                onClick = { onRefundMethodChange("CASH") },
+                            )
+                        }
+                    }
+                    CorrectionOperationType.NON_MONETARY_COMPENSATION -> {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            ReportFilterChip(
+                                label = "Ilmainen ateria",
+                                selected = compensationType == "FREE_MEAL",
+                                onClick = { onCompensationTypeChange("FREE_MEAL") },
+                            )
+                            ReportFilterChip(
+                                label = "Kahvi",
+                                selected = compensationType == "COFFEE",
+                                onClick = { onCompensationTypeChange("COFFEE") },
+                            )
+                            ReportFilterChip(
+                                label = "Muu",
+                                selected = compensationType == "OTHER",
+                                onClick = { onCompensationTypeChange("OTHER") },
+                            )
+                        }
+                        OutlinedTextField(
+                            value = compensationDetails,
+                            onValueChange = onCompensationDetailsChange,
+                            label = { Text("Hyvityksen kuvaus") },
+                            enabled = !busy,
+                            singleLine = false,
+                            minLines = 2,
+                            maxLines = 3,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    else -> Unit
+                }
+
                 disabledReason?.let {
+                    ReceiptTruthError(message = it, modifier = Modifier.fillMaxWidth())
+                }
+                OutlinedTextField(
+                    value = reason,
+                    onValueChange = onReasonChange,
+                    label = { Text("Korjauksen syy") },
+                    enabled = !busy,
+                    singleLine = false,
+                    minLines = 2,
+                    maxLines = 4,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onFocusChanged { reasonFocused = it.isFocused },
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    TextButton(
+                        onClick = {
+                            keyboardController?.hide()
+                            focusManager.clearFocus()
+                        },
+                        enabled = !busy && reasonFocused,
+                    ) {
+                        Text("Piilota näppäimistö")
+                    }
+                }
+                message?.let {
                     ReceiptTruthError(message = it, modifier = Modifier.fillMaxWidth())
                 }
             }
@@ -2150,452 +2192,6 @@ private fun CorrectionSaleDialog(
             }
         },
     )
-
-    val activeDiscountMode = discountInputMode
-    val activeDiscountLine = discountInputLine
-    if (activeDiscountMode != null && activeDiscountLine != null) {
-        CorrectionDiscountInputDialog(
-            mode = activeDiscountMode,
-            line = activeDiscountLine,
-            input = discountInputText,
-            busy = busy,
-            onInputChange = { discountInputText = it },
-            onDismiss = {
-                discountInputMode = null
-                discountInputLine = null
-                discountInputText = ""
-            },
-            onConfirm = { discountCentsValue ->
-                onLineChange(activeDiscountLine.id)
-                onOperationChange(CorrectionOperationType.APPLY_DISCOUNT)
-                onDiscountCentsChange(centsToEuroInput(discountCentsValue))
-                if (reason.isBlank()) onReasonChange("Rivin alennus")
-                discountInputMode = null
-                discountInputLine = null
-                discountInputText = ""
-            },
-        )
-    }
-}
-
-@Composable
-private fun CorrectionInlinePanel(
-    title: String,
-    content: @Composable () -> Unit,
-) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f),
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            MaterialTheme.colorScheme.outline.copy(alpha = 0.18f),
-        ),
-    ) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
-            )
-            content()
-        }
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun CorrectionSmartLineRow(
-    line: BackendSaleLine,
-    selected: Boolean,
-    operationType: CorrectionOperationType,
-    quantityDelta: String,
-    discountCents: String,
-    busy: Boolean,
-    onRefundLine: () -> Unit,
-    onLongPressLine: () -> Unit,
-    onQuantity: () -> Unit,
-    onQuantityMinus: () -> Unit,
-    onQuantityPlus: () -> Unit,
-    onDiscount: () -> Unit,
-    onDiscountPercent: () -> Unit,
-    onDiscountEuro: () -> Unit,
-) {
-    val markedForRefund = selected && operationType == CorrectionOperationType.REMOVE_LINE
-    val quantityOpen = selected && operationType == CorrectionOperationType.CHANGE_QUANTITY
-    val discountOpen = selected && operationType == CorrectionOperationType.APPLY_DISCOUNT
-    val quantityDeltaValue = quantityDelta.trim().toIntOrNull()
-    val discountCentsValue = discountCents.euroTextToCentsOrNull()
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        color = when {
-            markedForRefund -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.46f)
-            selected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.30f)
-            else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.30f)
-        },
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            when {
-                markedForRefund -> MaterialTheme.colorScheme.error.copy(alpha = 0.55f)
-                selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
-                else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.16f)
-            },
-        ),
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Surface(
-                modifier = Modifier
-                    .width(if (quantityOpen) 112.dp else 48.dp)
-                    .clickable(enabled = !busy && !quantityOpen, onClick = onQuantity),
-                shape = RoundedCornerShape(10.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
-                border = androidx.compose.foundation.BorderStroke(
-                    1.dp,
-                    MaterialTheme.colorScheme.outline.copy(alpha = 0.18f),
-                ),
-            ) {
-                if (quantityOpen) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        CorrectionTinyButton(text = "−", enabled = !busy, onClick = onQuantityMinus)
-                        Text(
-                            text = quantityDeltaValue?.takeIf { it != 0 }?.let { delta ->
-                                if (delta > 0) "+$delta" else delta.toString()
-                            } ?: "${line.quantity}x",
-                            modifier = Modifier.weight(1f),
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Bold,
-                            textAlign = TextAlign.Center,
-                        )
-                        CorrectionTinyButton(text = "+", enabled = !busy, onClick = onQuantityPlus)
-                    }
-                } else {
-                    Box(
-                        modifier = Modifier.padding(vertical = 10.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = "${line.quantity}x",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                }
-            }
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .combinedClickable(
-                        enabled = !busy,
-                        onClick = onRefundLine,
-                        onLongClick = onLongPressLine,
-                    ),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                Text(
-                    text = line.productName,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (markedForRefund) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-                    textDecoration = if (markedForRefund) TextDecoration.LineThrough else TextDecoration.None,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (markedForRefund) {
-                    Text(
-                        text = "Hyvitetään",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
-            }
-            Surface(
-                modifier = Modifier
-                    .width(if (discountOpen) 92.dp else 92.dp)
-                    .clickable(enabled = !busy && !discountOpen, onClick = onDiscount),
-                shape = RoundedCornerShape(10.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
-                border = androidx.compose.foundation.BorderStroke(
-                    1.dp,
-                    MaterialTheme.colorScheme.outline.copy(alpha = 0.18f),
-                ),
-            ) {
-                if (discountOpen) {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            CorrectionTinyButton(text = "%", enabled = !busy, onClick = onDiscountPercent)
-                            CorrectionTinyButton(text = "€", enabled = !busy, onClick = onDiscountEuro)
-                        }
-                        discountCentsValue?.takeIf { it > 0 }?.let { cents ->
-                            Text(
-                                text = "-${CentsFormatter.format(cents)}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Bold,
-                            )
-                        }
-                    }
-                } else {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                        horizontalAlignment = Alignment.End,
-                    ) {
-                        Text(
-                            text = CentsFormatter.format(line.lineTotalCents),
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                        )
-                        Text(
-                            text = "% / €",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-
-@Composable
-private fun CorrectionDiscountInputDialog(
-    mode: CorrectionDiscountInputMode,
-    line: BackendSaleLine,
-    input: String,
-    busy: Boolean,
-    onInputChange: (String) -> Unit,
-    onDismiss: () -> Unit,
-    onConfirm: (Int) -> Unit,
-) {
-    val title = when (mode) {
-        CorrectionDiscountInputMode.PERCENT -> "Alennus %"
-        CorrectionDiscountInputMode.EURO -> "Alennus €"
-    }
-    val parsedDiscountCents = remember(mode, line, input) {
-        correctionDiscountInputToCents(
-            mode = mode,
-            input = input,
-            lineTotalCents = line.lineTotalCents,
-        )
-    }
-    val previewTotalCents = parsedDiscountCents
-        ?.let { (line.lineTotalCents - it).coerceAtLeast(0) }
-    AlertDialog(
-        onDismissRequest = { if (!busy) onDismiss() },
-        title = {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-            )
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                ) {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        Text(
-                            text = line.productName,
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        CorrectionSummaryRow("Rivin summa", CentsFormatter.format(line.lineTotalCents))
-                        if (mode == CorrectionDiscountInputMode.EURO) {
-                            CorrectionSummaryRow("Syötetty alennus", parsedDiscountCents?.let(CentsFormatter::format) ?: "--")
-                        } else {
-                            CorrectionSummaryRow("Syötetty alennus", input.takeIf { it.isNotBlank() }?.let { "$it %" } ?: "--")
-                        }
-                        CorrectionSummaryRow("Alennettu yhteensä", previewTotalCents?.let(CentsFormatter::format) ?: "--")
-                    }
-                }
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
-                    border = androidx.compose.foundation.BorderStroke(
-                        1.dp,
-                        MaterialTheme.colorScheme.outline.copy(alpha = 0.18f),
-                    ),
-                ) {
-                    Text(
-                        text = if (mode == CorrectionDiscountInputMode.PERCENT) {
-                            input.ifBlank { "0" } + " %"
-                        } else {
-                            displayDiscountEuroInput(input)
-                        },
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
-                CorrectionNumberPad(
-                    input = input,
-                    allowDecimal = true,
-                    onInputChange = onInputChange,
-                )
-            }
-        },
-        dismissButton = {
-            TextButton(
-                onClick = onDismiss,
-                enabled = !busy,
-            ) { Text("Peru") }
-        },
-        confirmButton = {
-            Button(
-                onClick = { parsedDiscountCents?.let(onConfirm) },
-                enabled = !busy && parsedDiscountCents?.let { it > 0 && it <= line.lineTotalCents } == true,
-            ) { Text("OK") }
-        },
-    )
-}
-
-@Composable
-private fun CorrectionSummaryRow(label: String, value: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Bold,
-        )
-    }
-}
-
-@Composable
-private fun CorrectionNumberPad(
-    input: String,
-    allowDecimal: Boolean,
-    onInputChange: (String) -> Unit,
-) {
-    val rows = listOf(
-        listOf("1", "2", "3"),
-        listOf("4", "5", "6"),
-        listOf("7", "8", "9"),
-        listOf(",", "0", "⌫"),
-    )
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        rows.forEach { row ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                row.forEach { key ->
-                    Button(
-                        onClick = {
-                            val next = when (key) {
-                                "⌫" -> input.dropLast(1)
-                                "," -> if (allowDecimal && input.none { it == ',' || it == '.' }) {
-                                    if (input.isBlank()) "0," else "$input,"
-                                } else {
-                                    input
-                                }
-                                else -> (input + key).take(8)
-                            }
-                            onInputChange(next)
-                        },
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(56.dp),
-                        shape = RoundedCornerShape(12.dp),
-                    ) {
-                        Text(
-                            text = key,
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-private fun correctionDiscountInputToCents(
-    mode: CorrectionDiscountInputMode,
-    input: String,
-    lineTotalCents: Int,
-): Int? {
-    val normalized = input.trim().replace(',', '.')
-    if (normalized.isBlank()) return null
-    val value = normalized.toDoubleOrNull() ?: return null
-    if (value <= 0.0) return null
-    return when (mode) {
-        CorrectionDiscountInputMode.PERCENT -> {
-            if (value > 100.0) return null
-            kotlin.math.round(lineTotalCents * (value / 100.0)).toInt()
-        }
-        CorrectionDiscountInputMode.EURO -> kotlin.math.round(value * 100.0).toInt()
-    }?.coerceAtMost(lineTotalCents)
-}
-
-private fun displayDiscountEuroInput(input: String): String {
-    return if (input.isBlank()) "0 €" else "$input €"
-}
-
-@Composable
-private fun CorrectionTinyButton(
-    text: String,
-    enabled: Boolean,
-    onClick: () -> Unit,
-) {
-    Surface(
-        modifier = Modifier
-            .size(32.dp)
-            .clickable(enabled = enabled, onClick = onClick),
-        shape = RoundedCornerShape(9.dp),
-        color = if (enabled) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            MaterialTheme.colorScheme.primary.copy(alpha = if (enabled) 0.45f else 0.15f),
-        ),
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Text(
-                text = text,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = if (enabled) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
 }
 
 @Composable
@@ -2975,19 +2571,6 @@ private fun TransactionRecord.defaultRefundMethod(): String {
         PaymentMethod.CARD.name in methods -> PaymentMethod.CARD.name
         PaymentMethod.CASH.name in methods -> PaymentMethod.CASH.name
         else -> PaymentMethod.CARD.name
-    }
-}
-
-private fun CorrectionOperationType.defaultReason(): String {
-    return when (this) {
-        CorrectionOperationType.REMOVE_LINE -> "Rivin hyvitys"
-        CorrectionOperationType.CHANGE_QUANTITY -> "Määrän korjaus"
-        CorrectionOperationType.APPLY_DISCOUNT -> "Rivin alennus"
-        CorrectionOperationType.MONETARY_REFUND -> "Rahahyvitys"
-        CorrectionOperationType.NON_MONETARY_COMPENSATION -> "Ei-rahallinen hyvitys"
-        CorrectionOperationType.FULL_REVERSAL -> "Koko kuitin peruutus"
-        CorrectionOperationType.ADD_LINE -> "Puuttuvan tuotteen lisäys"
-        CorrectionOperationType.REPLACE_LINE -> "Tuotteen vaihto"
     }
 }
 
