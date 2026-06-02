@@ -305,7 +305,7 @@ class MenuViewModel(
                 val existingSale = when {
                     activeSaleId != null -> repo.loadOpenSaleById(activeSaleId)
                     shouldForceNewSale -> null
-                    isNoActiveBillModeSentinel -> null  // never auto-restore a tableless sale
+                    isNoActiveBillModeSentinel -> repo.loadOpenSaleForSpot(null)
                     else -> repo.loadOpenSaleForSpot(activeTableId)
                 }
                 if (existingSale != null) {
@@ -2071,7 +2071,7 @@ private fun RowScope.TicketPane(
                             )
                         }
                         OutlinedReceiptActionButton(
-                            label = if (activeTableId == null) "Lisää paikkaan" else "Vaihda paikkaan",
+                            label = if (activeTableId == null) "Liitä paikkaan" else "Vaihda paikkaan",
                             onClick = { onOpenServiceSpotSelection?.invoke() },
                             modifier = Modifier.weight(1f),
                             enabled = !paymentInProgress,

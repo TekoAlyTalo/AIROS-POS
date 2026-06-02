@@ -24,6 +24,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -161,6 +162,44 @@ fun LineDiscountDialog(
                         )
                     }
                 }
+                if (editor.mode == LineDiscountMode.PERCENT) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        listOf(5, 10, 15, 20).forEach { pct ->
+                            LineDiscountKeypadButton(
+                                label = "$pct %",
+                                modifier = Modifier.weight(1f),
+                                onClick = { value = pct.toString() },
+                            )
+                        }
+                    }
+                }
+                if (editor.mode == LineDiscountMode.AMOUNT) {
+                    val tasaeuroTarget = remember(editor.lineTotalCents) { roundDownTargetCents(editor.lineTotalCents, 100) }
+                    val tasaa5Target = remember(editor.lineTotalCents) { halfDecadeTargetCents(editor.lineTotalCents) }
+                    val tasaa10Target = remember(editor.lineTotalCents) { roundDownTargetCents(editor.lineTotalCents, 1000) }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        listOf(
+                            "Tasaeuro" to tasaeuroTarget,
+                            "Tasaa 5 €" to tasaa5Target,
+                            "Tasaa 10 €" to tasaa10Target,
+                        ).forEach { (label, targetCents) ->
+                            val discountCents = targetCents?.let { editor.lineTotalCents - it }
+                            LineDiscountKeypadButton(
+                                label = label,
+                                modifier = Modifier.weight(1f),
+                                enabled = targetCents != null,
+                                sublabel = targetCents?.let { formatLineDiscountCents(it) },
+                                onClick = { if (discountCents != null) value = centsToAmountValueString(discountCents) },
+                            )
+                        }
+                    }
+                }
                 LineDiscountKeypad(
                     mode = editor.mode,
                     value = value,
@@ -270,6 +309,7 @@ private fun LineDiscountKeypadButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    sublabel: String? = null,
 ) {
     Surface(
         modifier = modifier,
@@ -285,11 +325,31 @@ private fun LineDiscountKeypadButton(
                 .clickable(enabled = enabled, onClick = onClick),
             contentAlignment = androidx.compose.ui.Alignment.Center,
         ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-            )
+            if (sublabel != null) {
+                Column(
+                    horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(1.dp),
+                ) {
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Medium,
+                        textAlign = TextAlign.Center,
+                    )
+                    Text(
+                        text = sublabel,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            } else {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
         }
     }
 }
@@ -413,6 +473,30 @@ private fun formatLineDiscountDisplayValue(
         LineDiscountMode.PERCENT -> "${value.ifBlank { "0" }} %"
         LineDiscountMode.AMOUNT -> if (value.isBlank()) "0 €" else "$value €"
     }
+}
+
+// Returns the target amount after rounding down to the nearest levelCents multiple.
+// Returns null if already at that level or target would be zero/negative.
+private fun roundDownTargetCents(totalCents: Int, levelCents: Int): Int? {
+    val target = (totalCents / levelCents) * levelCents
+    if (target <= 0 || target >= totalCents) return null
+    return target
+}
+
+// Returns the "half-decade" target: floor(total/10€)*10€ + 5€.
+// Only enabled when that value is strictly less than the total, i.e. the total sits
+// in the upper half of a 10€ bracket. Example: 27,80 → 25,00 enabled;
+// 21,20 → 25,00 would exceed total → disabled (next sensible 5€ step is 15€, too far).
+private fun halfDecadeTargetCents(totalCents: Int): Int? {
+    val target = (totalCents / 1000) * 1000 + 500
+    if (target <= 0 || target >= totalCents) return null
+    return target
+}
+
+private fun centsToAmountValueString(cents: Int): String {
+    val euros = cents / 100
+    val remainder = cents % 100
+    return if (remainder == 0) euros.toString() else "$euros,${remainder.toString().padStart(2, '0')}"
 }
 
 private fun formatLineDiscountCents(cents: Int): String {

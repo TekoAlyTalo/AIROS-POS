@@ -7,11 +7,13 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -21,6 +23,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -34,6 +37,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -42,6 +46,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
@@ -177,6 +183,17 @@ private data class BackendPaymentLine(
     val displayLabel: String? = null,
 )
 
+private fun inferUnambiguousPaymentMethod(payments: List<BackendPaymentLine>?): String? {
+    if (payments.isNullOrEmpty()) return null
+    val methods = payments.map { it.method.uppercase() }.distinct()
+    if (methods.size != 1) return null
+    return when (methods.single()) {
+        "CASH" -> "CASH"
+        "CARD" -> "CARD"
+        else -> null
+    }
+}
+
 private data class BackendCorrectionSummary(
     val correctionId: String?,
     val correctionSaleId: String?,
@@ -229,6 +246,40 @@ private data class CorrectionSubmitDraft(
     val compensationDetails: String,
     val reason: String,
 )
+
+// Per-line correction state. Each row in the correction workbench owns one
+// independent CorrectionLineState — selecting/changing one line never mutates
+// another row's state. Persisted across recompositions inside CorrectionSaleDialog
+// keyed by the dialog event so a fresh sale starts with empty per-line state.
+private data class CorrectionLineState(
+    val markedForRefund: Boolean = false,
+    val quantityDelta: Int = 0,
+    val discountCents: Int = 0,
+    val discountPercent: Int = 0,
+)
+
+private fun correctionFinancialEffectFromLineStates(
+    detail: BackendSaleDetail?,
+    lineStates: Map<String, CorrectionLineState>,
+    totalDiscountCents: Int = 0,
+): Int {
+    val lineById = detail?.lineItems?.associateBy { it.id }.orEmpty()
+    var total = 0
+    lineStates.forEach { (lineId, state) ->
+        val line = lineById[lineId] ?: return@forEach
+        if (state.markedForRefund) {
+            total -= kotlin.math.abs(line.lineTotalCents)
+        }
+        if (state.quantityDelta != 0) {
+            total += line.unitPriceCents * state.quantityDelta
+        }
+        if (state.discountCents > 0) {
+            total -= state.discountCents
+        }
+    }
+    total -= totalDiscountCents.coerceAtLeast(0)
+    return total
+}
 
 private data class TransactionRecord(
     val stableId: String,
@@ -284,7 +335,7 @@ private data class TransactionsUiState(
     val correctionQuantityDelta: String = "-1",
     val correctionDiscountCents: String = "",
     val correctionRefundAmountCents: String = "",
-    val correctionRefundMethod: String = "CARD",
+    val correctionRefundMethod: String = "",
     val correctionCompensationType: String = "FREE_MEAL",
     val correctionCompensationDetails: String = "",
     val correctionReason: String = "",
@@ -298,6 +349,16 @@ private data class PaymentMethodBucket(
     val amountCents: Int,
     val totalCents: Int,
 )
+
+private data class TransactionListRow(
+    val event: TransactionRecord,
+    val correctionIndentLevel: Int = 0,
+    val correctionChildIndex: Int = 0,
+    val correctionChildCount: Int = 0,
+    val relationshipMissing: Boolean = false,
+) {
+    val key: String = event.stableId
+}
 
 private class TransactionsRepository(
     private val openSaleRepository: OpenSaleRepository,
@@ -511,12 +572,108 @@ private class TransactionsRepository(
                 target_sale_id = event.serverSaleId,
                 operations = operations,
                 refund_method = refundMethod,
-                settlement_method = refundMethod,
+                settlement_method = null,
                 compensation_type = compensationType,
                 compensation_details = compensationDetails,
                 finalized_at_epoch_ms = System.currentTimeMillis(),
             ),
         )
+    }
+
+    // Multi-line correction path: each line in lineStates may contribute multiple
+    // independent operations (refund, quantity change, discount) which are sent
+    // together in the same correction request. Lines not present in detail are
+    // silently skipped — they can't be matched to a backend original_line_id.
+    suspend fun createCorrectionSaleFromLineStates(
+        event: TransactionRecord,
+        detail: BackendSaleDetail?,
+        lineStates: Map<String, CorrectionLineState>,
+        totalDiscountCents: Int = 0,
+        reason: String,
+        correctionMethod: String?,
+        actorStaffId: String?,
+        actorName: String?,
+    ): PosResult<LedgerCorrectionSaleResponse> {
+        val originalSaleId = event.serverSaleId?.trim().orEmpty()
+        if (originalSaleId.isBlank()) {
+            return PosResult.Failure(
+                "Korjausmyyntiä ei voida luoda: myynniltä puuttuu backendin myyntitunniste. " +
+                    "Myynti on saatettu tallentaa offline-tilassa eikä sitä ole vielä synkronoitu palvelimelle."
+            )
+        }
+        val resolvedReason = reason.trim()
+        if (resolvedReason.isBlank()) {
+            return PosResult.Failure("Korjausmyynnin syy on pakollinen.")
+        }
+        val operations = buildCorrectionOperationsFromLineStates(detail, lineStates, totalDiscountCents)
+        if (operations.isEmpty()) {
+            return PosResult.Failure("Valitse vähintään yksi rivimuutos.")
+        }
+        val financialEffectCents = correctionFinancialEffectFromLineStates(detail, lineStates, totalDiscountCents)
+        val selectedMethod = correctionMethod
+            ?.trim()
+            ?.uppercase(Locale.ROOT)
+            ?.takeIf { it.isNotBlank() }
+        if (financialEffectCents != 0 && selectedMethod !in setOf("CASH", "CARD")) {
+            return PosResult.Failure(if (financialEffectCents < 0) "Valitse palautustapa." else "Valitse maksutapa.")
+        }
+        val sourcePosEventId = "pos-correction-${UUID.randomUUID()}"
+        return ledgerHttpClient.createCorrectionSale(
+            originalSaleId = originalSaleId,
+            request = LedgerCreateCorrectionRequest(
+                reason = resolvedReason,
+                actor_staff_id = actorStaffId?.takeIf { it.isNotBlank() },
+                actor_name = actorName?.takeIf { it.isNotBlank() },
+                source_pos_event_id = sourcePosEventId,
+                idempotency_key = sourcePosEventId,
+                target_sale_id = event.serverSaleId,
+                operations = operations,
+                refund_method = selectedMethod.takeIf { financialEffectCents < 0 },
+                settlement_method = selectedMethod.takeIf { financialEffectCents > 0 },
+                finalized_at_epoch_ms = System.currentTimeMillis(),
+            ),
+        )
+    }
+
+    private fun buildCorrectionOperationsFromLineStates(
+        detail: BackendSaleDetail?,
+        lineStates: Map<String, CorrectionLineState>,
+        totalDiscountCents: Int = 0,
+    ): List<LedgerCorrectionOperationRequest> {
+        val lineById = detail?.lineItems?.associateBy { it.id }.orEmpty()
+        val ops = mutableListOf<LedgerCorrectionOperationRequest>()
+        lineStates.forEach { (lineId, state) ->
+            val line = lineById[lineId] ?: return@forEach
+            if (state.markedForRefund) {
+                ops += LedgerCorrectionOperationRequest(
+                    operation_type = CorrectionOperationType.REMOVE_LINE.backendCode,
+                    original_line_id = line.id,
+                )
+            }
+            if (state.quantityDelta != 0) {
+                ops += LedgerCorrectionOperationRequest(
+                    operation_type = CorrectionOperationType.CHANGE_QUANTITY.backendCode,
+                    original_line_id = line.id,
+                    quantity_delta = state.quantityDelta,
+                )
+            }
+            if (state.discountCents > 0) {
+                ops += LedgerCorrectionOperationRequest(
+                    operation_type = CorrectionOperationType.APPLY_DISCOUNT.backendCode,
+                    original_line_id = line.id,
+                    discount_cents = state.discountCents,
+                )
+            }
+        }
+        // Total-level discount is sent as MONETARY_REFUND — a supported, auditable
+        // operation that reduces the correction total without targeting a specific line.
+        if (totalDiscountCents > 0) {
+            ops += LedgerCorrectionOperationRequest(
+                operation_type = CorrectionOperationType.MONETARY_REFUND.backendCode,
+                financial_effect_cents = -totalDiscountCents,
+            )
+        }
+        return ops
     }
 
     private fun buildCorrectionOperations(
@@ -1043,7 +1200,7 @@ private class TransactionsViewModel private constructor(
                 correctionQuantityDelta = "-1",
                 correctionDiscountCents = "",
                 correctionRefundAmountCents = "",
-                correctionRefundMethod = event.defaultRefundMethod(),
+                correctionRefundMethod = "",
                 correctionCompensationType = "FREE_MEAL",
                 correctionCompensationDetails = "",
                 correctionReason = "",
@@ -1127,7 +1284,15 @@ private class TransactionsViewModel private constructor(
         mutableState.update { it.copy(correctionReason = reason, correctionMessage = null) }
     }
 
-    fun confirmCorrection() {
+    // After the per-line workbench refactor, confirmCorrection receives the per-line
+    // state map directly from the dialog. Single legacy fields (selectedLineId,
+    // quantityDelta, discountCents) on the UI state are no longer used to drive
+    // line operations — every change tracked per-line via CorrectionLineState.
+    fun confirmCorrection(
+        lineStates: Map<String, CorrectionLineState>,
+        correctionMethod: String?,
+        totalDiscountCents: Int = 0,
+    ) {
         val snapshot = mutableState.value
         val eventId = snapshot.correctionDialogEventId ?: return
         val event = (snapshot.pastEvents + snapshot.currentEvents).firstOrNull { it.stableId == eventId }
@@ -1137,22 +1302,15 @@ private class TransactionsViewModel private constructor(
         }
         mutableState.update { it.copy(correctionBusy = true, correctionMessage = null) }
         viewModelScope.launch {
-            val draft = CorrectionSubmitDraft(
-                operationType = snapshot.correctionOperationType,
-                selectedLineId = snapshot.correctionSelectedLineId,
-                quantityDeltaText = snapshot.correctionQuantityDelta,
-                discountCentsText = snapshot.correctionDiscountCents,
-                refundAmountCentsText = snapshot.correctionRefundAmountCents,
-                refundMethod = snapshot.correctionRefundMethod,
-                compensationType = snapshot.correctionCompensationType,
-                compensationDetails = snapshot.correctionCompensationDetails,
-                reason = snapshot.correctionReason.ifBlank { snapshot.correctionOperationType.defaultReason() },
-            )
+            val resolvedReason = snapshot.correctionReason.ifBlank { "Korjaus" }
             when (
-                val result = repository.createCorrectionSale(
+                val result = repository.createCorrectionSaleFromLineStates(
                     event = event,
                     detail = snapshot.correctionSaleDetail,
-                    draft = draft,
+                    lineStates = lineStates,
+                    totalDiscountCents = totalDiscountCents,
+                    reason = resolvedReason,
+                    correctionMethod = correctionMethod,
                     actorStaffId = currentStaffId,
                     actorName = currentStaffName,
                 )
@@ -1262,7 +1420,7 @@ private fun TransactionsScreen(
     onCorrectionCompensationTypeChange: (String) -> Unit,
     onCorrectionCompensationDetailsChange: (String) -> Unit,
     onCorrectionReasonChange: (String) -> Unit,
-    onConfirmCorrection: () -> Unit,
+    onConfirmCorrection: (Map<String, CorrectionLineState>, String?, Int) -> Unit,
     onDismissCorrection: () -> Unit,
     backendBaseUrl: String? = null,
 ) {
@@ -1289,23 +1447,12 @@ private fun TransactionsScreen(
                 }
             }
     }
+    val groupedDayRows = remember(dayEvents) {
+        buildTransactionListRows(dayEvents)
+    }
 
     val dayReport = state.localDayReport
     val hasCorrections = paidSales.any { it.saleKind == "CORRECTION" }
-    val paymentBuckets = remember(dayReport, strings) {
-        dayReport
-            ?.paymentBreakdown
-            ?.sortedByDescending { it.amountCents }
-            ?.map { pm ->
-                PaymentMethodBucket(
-                    methodCode = pm.method,
-                    label = pm.method.toPaymentLabel(strings),
-                    amountCents = pm.amountCents,
-                    totalCents = dayReport.totalSalesCents,
-                )
-            }
-            .orEmpty()
-    }
 
     val selectedEvent = remember(state.selectedEventId, dayEvents) {
         dayEvents.firstOrNull { it.stableId == state.selectedEventId }
@@ -1329,130 +1476,110 @@ private fun TransactionsScreen(
                 .weight(1.2f)
                 .fillMaxHeight(),
         ) {
+            state.businessDayMessage?.let { message ->
+                ReceiptTruthError(message = message, modifier = Modifier.fillMaxWidth())
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                SalesKpiCard(
+                    label = "Myynti tänään",
+                    value = when {
+                        state.businessDayLoading -> "..."
+                        dayReport != null -> CentsFormatter.format(dayReport.totalSalesCents)
+                        else -> "Ei totuutta"
+                    },
+                    money = dayReport != null && !state.businessDayLoading,
+                    modifier = Modifier.weight(1f),
+                )
+                SalesKpiCard(
+                    label = "Avoinna",
+                    value = openBills.size.toString(),
+                    modifier = Modifier.weight(1f),
+                )
+                SalesKpiCard(
+                    label = "Myyntejä",
+                    value = when {
+                        state.businessDayLoading -> "..."
+                        dayReport != null -> dayReport.saleCount.toString()
+                        else -> "-"
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+                SalesKpiCard(
+                    label = "Käteinen",
+                    value = dayReport?.let { CentsFormatter.format(it.cashSalesCents) } ?: "-",
+                    money = dayReport != null,
+                    modifier = Modifier.weight(1f),
+                )
+                SalesKpiCard(
+                    label = "Kortti",
+                    value = dayReport?.let { CentsFormatter.format(it.cardSalesCents) } ?: "-",
+                    money = dayReport != null,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+
+            OutlinedTextField(
+                value = state.searchQuery,
+                onValueChange = onSearchQueryChange,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 2.dp),
+                singleLine = true,
+                placeholder = { Text("Hae kuittia, paikkaa, maksutapaa, tilaa tai summaa") },
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                ReportFilterChip(
+                    label = "Kaikki",
+                    selected = state.statusFilter == TransactionsStatusFilter.ALL,
+                    onClick = { onStatusFilterChange(TransactionsStatusFilter.ALL) },
+                )
+                ReportFilterChip(
+                    label = "Maksetut",
+                    selected = state.statusFilter == TransactionsStatusFilter.PAID,
+                    onClick = { onStatusFilterChange(TransactionsStatusFilter.PAID) },
+                )
+                ReportFilterChip(
+                    label = "Avoimet",
+                    selected = state.statusFilter == TransactionsStatusFilter.OPEN,
+                    onClick = { onStatusFilterChange(TransactionsStatusFilter.OPEN) },
+                )
+                if (hasCorrections) {
+                    ReportFilterChip(
+                        label = "Korjaukset",
+                        selected = state.statusFilter == TransactionsStatusFilter.CORRECTION,
+                        onClick = { onStatusFilterChange(TransactionsStatusFilter.CORRECTION) },
+                    )
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                ReportFilterChip(
+                    label = if (state.sortOption == TransactionsSortOption.TIME_ASC) "Vanhin ensin" else "Uusin ensin",
+                    selected = state.sortOption == TransactionsSortOption.TIME_DESC ||
+                        state.sortOption == TransactionsSortOption.TIME_ASC,
+                    onClick = onToggleTimeSort,
+                )
+                ReportFilterChip(
+                    label = if (state.sortOption == TransactionsSortOption.AMOUNT_ASC) "Pienin summa" else "Suurin summa",
+                    selected = state.sortOption == TransactionsSortOption.AMOUNT_DESC ||
+                        state.sortOption == TransactionsSortOption.AMOUNT_ASC,
+                    onClick = onToggleAmountSort,
+                )
+            }
+
+            DashboardSectionHeader("Päivän tapahtumat")
+
             LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f, fill = true),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                state.businessDayMessage?.let { message ->
-                    item {
-                        ReceiptTruthError(message = message, modifier = Modifier.fillMaxWidth())
-                    }
-                }
-                item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        SalesKpiCard(
-                            label = "Myynti tänään",
-                            value = when {
-                                state.businessDayLoading -> "..."
-                                dayReport != null -> CentsFormatter.format(dayReport.totalSalesCents)
-                                else -> "Ei totuutta"
-                            },
-                            money = dayReport != null && !state.businessDayLoading,
-                            modifier = Modifier.weight(1f),
-                        )
-                        SalesKpiCard(
-                            label = "Avoinna",
-                            value = openBills.size.toString(),
-                            modifier = Modifier.weight(1f),
-                        )
-                        SalesKpiCard(
-                            label = "Myyntejä",
-                            value = when {
-                                state.businessDayLoading -> "..."
-                                dayReport != null -> dayReport.saleCount.toString()
-                                else -> "-"
-                            },
-                            modifier = Modifier.weight(1f),
-                        )
-                        SalesKpiCard(
-                            label = "Käteinen",
-                            value = dayReport?.let { CentsFormatter.format(it.cashSalesCents) } ?: "-",
-                            money = dayReport != null,
-                            modifier = Modifier.weight(1f),
-                        )
-                        SalesKpiCard(
-                            label = "Kortti",
-                            value = dayReport?.let { CentsFormatter.format(it.cardSalesCents) } ?: "-",
-                            money = dayReport != null,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                }
-
-                item { DashboardSectionHeader(strings[CashierStringKey.SalesDashboardPaymentMethods]) }
-                if (paymentBuckets.isNotEmpty()) {
-                    items(paymentBuckets, key = { it.methodCode }) { bucket ->
-                        PaymentMethodRow(bucket = bucket)
-                    }
-                } else {
-                    item {
-                        Text(
-                            text = "Ei maksettuja myyntejä tänään.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-
-                item {
-                    OutlinedTextField(
-                        value = state.searchQuery,
-                        onValueChange = onSearchQueryChange,
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        placeholder = { Text("Hae kuittia, paikkaa, maksutapaa, tilaa tai summaa") },
-                    )
-                }
-
-                item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        ReportFilterChip(
-                            label = "Kaikki",
-                            selected = state.statusFilter == TransactionsStatusFilter.ALL,
-                            onClick = { onStatusFilterChange(TransactionsStatusFilter.ALL) },
-                        )
-                        ReportFilterChip(
-                            label = "Maksetut",
-                            selected = state.statusFilter == TransactionsStatusFilter.PAID,
-                            onClick = { onStatusFilterChange(TransactionsStatusFilter.PAID) },
-                        )
-                        ReportFilterChip(
-                            label = "Avoimet",
-                            selected = state.statusFilter == TransactionsStatusFilter.OPEN,
-                            onClick = { onStatusFilterChange(TransactionsStatusFilter.OPEN) },
-                        )
-                        if (hasCorrections) {
-                            ReportFilterChip(
-                                label = "Korjaukset",
-                                selected = state.statusFilter == TransactionsStatusFilter.CORRECTION,
-                                onClick = { onStatusFilterChange(TransactionsStatusFilter.CORRECTION) },
-                            )
-                        }
-                        Spacer(modifier = Modifier.weight(1f))
-                        ReportFilterChip(
-                            label = if (state.sortOption == TransactionsSortOption.TIME_ASC) "Vanhin ensin" else "Uusin ensin",
-                            selected = state.sortOption == TransactionsSortOption.TIME_DESC ||
-                                state.sortOption == TransactionsSortOption.TIME_ASC,
-                            onClick = onToggleTimeSort,
-                        )
-                        ReportFilterChip(
-                            label = if (state.sortOption == TransactionsSortOption.AMOUNT_ASC) "Pienin summa" else "Suurin summa",
-                            selected = state.sortOption == TransactionsSortOption.AMOUNT_DESC ||
-                                state.sortOption == TransactionsSortOption.AMOUNT_ASC,
-                            onClick = onToggleAmountSort,
-                        )
-                    }
-                }
-
-                item { DashboardSectionHeader("Päivän tapahtumat") }
                 if (dayEvents.isEmpty()) {
                     item {
                         Text(
@@ -1462,7 +1589,8 @@ private fun TransactionsScreen(
                         )
                     }
                 } else {
-                    items(dayEvents, key = { it.stableId }) { event ->
+                    items(groupedDayRows, key = { it.key }) { row ->
+                        val event = row.event
                         if (event.businessStatus == TransactionBusinessStatus.OPEN) {
                             OpenBillRow(
                                 event = event,
@@ -1472,13 +1600,29 @@ private fun TransactionsScreen(
                                 onContinueOpenBill = onContinueOpenBill,
                             )
                         } else {
-                            RecentSaleRow(
-                                event = event,
-                                selected = selectedEvent?.stableId == event.stableId,
-                                strings = strings,
-                                onClick = { onSelectEvent(event.stableId) },
-                                onCreateCorrection = onOpenCorrection,
-                            )
+                            val relationshipNote = event.correctionRelationshipNote(row.relationshipMissing)
+                            if (row.correctionIndentLevel > 0) {
+                                GroupedCorrectionRow(
+                                    indentLevel = row.correctionIndentLevel,
+                                    childIndex = row.correctionChildIndex,
+                                    childCount = row.correctionChildCount,
+                                    event = event,
+                                    selected = selectedEvent?.stableId == event.stableId,
+                                    strings = strings,
+                                    relationshipNote = relationshipNote,
+                                    onClick = { onSelectEvent(event.stableId) },
+                                    onCreateCorrection = onOpenCorrection,
+                                )
+                            } else {
+                                RecentSaleRow(
+                                    event = event,
+                                    selected = selectedEvent?.stableId == event.stableId,
+                                    strings = strings,
+                                    relationshipNote = relationshipNote,
+                                    onClick = { onSelectEvent(event.stableId) },
+                                    onCreateCorrection = onOpenCorrection,
+                                )
+                            }
                         }
                     }
                 }
@@ -1569,7 +1713,9 @@ internal fun TransactionsRoute(
         onCorrectionCompensationTypeChange = viewModel::updateCorrectionCompensationType,
         onCorrectionCompensationDetailsChange = viewModel::updateCorrectionCompensationDetails,
         onCorrectionReasonChange = viewModel::updateCorrectionReason,
-        onConfirmCorrection = viewModel::confirmCorrection,
+        onConfirmCorrection = { lineStates, method, totalDiscount ->
+            viewModel.confirmCorrection(lineStates, method, totalDiscount)
+        },
         onDismissCorrection = viewModel::dismissCorrectionDialog,
         backendBaseUrl = backendBaseUrl,
     )
@@ -1706,7 +1852,9 @@ private fun OpenBillRow(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    StatusPill(label = event.statusLabel(strings))
+                    if (!event.isCorrectionReceipt()) {
+                        StatusPill(label = event.statusLabel(strings))
+                    }
                 }
                 Text(
                     text = formatUiDateTime(event.occurredAtEpochMillis),
@@ -1733,15 +1881,94 @@ private fun OpenBillRow(
 }
 
 @Composable
+private fun GroupedCorrectionRow(
+    indentLevel: Int,
+    childIndex: Int,
+    childCount: Int,
+    event: TransactionRecord,
+    selected: Boolean,
+    strings: CashierStrings,
+    relationshipNote: String?,
+    onClick: () -> Unit,
+    onCreateCorrection: (TransactionRecord) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        val railWidth = (28 + (indentLevel - 1).coerceAtLeast(0) * 12).dp
+        val connectorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.42f)
+        Box(
+            modifier = Modifier
+                .width(railWidth)
+                .fillMaxHeight(),
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val strokeWidth = 2.dp.toPx()
+                val railX = size.width - 18.dp.toPx()
+                val branchY = size.height / 2f
+                val branchEndX = size.width - 2.dp.toPx()
+                val arrowSize = 5.dp.toPx()
+                val isLastChild = childIndex >= (childCount - 1).coerceAtLeast(0)
+                val railEndY = if (isLastChild) branchY else size.height
+
+                drawLine(
+                    color = connectorColor,
+                    start = Offset(railX, 0f),
+                    end = Offset(railX, railEndY),
+                    strokeWidth = strokeWidth,
+                    cap = StrokeCap.Round,
+                )
+                drawLine(
+                    color = connectorColor,
+                    start = Offset(railX, branchY),
+                    end = Offset(branchEndX, branchY),
+                    strokeWidth = strokeWidth,
+                    cap = StrokeCap.Round,
+                )
+                drawLine(
+                    color = connectorColor,
+                    start = Offset(branchEndX - arrowSize, branchY - arrowSize * 0.68f),
+                    end = Offset(branchEndX, branchY),
+                    strokeWidth = strokeWidth,
+                    cap = StrokeCap.Round,
+                )
+                drawLine(
+                    color = connectorColor,
+                    start = Offset(branchEndX - arrowSize, branchY + arrowSize * 0.68f),
+                    end = Offset(branchEndX, branchY),
+                    strokeWidth = strokeWidth,
+                    cap = StrokeCap.Round,
+                )
+            }
+        }
+        RecentSaleRow(
+            event = event,
+            selected = selected,
+            strings = strings,
+            relationshipNote = relationshipNote,
+            onClick = onClick,
+            onCreateCorrection = onCreateCorrection,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
 private fun RecentSaleRow(
     event: TransactionRecord,
     selected: Boolean,
     strings: CashierStrings,
+    relationshipNote: String? = null,
     onClick: () -> Unit,
     onCreateCorrection: (TransactionRecord) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Surface(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(12.dp),
@@ -1774,12 +2001,14 @@ private fun RecentSaleRow(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    StatusPill(label = event.statusLabel(strings))
-                    Text(
-                        text = "·",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    if (!event.isCorrectionReceipt()) {
+                        StatusPill(label = event.statusLabel(strings))
+                        Text(
+                            text = "·",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     Text(
                         text = event.locationLabel(strings),
                         style = MaterialTheme.typography.bodySmall,
@@ -1803,6 +2032,15 @@ private fun RecentSaleRow(
                         text = event.paymentSummary(strings),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                relationshipNote?.let { note ->
+                    Text(
+                        text = note,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
@@ -1999,28 +2237,60 @@ private fun CorrectionSaleDialog(
     onCompensationTypeChange: (String) -> Unit,
     onCompensationDetailsChange: (String) -> Unit,
     onReasonChange: (String) -> Unit,
-    onConfirm: () -> Unit,
+    onConfirm: (Map<String, CorrectionLineState>, String?, Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val strings = rememberCashierStrings()
+    // Per-line workbench state. Each line independently tracks its own
+    // markedForRefund/quantityDelta/discountCents. Keyed by event.stableId so
+    // opening a different correction starts with a clean slate. The previously
+    // global operationType / selectedLineId / quantityDelta / discountCents
+    // parameters are intentionally NOT used to drive per-line tile state below.
     val scrollState = rememberScrollState()
-    val disabledReason = operationType.disabledReason(detail, detailLoading)
-    val selectedLine = detail?.lineItems?.firstOrNull { it.id == selectedLineId }
-    val lineRequired = operationType.requiresExistingLine()
-    val hasValidDraft = when (operationType) {
-        CorrectionOperationType.REMOVE_LINE -> selectedLine != null
-        CorrectionOperationType.CHANGE_QUANTITY -> selectedLine != null &&
-            quantityDelta.trim().toIntOrNull()?.let { it != 0 } == true
-        CorrectionOperationType.APPLY_DISCOUNT -> selectedLine != null &&
-            discountCents.euroTextToCentsOrNull()?.let { it > 0 } == true
-        else -> !lineRequired || selectedLine != null
+    var lineStates by remember(event.stableId) {
+        mutableStateOf<Map<String, CorrectionLineState>>(emptyMap())
     }
-    val confirmEnabled = !busy &&
-        disabledReason == null &&
-        hasValidDraft
+    // Total-level discount applied on top of per-line changes. Sent as MONETARY_REFUND.
+    var totalDiscountCents by remember(event.stableId) { mutableStateOf(0) }
+
+    // Financial effect from line-level changes only (excludes total discount).
+    val lineEffectCents = correctionFinancialEffectFromLineStates(detail, lineStates)
+    // Original receipt total for computing remaining draft total.
+    val originalTotalCents = detail?.totalCents ?: event.amountCents
+    // Remaining total after line changes — basis for YHTEENSÄ row discount buttons.
+    val draftTotalAfterLinesCents = originalTotalCents + lineEffectCents
+    // Full financial effect including total discount — drives method selection.
+    val netFinancialEffectCents = lineEffectCents - totalDiscountCents.coerceAtLeast(0)
+    val methodRequired = netFinancialEffectCents != 0
+    var selectedCorrectionMethod by remember(event.stableId, netFinancialEffectCents.compareTo(0)) {
+        mutableStateOf<String?>(null)
+    }
+    // Pre-select payment method from structural backend truth when detail loads.
+    // Only applies if unambiguous single method (CASH or CARD). Mixed, VOUCHER,
+    // empty, or unknown payments leave the selection to the user.
+    LaunchedEffect(event.stableId, detail) {
+        if (selectedCorrectionMethod == null) {
+            selectedCorrectionMethod = inferUnambiguousPaymentMethod(detail?.payments)
+        }
+    }
+    val hasLineChange = lineStates.values.any { state ->
+        state.markedForRefund || state.quantityDelta != 0 || state.discountCents > 0
+    }
+    val confirmEnabled = !busy && reason.isNotBlank() &&
+        (hasLineChange || totalDiscountCents > 0) &&
+        (!methodRequired || selectedCorrectionMethod != null)
     var discountInputMode by remember { mutableStateOf<LineDiscountMode?>(null) }
     var discountInputLine by remember { mutableStateOf<BackendSaleLine?>(null) }
     var discountInputText by remember { mutableStateOf("") }
+    var totalDiscountInputMode by remember { mutableStateOf<LineDiscountMode?>(null) }
+
+    // Apply a per-line change. Also auto-defaults the global reason field once,
+    // because confirmEnabled requires reason.isNotBlank() and the dialog has no
+    // visible reason TextField — the original implementation relied on per-action
+    // lambdas to set it.
+    val applyLineChange: (String, CorrectionLineState) -> Unit = { lineId, newState ->
+        lineStates = lineStates + (lineId to newState)
+        if (reason.isBlank()) onReasonChange("Korjaus")
+    }
 
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
@@ -2066,61 +2336,12 @@ private fun CorrectionSaleDialog(
                     )
                 } else {
                     lines.forEach { line ->
-                        val markedForRefund = selectedLineId == line.id && operationType == CorrectionOperationType.REMOVE_LINE
+                        val state = lineStates[line.id] ?: CorrectionLineState()
                         CorrectionSmartLineRow(
                             line = line,
-                            selectedLineId = selectedLineId,
-                            selected = selectedLineId == line.id,
-                            operationType = operationType,
-                            quantityDelta = quantityDelta,
-                            discountCents = discountCents,
+                            lineState = state,
                             busy = busy,
-                            onRefundLine = {
-                                if (markedForRefund) {
-                                    onLineChange("")
-                                } else {
-                                    onLineChange(line.id)
-                                    onOperationChange(CorrectionOperationType.REMOVE_LINE)
-                                    if (reason.isBlank()) onReasonChange("Rivin hyvitys")
-                                }
-                            },
-                            onLongPressLine = {
-                                // Reserved for drag/select. Do not make long press perform the same refund toggle as quick tap.
-                            },
-                            onQuantity = {
-                                onLineChange(line.id)
-                                onOperationChange(CorrectionOperationType.CHANGE_QUANTITY)
-                                if (reason.isBlank()) onReasonChange("Määrän korjaus")
-                            },
-                            onQuantityMinus = {
-                                onLineChange(line.id)
-                                onOperationChange(CorrectionOperationType.CHANGE_QUANTITY)
-                                val currentDelta = if (selectedLineId == line.id && operationType == CorrectionOperationType.CHANGE_QUANTITY) {
-                                    quantityDelta.trim().toIntOrNull() ?: 0
-                                } else {
-                                    0
-                                }
-                                val nextDelta = (currentDelta - 1).coerceAtLeast(-line.quantity)
-                                onQuantityDeltaChange(nextDelta.toString())
-                                if (reason.isBlank()) onReasonChange("Määrän korjaus")
-                            },
-                            onQuantityPlus = {
-                                onLineChange(line.id)
-                                onOperationChange(CorrectionOperationType.CHANGE_QUANTITY)
-                                val currentDelta = if (selectedLineId == line.id && operationType == CorrectionOperationType.CHANGE_QUANTITY) {
-                                    quantityDelta.trim().toIntOrNull() ?: 0
-                                } else {
-                                    0
-                                }
-                                val nextDelta = currentDelta + 1
-                                onQuantityDeltaChange(nextDelta.toString())
-                                if (reason.isBlank()) onReasonChange("Määrän korjaus")
-                            },
-                            onDiscount = {
-                                onLineChange(line.id)
-                                onOperationChange(CorrectionOperationType.APPLY_DISCOUNT)
-                                if (reason.isBlank()) onReasonChange("Rivin alennus")
-                            },
+                            onLineStateChange = { newState -> applyLineChange(line.id, newState) },
                             onDiscountPercent = {
                                 discountInputLine = line
                                 discountInputMode = LineDiscountMode.PERCENT
@@ -2135,12 +2356,83 @@ private fun CorrectionSaleDialog(
                     }
                 }
 
+                // YHTEENSÄ row: shows remaining draft total after line changes and allows
+                // an additional total-level discount (sent as MONETARY_REFUND).
+                if (lines.isNotEmpty() && draftTotalAfterLinesCents > 0) {
+                    CorrectionInlinePanel(title = "Yhteensä") {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(
+                                    text = CentsFormatter.format(draftTotalAfterLinesCents),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                if (totalDiscountCents > 0) {
+                                    Text(
+                                        text = "alennus −${CentsFormatter.format(totalDiscountCents)}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                if (totalDiscountCents > 0) {
+                                    TextButton(
+                                        onClick = { totalDiscountCents = 0 },
+                                        enabled = !busy,
+                                    ) { Text("✕") }
+                                }
+                                TextButton(
+                                    onClick = { totalDiscountInputMode = LineDiscountMode.PERCENT },
+                                    enabled = !busy,
+                                ) { Text("%") }
+                                TextButton(
+                                    onClick = { totalDiscountInputMode = LineDiscountMode.AMOUNT },
+                                    enabled = !busy,
+                                ) { Text("€") }
+                            }
+                        }
+                    }
+                }
+
+                if (methodRequired) {
+                    CorrectionInlinePanel(
+                        title = if (netFinancialEffectCents < 0) "Palautus" else "Maksu",
+                    ) {
+                        Text(
+                            text = CentsFormatter.format(kotlin.math.abs(netFinancialEffectCents)),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            CorrectionMethodChoiceButton(
+                                label = "Käteinen",
+                                selected = selectedCorrectionMethod == "CASH",
+                                enabled = !busy,
+                                onClick = { selectedCorrectionMethod = "CASH" },
+                            )
+                            CorrectionMethodChoiceButton(
+                                label = "Kortti",
+                                selected = selectedCorrectionMethod == "CARD",
+                                enabled = !busy,
+                                onClick = { selectedCorrectionMethod = "CARD" },
+                            )
+                        }
+                    }
+                }
 
                 if (message != null) {
                     ReceiptTruthError(message = message, modifier = Modifier.fillMaxWidth())
-                }
-                disabledReason?.let {
-                    ReceiptTruthError(message = it, modifier = Modifier.fillMaxWidth())
                 }
             }
         },
@@ -2154,7 +2446,7 @@ private fun CorrectionSaleDialog(
         },
         confirmButton = {
             Button(
-                onClick = onConfirm,
+                onClick = { onConfirm(lineStates, selectedCorrectionMethod.takeIf { methodRequired }, totalDiscountCents) },
                 enabled = confirmEnabled,
             ) {
                 Text(if (busy) "Luodaan..." else "Luo korjauskuitti")
@@ -2181,13 +2473,38 @@ private fun CorrectionSaleDialog(
                 discountInputText = ""
             },
             onConfirmDiscountCents = { discountCentsValue ->
-                onLineChange(activeDiscountLine.id)
-                onOperationChange(CorrectionOperationType.APPLY_DISCOUNT)
-                onDiscountCentsChange(centsToEuroInput(discountCentsValue))
-                if (reason.isBlank()) onReasonChange("Rivin alennus")
+                // Write discount into the per-line state map. Both €-mode and %-mode
+                // produce a resolved cents amount; %-mode preview happens inside
+                // LineDiscountDialog so by here we only need the resolved cents.
+                val current = lineStates[activeDiscountLine.id] ?: CorrectionLineState()
+                applyLineChange(activeDiscountLine.id, current.copy(discountCents = discountCentsValue))
                 discountInputMode = null
                 discountInputLine = null
                 discountInputText = ""
+            },
+        )
+    }
+
+    // Total-level discount dialog — uses the same shared LineDiscountDialog with
+    // draftTotalAfterLinesCents as the basis. Confirmed discount is stored separately
+    // from per-line states and sent as MONETARY_REFUND in the correction request.
+    val activeTotalDiscountMode = totalDiscountInputMode
+    if (activeTotalDiscountMode != null && draftTotalAfterLinesCents > 0) {
+        LineDiscountDialog(
+            editor = LineDiscountEditorState(
+                itemId = "${event.stableId}_total",
+                lineName = "Yhteensä (koko korjaus)",
+                unitPriceCents = draftTotalAfterLinesCents,
+                lineTotalCents = draftTotalAfterLinesCents,
+                mode = activeTotalDiscountMode,
+                initialValue = "",
+            ),
+            busy = busy,
+            onDismiss = { totalDiscountInputMode = null },
+            onConfirmDiscountCents = { discountCentsValue ->
+                totalDiscountCents = discountCentsValue.coerceIn(0, draftTotalAfterLinesCents)
+                totalDiscountInputMode = null
+                if (reason.isBlank()) onReasonChange("Korjaus")
             },
         )
     }
@@ -2221,43 +2538,58 @@ private fun CorrectionInlinePanel(
     }
 }
 
+@Composable
+private fun CorrectionMethodChoiceButton(
+    label: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    if (selected) {
+        Button(
+            onClick = onClick,
+            enabled = enabled,
+        ) {
+            Text(label)
+        }
+    } else {
+        TextButton(
+            onClick = onClick,
+            enabled = enabled,
+        ) {
+            Text(label)
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun CorrectionSmartLineRow(
     line: BackendSaleLine,
-    selectedLineId: String?,
-    selected: Boolean,
-    operationType: CorrectionOperationType,
-    quantityDelta: String,
-    discountCents: String,
+    lineState: CorrectionLineState,
     busy: Boolean,
-    onRefundLine: () -> Unit,
-    onLongPressLine: () -> Unit,
-    onQuantity: () -> Unit,
-    onQuantityMinus: () -> Unit,
-    onQuantityPlus: () -> Unit,
-    onDiscount: () -> Unit,
+    onLineStateChange: (CorrectionLineState) -> Unit,
     onDiscountPercent: () -> Unit,
     onDiscountEuro: () -> Unit,
 ) {
-    val markedForRefund = selected && operationType == CorrectionOperationType.REMOVE_LINE
-    val quantityOpen = selected && operationType == CorrectionOperationType.CHANGE_QUANTITY
-    val discountOpen = selected && operationType == CorrectionOperationType.APPLY_DISCOUNT
-    val quantityDeltaValue = quantityDelta.trim().toIntOrNull()
-    val discountCentsValue = discountCents.euroTextToCentsOrNull()
+    val markedForRefund = lineState.markedForRefund
+    val quantityDeltaValue = lineState.quantityDelta
+    val discountCentsValue = lineState.discountCents.takeIf { it > 0 }
+    val targetQuantity = (line.quantity + quantityDeltaValue).coerceAtLeast(0)
+    val rowSelected = markedForRefund || quantityDeltaValue != 0 || (discountCentsValue ?: 0) > 0
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
         color = when {
             markedForRefund -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.46f)
-            selected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.30f)
+            rowSelected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.30f)
             else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.30f)
         },
         border = androidx.compose.foundation.BorderStroke(
             1.dp,
             when {
                 markedForRefund -> MaterialTheme.colorScheme.error.copy(alpha = 0.55f)
-                selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
+                rowSelected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
                 else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.16f)
             },
         ),
@@ -2267,6 +2599,7 @@ private fun CorrectionSmartLineRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // Quantity area — always-visible [−] N [+]. State is per-line.
             Surface(
                 modifier = Modifier.width(112.dp),
                 shape = RoundedCornerShape(10.dp),
@@ -2281,12 +2614,11 @@ private fun CorrectionSmartLineRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    CorrectionTinyButton(text = "−", enabled = !busy, onClick = onQuantityMinus)
-                    val targetQuantity = if (selectedLineId == line.id) {
-                        (line.quantity + (quantityDeltaValue ?: 0)).coerceAtLeast(0)
-                    } else {
-                        line.quantity
-                    }
+                    CorrectionTinyButton(text = "−", enabled = !busy, onClick = {
+                        // Clamp at -line.quantity so we never go below targetQuantity = 0.
+                        val nextDelta = (lineState.quantityDelta - 1).coerceAtLeast(-line.quantity)
+                        onLineStateChange(lineState.copy(quantityDelta = nextDelta))
+                    })
                     Text(
                         text = targetQuantity.toString(),
                         modifier = Modifier.weight(1f),
@@ -2294,16 +2626,23 @@ private fun CorrectionSmartLineRow(
                         fontWeight = FontWeight.Bold,
                         textAlign = TextAlign.Center,
                     )
-                    CorrectionTinyButton(text = "+", enabled = !busy, onClick = onQuantityPlus)
+                    CorrectionTinyButton(text = "+", enabled = !busy, onClick = {
+                        onLineStateChange(lineState.copy(quantityDelta = lineState.quantityDelta + 1))
+                    })
                 }
             }
+            // Product name — tap toggles markedForRefund on this line only.
             Column(
                 modifier = Modifier
                     .weight(1f)
                     .combinedClickable(
                         enabled = !busy,
-                        onClick = onRefundLine,
-                        onLongClick = onLongPressLine,
+                        onClick = {
+                            onLineStateChange(lineState.copy(markedForRefund = !lineState.markedForRefund))
+                        },
+                        onLongClick = {
+                            // Reserved for future drag/select. Intentionally no-op to avoid duplicating the refund toggle.
+                        },
                     ),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
@@ -2325,8 +2664,11 @@ private fun CorrectionSmartLineRow(
                     )
                 }
             }
+            // Discount area — always-visible [€] 25,65 € [%]. Input dialogs bubble up via callbacks.
+            // wrapContentWidth so the Surface grows to fit € · sum · % horizontally;
+            // a fixed 92.dp was too narrow and clipped the % button on smaller line totals.
             Surface(
-                modifier = Modifier.width(92.dp),
+                modifier = Modifier.wrapContentWidth(),
                 shape = RoundedCornerShape(10.dp),
                 color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
                 border = androidx.compose.foundation.BorderStroke(
@@ -2352,7 +2694,7 @@ private fun CorrectionSmartLineRow(
                         )
                         CorrectionTinyButton(text = "%", enabled = !busy, onClick = onDiscountPercent)
                     }
-                    discountCentsValue?.takeIf { it > 0 }?.let { cents ->
+                    discountCentsValue?.let { cents ->
                         Text(
                             text = "-${CentsFormatter.format(cents)}",
                             style = MaterialTheme.typography.labelSmall,
@@ -2659,6 +3001,76 @@ private fun ReceiptTruthError(
         )
     }
 }
+
+private fun buildTransactionListRows(events: List<TransactionRecord>): List<TransactionListRow> {
+    val byStableId = events.associateBy { it.stableId }
+    val bySaleId = mutableMapOf<String, TransactionRecord>()
+    val byReceipt = mutableMapOf<String, TransactionRecord>()
+    events.forEach { event ->
+        listOf(event.serverSaleId, event.saleId)
+            .mapNotNull { it?.trim()?.takeIf(String::isNotBlank) }
+            .forEach { bySaleId.putIfAbsent(it, event) }
+        event.receiptNumber?.trim()?.takeIf(String::isNotBlank)?.let { byReceipt.putIfAbsent(it, event) }
+    }
+
+    fun parentOf(correction: TransactionRecord): TransactionRecord? {
+        correction.correctionOriginalSaleId?.trim()?.takeIf(String::isNotBlank)?.let { saleId ->
+            bySaleId[saleId]?.let { return it }
+        }
+        correction.correctionOriginalReceiptNumber?.trim()?.takeIf(String::isNotBlank)?.let { receipt ->
+            byReceipt[receipt]?.let { return it }
+        }
+        return null
+    }
+
+    fun rootFor(correction: TransactionRecord, seen: Set<String> = emptySet()): Pair<TransactionRecord, Int>? {
+        if (!correction.isCorrectionReceipt() || correction.stableId in seen) return null
+        val parent = parentOf(correction) ?: return null
+        if (parent.stableId in seen) return null
+        if (!parent.isCorrectionReceipt()) return parent to 1
+        val resolvedParent = rootFor(parent, seen + correction.stableId) ?: return null
+        return resolvedParent.first to (resolvedParent.second + 1).coerceAtMost(3)
+    }
+
+    val groupedCorrections = mutableMapOf<String, MutableList<TransactionListRow>>()
+    val groupedStableIds = mutableSetOf<String>()
+    events.forEach { event ->
+        if (!event.isCorrectionReceipt()) return@forEach
+        val root = rootFor(event) ?: return@forEach
+        if (byStableId[root.first.stableId] == null) return@forEach
+        groupedCorrections.getOrPut(root.first.stableId) { mutableListOf() } += TransactionListRow(
+            event = event,
+            correctionIndentLevel = root.second,
+            relationshipMissing = false,
+        )
+        groupedStableIds += event.stableId
+    }
+
+    val rows = mutableListOf<TransactionListRow>()
+    events.forEach { event ->
+        if (event.stableId in groupedStableIds) return@forEach
+        rows += TransactionListRow(
+            event = event,
+            relationshipMissing = event.isCorrectionReceipt(),
+        )
+        val children = groupedCorrections[event.stableId]
+            ?.sortedWith(
+                compareBy<TransactionListRow> { it.correctionIndentLevel }
+                    .thenByDescending { it.event.occurredAtEpochMillis }
+            )
+            .orEmpty()
+        children
+            .mapIndexed { index, child ->
+                child.copy(
+                    correctionChildIndex = index,
+                    correctionChildCount = children.size,
+                )
+            }
+            .let(rows::addAll)
+    }
+    return rows
+}
+
 private fun computePaymentBuckets(events: List<TransactionRecord>, strings: CashierStrings): List<PaymentMethodBucket> {
     val totalCents = events.sumOf { it.amountCents }
     val byMethod = mutableMapOf<String, Int>()
@@ -2695,6 +3107,22 @@ private fun TransactionRecord.matchesPayment(filter: TransactionsPaymentFilter):
         TransactionsPaymentFilter.CARD -> paymentMethods.any { it.methodCode == PaymentMethod.CARD.name }
         TransactionsPaymentFilter.VOUCHER -> paymentMethods.any { it.methodCode == PaymentMethod.VOUCHER.name }
         TransactionsPaymentFilter.MIXED -> paymentMethods.map { it.methodCode }.distinct().size > 1
+    }
+}
+
+private fun TransactionRecord.isCorrectionReceipt(): Boolean {
+    return saleKind.equals("CORRECTION", ignoreCase = true)
+}
+
+private fun TransactionRecord.correctionRelationshipNote(relationshipMissing: Boolean): String? {
+    if (!isCorrectionReceipt()) return null
+    val reference = correctionOriginalReceiptNumber?.takeIf { it.isNotBlank() }
+        ?: correctionOriginalSaleId?.takeIf { it.isNotBlank() }
+    return when {
+        relationshipMissing && reference != null -> "Alkuperäinen kuitti $reference · ei näy listassa"
+        relationshipMissing -> "Alkuperä puuttuu"
+        reference != null -> "Alkuperäinen kuitti $reference"
+        else -> null
     }
 }
 
@@ -2765,15 +3193,6 @@ private fun TransactionRecord.correctionUnavailableReason(): String? {
             "Myynti on tallennettu offline-tilassa tai synkronointi on kesken."
     }
     return null
-}
-
-private fun TransactionRecord.defaultRefundMethod(): String {
-    val methods = paymentMethods.map { it.methodCode.uppercase(Locale.ROOT) }
-    return when {
-        PaymentMethod.CARD.name in methods -> PaymentMethod.CARD.name
-        PaymentMethod.CASH.name in methods -> PaymentMethod.CASH.name
-        else -> PaymentMethod.CARD.name
-    }
 }
 
 private fun CorrectionOperationType.defaultReason(): String {
